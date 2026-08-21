@@ -8,14 +8,12 @@ import com.codeheadsystems.rules.compiler.RuleCompilationException;
 import com.codeheadsystems.rules.compiler.RuleCompiler;
 import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.listener.RuleEngineListener;
-import com.codeheadsystems.rules.listener.RuleEngineListener;
 import com.codeheadsystems.rules.listener.SuppressReason;
 import com.codeheadsystems.rules.match.ActivationKey;
 import com.codeheadsystems.rules.rhs.RhsErrorHandler;
 import com.codeheadsystems.rules.rhs.StagedEffect;
 import com.codeheadsystems.rules.rule.Constraint;
 import com.codeheadsystems.rules.rule.FieldConstraint;
-import com.codeheadsystems.rules.rule.Operator;
 import com.codeheadsystems.rules.rule.Operator;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CollectingEventSink;
@@ -280,6 +278,55 @@ class ReviewRegressionTest {
       assertThat(Comparisons.test(Operator.EQ,
           Facts.obj("v", new java.math.BigDecimal("100.00")).get("v"),
           Facts.obj("v", new java.math.BigDecimal("100.0")).get("v"))).isTrue();
+    }
+
+    @Test
+    @DisplayName("cross-representation too, which was never a Jackson 3 regression at all")
+    void representationDoesNotDecideEquality() throws Exception {
+      /*
+       * The half of this that predates the migration. Jackson separates IntNode from DoubleNode as
+       * firmly as it separates two DecimalNode scales, so {a: 1} and {a: 1.0} were unequal inside a
+       * container under Jackson 2 as well -- while 1 and 1.0 were equal as scalars, because the
+       * scalar path went through Canonical. No BigDecimal required: readTree on ordinary JSON is
+       * enough, which is why the blast radius is wider than the money example suggests.
+       */
+      assertThat(Comparisons.test(Operator.EQ, Facts.json("{\"a\": 1}"), Facts.json("{\"a\": 1.0}")))
+          .describedAs("parsed {a:1} EQ parsed {a:1.0}").isTrue();
+      assertThat(Comparisons.test(Operator.EQ, Facts.array(1), Facts.array(1.0d)))
+          .describedAs("[1] EQ [1.0]").isTrue();
+      assertThat(Comparisons.test(Operator.EQ,
+          Facts.obj("a", 1), Facts.obj("a", new java.math.BigDecimal("1"))))
+          .describedAs("int against BigDecimal").isTrue();
+    }
+
+    @Test
+    @DisplayName("a non-finite double is not equal to itself, matching the scalar path")
+    void nonFiniteGoesTheOtherWay() {
+      // The one case that got STRICTER. Jackson called two NaNs equal; Canonical cannot represent
+      // one as a BigDecimal, so the scalar path has always said unequal, and the container path
+      // now agrees. Recorded because it moved, not because anyone should rely on it.
+      final ObjectNode left = Facts.obj("v", 1);
+      final ObjectNode right = Facts.obj("v", 1);
+      left.put("v", Double.NaN);
+      right.put("v", Double.NaN);
+
+      assertThat(Comparisons.test(Operator.EQ, left, right))
+          .describedAs("{v: NaN} EQ {v: NaN}").isFalse();
+      assertThat(Comparisons.test(Operator.EQ, left.get("v"), right.get("v")))
+          .describedAs("the scalar path, which always said this").isFalse();
+    }
+
+    @Test
+    @DisplayName("IN and NOT_IN inherit it, being EQ against each element")
+    void membershipInheritsContainerEquality() {
+      // §2.6.1 defines IN as EQ against each element, and in() delegates to the same comparator --
+      // so this cannot drift. Pinned anyway, because "cannot drift" is a claim about today's call
+      // graph and this is the operator an author actually reaches for.
+      final ObjectNode needle = Facts.obj("amount", new java.math.BigDecimal("100.00"));
+      final ArrayNode haystack = Facts.array(Facts.obj("amount", new java.math.BigDecimal("100.0")));
+
+      assertThat(Comparisons.test(Operator.IN, needle, haystack)).isTrue();
+      assertThat(Comparisons.test(Operator.NOT_IN, needle, haystack)).isFalse();
     }
 
     @Test

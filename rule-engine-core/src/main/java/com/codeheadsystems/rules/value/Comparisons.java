@@ -118,22 +118,36 @@ public final class Comparisons {
    * Structural equality over two containers, with numbers compared the way §2.6.1 compares them
    * everywhere else.
    *
-   * <p><strong>Not {@code JsonNode.equals}, and the difference is a defect this replaced.</strong>
-   * Jackson 2's {@code DecimalNode.equals} compared with {@code BigDecimal.compareTo}, which ignores
-   * scale; Jackson 3's uses {@code BigDecimal.equals}, which does not. Delegating to Jackson
-   * therefore made {@code 100.00} and {@code 100.0} unequal <em>inside a container</em> while
-   * {@link Canonical} kept them equal as scalars -- the same two numbers answering differently
-   * depending on nesting, which is precisely the kind of silently-wrong match §2.6.1 exists to
-   * prevent. Money written at two scales is the everyday way to hit it.
+   * <p><strong>Not {@code JsonNode.equals}, and a wider fix than the bug that prompted it.</strong>
+   * Jackson's node equality is <em>representation</em> equality: it separates {@code IntNode} from
+   * {@code DoubleNode} from {@code DecimalNode}, and (from Jackson 3) one {@code DecimalNode} scale
+   * from another. §2.6.1 puts all of them in one {@code {number}} class, and {@link Canonical}
+   * implements that for scalars. Delegating containers to Jackson therefore made the engine answer
+   * differently about the same two numbers depending on whether they sat inside an object.
+   *
+   * <p>The scale half of that split arrived with Jackson 3 -- its {@code DecimalNode.equals} uses
+   * {@code BigDecimal.equals} where Jackson 2 used {@code compareTo} -- and money written at two
+   * scales is the everyday way to meet it. <strong>The cross-representation half is older and was
+   * never a Jackson 3 regression at all</strong>: {@code {a: 1}} and {@code {a: 1.0}} straight out
+   * of {@code readTree} were already unequal here while {@code 1} and {@code 1.0} were equal as
+   * scalars. Both are fixed together, because both are the same disagreement.
+   *
+   * <p>Note the direction: this <em>widens</em> what matches, and §2.6.1's design is largely about
+   * not doing that quietly. It is stated in the amendment there, and pinned by
+   * {@code ReviewRegressionTest.ContainerNumericEquality} across scale, representation and NaN.
+   * Non-finite doubles go the other way -- Jackson called two NaNs equal, this does not -- which
+   * again is what the scalar path already did.
    *
    * <p>§2.6.1 originally read "{@code EQ} on two object/array values is Jackson's structural
    * equals". That sentence was true of Jackson 2 and stayed literally true of Jackson 3 while
-   * meaning something else, so the spec is amended rather than the code bent to it: the engine has
-   * one definition of numeric equality and applies it at every depth. The rest of the container
-   * contract is unchanged -- object key order does not matter, array element order does.
+   * meaning something else, so the spec is amended rather than the code bent to it. The rest of the
+   * container contract is unchanged -- object key order does not matter, array element order does.
    *
-   * <p>Only container {@code EQ} pays for this walk, and {@code JsonNode.equals} was already a deep
-   * walk, so the cost is a comparison per leaf rather than an extra traversal.
+   * <p>Cost: no extra traversal, since {@code JsonNode.equals} was already a deep walk, and nothing
+   * here is quadratic -- {@code properties()} is the live entry set and {@code get(key)} the same
+   * hash lookup Jackson already did. Not free at the leaf, though: a numeric comparison allocates
+   * {@code BigDecimal}s and {@code Optional}s where {@code IntNode.equals} was a primitive compare.
+   * That runs per alpha test per insert, not per fire cycle.
    *
    * @param left one container
    * @param right the other, already known to be the same kind
@@ -168,10 +182,25 @@ public final class Comparisons {
    * @return whether they are equal
    */
   private static boolean nodesEqual(final JsonNode left, final JsonNode right) {
+    /*
+     * Deliberately no `left == right` fast path. It looks free and is not: two NaNs are unequal
+     * here, so a reference check would make a node equal to ITSELF while unequal to a structurally
+     * identical twin -- an identity-dependent answer, which is worse than the cost it saves. The
+     * consequence is that comparing a node with itself walks; a self-referential node, which
+     * Jackson lets you build, overflows the stack rather than short-circuiting. JsonNode.equals had
+     * the same exposure for two distinct cyclic nodes, and a payload that IS its own constraint
+     * literal is already a contract violation.
+     */
     if (left.isNumber() && right.isNumber()) {
-      // Canonical.compare returns empty for a value BigDecimal cannot represent -- a non-finite
-      // double built in Java. Those compare unequal rather than throwing, matching what the scalar
-      // path does with them.
+      /*
+       * Canonical.compare, where the scalar path uses Canonical.hashKey -- compareTo() == 0 against
+       * stripTrailingZeros().equals(). Two spellings of one predicate, and the whole fix rests on
+       * them agreeing. They do, over every scale, signed zero and exponent form checked; if you
+       * change either, check the other, because no test compares them directly.
+       *
+       * Empty means a value BigDecimal cannot represent -- a non-finite double built in Java. Those
+       * compare unequal rather than throwing, matching what the scalar path does with them.
+       */
       final OptionalInt sign = Canonical.compare(left, right);
       return sign.isPresent() && sign.getAsInt() == 0;
     }

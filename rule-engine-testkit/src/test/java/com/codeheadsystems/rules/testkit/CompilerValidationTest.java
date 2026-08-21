@@ -346,11 +346,27 @@ class CompilerValidationTest {
      * and that is a decision to be made deliberately (bump COMPILER_VERSION and say why in the
      * commit) rather than discovered by a consumer whose stored version stopped matching.
      */
+    /*
+     * The fixture is chosen for what could MOVE, not for readability. A pin over strings and ints
+     * would have stayed green through exactly the rendering changes it exists to catch, so it
+     * carries: a BigDecimal with trailing zeros and a fractional double (scale and exponent form
+     * are where Jackson's number rendering could plausibly change); a string needing escaping and
+     * one outside ASCII; an object and an array literal (container rendering, and key order); a
+     * two-sided range; and two tags, because canonicalise sorts tags() through a TreeSet
+     * specifically to keep Set.copyOf's per-JVM iteration salt out of the hash -- the one
+     * canonicalisation bug this project has actually shipped, and the fixture had no tags at all.
+     */
     final CompiledRuleSet pinned = RuleCompiler.compile(List.of(Rules.rule("pinned")
         .salience(5)
+        .tag("zebra")
+        .tag("alpha")
         .when("o", "Order", pattern -> pattern
-            .eq("status", "PENDING")
+            .eq("status", "PENDING\t\"quoted\"\n")
+            .eq("note", "sale ends soon \u2014 \u00e9t\u00e9")
+            .eq("breakdown", Facts.obj("net", new java.math.BigDecimal("100.00")))
+            .eq("codes", Facts.array(1, 2.50d))
             .gt("total", 10000)
+            .between("weight", 0.5d, 99.750d)
             .in("region", "EU", "US"))
         .when("c", "Customer", pattern -> pattern.ref("id", "o.customerId"))
         .then(actions -> actions.emit("out", "id", Rules.ref("o.id")))
@@ -358,7 +374,7 @@ class CompilerValidationTest {
 
     assertThat(pinned.version())
         .describedAs("rule-set identity is a compatibility surface; see this test's comment")
-        .isEqualTo("sha256:80ead2110b810f97");
+        .isEqualTo("sha256:8049b5f6bd96b20d");
   }
 
   @Test

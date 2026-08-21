@@ -451,7 +451,19 @@ Three consequences worth stating out loud:
 
 **Type-compatibility classes** for the "wrong type" row: `{number}`, `{string}`, `{boolean}`, `{array}`, `{object}`. Comparison is defined *within* a class only. Two exceptions: `IN`/`NOT_IN` compare a scalar against array *elements* (an array literal is expected, not a mismatch), and `EQ` on two `object`/`array` values is structural — object key order does not matter, array element order does, and **numbers inside a container compare exactly as they do outside one**.
 
-> **Amendment (Jackson 3 migration).** This sentence read "is Jackson's structural `equals`" until the engine moved to Jackson 3. That was accurate while Jackson 2's `DecimalNode.equals` compared with `BigDecimal.compareTo`, which ignores scale, and so happened to agree with this engine's own numeric equality. Jackson 3 switched to `BigDecimal.equals`, which is scale-sensitive — so `{amount: 100.00}` and `{amount: 100.0}` stopped being equal inside a container while remaining equal as scalars. The sentence stayed literally true and quietly meant something else. Delegating equality to a library is only safe while the library agrees with you; `Comparisons` now walks containers itself and compares numbers through `Canonical` at every depth, which is what the `{number}` type class in this section implies. See `ReviewRegressionTest.ContainerNumericEquality`.
+> **Amendment (Jackson 3 migration).** This sentence read "is Jackson's structural `equals`" until the engine moved to Jackson 3, and delegating to a library is only safe while the library agrees with you. Jackson's node equality is *representation* equality — it distinguishes `IntNode` from `DoubleNode` from `DecimalNode`, and (from Jackson 3) one `DecimalNode` scale from another. This section puts all of them in one `{number}` class, so the two definitions were never the same thing; they merely agreed often enough for the difference to stay hidden.
+>
+> Three concrete consequences, all of which the container path now answers the same way the scalar path always did:
+>
+> | | before | now |
+> |---|---|---|
+> | `{a: 100.00}` vs `{a: 100.0}` | unequal *(Jackson 3 only)* | equal |
+> | `{a: 1}` vs `{a: 1.0}`, straight from `readTree` | unequal *(Jackson 2 as well)* | equal |
+> | `{a: NaN}` vs `{a: NaN}` | equal | unequal |
+>
+> Only the first was a Jackson 3 regression. The second is older and had nothing to do with the migration — `1` and `1.0` were already equal as scalars and unequal inside a container, and it needs no `BigDecimal` to reach, just ordinary parsed JSON. The migration exposed a narrow slice of a wider inconsistency and both are fixed together.
+>
+> **Note the direction: this widens what matches**, which is the outcome this section's design is otherwise built to avoid, so it is stated rather than left to be discovered. `Comparisons` walks containers itself and compares numbers through `Canonical` at every depth; `IN`/`NOT_IN` inherit it, being `EQ` against each element. Object key order still does not matter and array element order still does. See `ReviewRegressionTest.ContainerNumericEquality`.
 
 #### 2.6.2 Numeric canonicalization
 
