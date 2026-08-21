@@ -202,6 +202,22 @@ own vocabulary instead, and answers `UNKNOWN`/empty wherever schema introspectio
 (`$ref`, `allOf`, `oneOf`) — an unmade check costs what you had before registering a schema, where a
 guessed one would reject a correct rule. Validation has no such limit.
 
+**A `condition:` makes the paths it reads tested paths (§3.4.1), and the cost is behavioural.**
+`RuleCompiler.compileCondition` records the payload *root* for every fact type an alias the condition
+references binds — conservative on purpose, because extracting exact read paths from the CEL AST
+would make the compiler responsible for being a superset of what an arbitrary expression reads, and
+under-declaring loses a firing silently (§11.2's rejected `dependsOn()` trap).
+
+Because the root is tested, **any** update to a fact the rule binds un-refracts it, including a field
+no rule reads: the rule re-fires, and a rule whose RHS mutates its own facts goes from firing once to
+hitting `maxCycles`. `noLoop` restores it. That is a real semantics consequence, not a slow path, and
+it is why the §6.4 amendment states it beside the argument rather than as a performance note.
+
+Until Phase 3 nothing was recorded at all, so an update that made a condition newly true fired
+nothing. **No differential test could catch that**: the update gate is upstream of the matcher, so
+every matcher was identically wrong and `MatcherEquivalence` only proved they agreed. Worth
+remembering whenever equivalence testing is the argument for correctness here.
+
 **CEL (§6.4) evaluates in two places, and one of them is a structural decision.** A pattern
 `condition:` is a post-filter applied in **`RecomputingAgenda`, the shared base — not in either
 matcher**. Everything that decides which activation fires already lives there so the two matchers

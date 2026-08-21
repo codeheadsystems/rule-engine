@@ -1364,9 +1364,24 @@ Use **[CEL (Common Expression Language)](https://cel.dev/)** rather than MVEL/Sp
 
 **Be precise about the guarantee, because the loose version of it is the same class of overclaim §6.3 criticizes.** CEL guarantees termination and non-Turing-completeness — *not* linear time. It has comprehension macros (`exists`, `all`, `map`, `filter`), and nested comprehensions over two lists are O(n·m). This is why `dev.cel` ships a static cost estimator and a runtime cost limit. **Set both**: estimate at compile time, reject expressions over a configured budget, and enforce the runtime limit as a backstop.
 
-Treat `condition:` as an escape hatch that bypasses indexing (falling back to a `postFilter` or unindexed alpha test) — explicit, visible cost, not a hidden default. One implementation obligation comes with it:
+Treat `condition:` as an escape hatch that bypasses indexing (falling back to a `postFilter` or unindexed alpha test) — explicit, visible cost, not a hidden default. Two implementation obligations come with it:
+
+- **The paths a condition reads are tested paths (§3.4.1).** A rule whose condition reads `o.total` tests `o.total` as surely as `{ gt: 1000 }` would, and §3.4.1's update gate has to see it — otherwise an update that makes a condition newly true propagates nothing and fires nothing, while the equivalent retract-plus-insert fires, and §9's Phase 1 exit criterion is missed for exactly the rules that reached for this escape hatch. See the amendment below for what that obligation is implemented as, and what it costs an author.
 
 - **Compile once, evaluate many.** CEL programs are compiled in §6.5's pipeline and cached in the `CompiledRuleSet` alongside pointers and regexes. A compiled program is immutable and shareable; the per-evaluation activation is not. Never compile at match time.
+
+> **Amendment (Phase 3).** This obligation was absent from this section and from the implementation until Phase 3, and the omission is instructive rather than embarrassing. It could not be caught by the differential suite the rest of this engine leans on: the gate runs in working memory, upstream of the matcher, so every matcher was identically wrong and `MatcherEquivalence` proved only that they agreed. A differential test establishes that two shapes agree, never that they agree on the right answer.
+>
+> The fix records **the payload root** for every fact type an alias referenced by the condition binds — not the specific paths. Extracting read paths from the compiled expression is the precise answer, and dev.cel exposes the AST for it, but it makes this compiler permanently responsible for being a superset of what an arbitrary expression reads: under-declare by one path and a firing is lost silently. That is the `dependsOn()` trap §11.2 rejected, and §11.2's own escape from it — declare the root and be "instantly correct-but-conservative" — is the one taken here.
+>
+> Note "every alias the condition references", not the pattern it hangs off: a condition on an `Order` pattern reading `c.creditLimit` is falsified by an update to the `Customer`, and recording only the `Order` would leave that update un-propagated — the same defect, one alias over.
+>
+> **What conservatism costs here is not performance, and this is the paragraph to read before writing a `condition:`.** Because the root is a tested path, *any* update to a fact the rule binds counts as a change to a path the rule tests — including a field no rule reads at all. Two consequences follow, and neither is a slow path:
+>
+> - **The rule re-fires.** §3.4.1 step 5 clears refraction for exactly the rules testing a changed path, so a condition-carrying rule un-refracts on every update to its facts and fires again on data whose condition-relevant content did not change. §4.4's own complaint about type-wide scoping — "a rule firing twice because an unrelated rule's field changed, which no author can predict from reading their rule" — arrives here through a different door, and by a field *no* rule reads. Per-rule scoping does survive: only the condition-carrying rule un-refracts, not its neighbours on the same type.
+> - **A rule that terminated can stop terminating.** A right-hand side that mutates a fact the rule binds — `setField(o, "seen", o.seen + 1)`, an ordinary "stamp an attempt counter" shape — fires once without a condition and runs to `maxCycles` with one. **Give such a rule `noLoop`** (§4.5 exists for exactly this); it restores single firing.
+>
+> This is the one cost the precise alternative would not have paid, which is why it belongs beside the argument for conservatism rather than in a performance note. §3.4.2's fast path is unaffected either way: an identical payload short-circuits before any tested path is consulted, so a producer re-sending an unchanged record still propagates nothing.
 
 And note that a cost limit bounds a *single* evaluation, not how many times the engine runs it. An unindexed CEL condition against 100,000 facts is 100,000 evaluations per fire cycle. Cheap-per-call is not cheap.
 

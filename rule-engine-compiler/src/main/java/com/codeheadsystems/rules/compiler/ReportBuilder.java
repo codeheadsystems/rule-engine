@@ -58,11 +58,11 @@ final class ReportBuilder {
    * @return the report
    */
   static CompilerReport build(final List<CompiledRule> rules, final Network network,
-      final String version, final CompilerOptions options) {
+      final String version, final CompilerOptions options, final Set<String> suppressibleRoots) {
     return new CompilerReport(
         version,
         List.of(),
-        warnings(rules, options.factSchemas()),
+        warnings(rules, options.factSchemas(), suppressibleRoots),
         unindexed(rules),
         expressionCosts(rules, options.expressionBudget()),
         sharing(rules, network),
@@ -209,7 +209,7 @@ final class ReportBuilder {
    * @return every warning, in rule and declaration order within each kind
    */
   private static List<Diagnostic> warnings(final List<CompiledRule> rules,
-      final FactSchemas schemas) {
+      final FactSchemas schemas, final Set<String> suppressibleRoots) {
     final Map<String, Set<JsonPointer>> byType = new LinkedHashMap<>();
     for (final CompiledRule rule : rules) {
       rule.testedPaths().forEach((type, paths) ->
@@ -230,6 +230,22 @@ final class ReportBuilder {
       rule.testedPaths().entrySet().stream()
           .sorted(Map.Entry.comparingByKey())
           .forEach(entry -> entry.getValue().stream()
+              /*
+               * A root this rule acquired from a §6.4 condition is not reported, and one the author
+               * wrote is. The distinction matters because the advice differs: "constrain the deeper
+               * path" is actionable for `{ field: "", eq: {...} }`, and meaningless for a root the
+               * compiler inserted because it cannot know what an expression reads (see the §6.4
+               * amendment). The author did not write that one and can only remove it by deleting
+               * their condition, so warning about it is noise nobody can clear -- and §7.4 expects
+               * this report to be assertable in a build.
+               *
+               * Suppressed per fact type rather than per rule, so a rule with a condition on Order
+               * still gets the warning for a hand-written root on Customer. A rule that writes a
+               * root AND carries a condition on the same type loses the warning, which is the safe
+               * direction: a missing suggestion beats an unclearable one.
+               */
+              .filter(path -> !path.equals(JsonPointer.empty())
+                  || !suppressibleRoots.contains(rule.id() + '\u0000' + entry.getKey()))
               .filter(path -> byType.getOrDefault(entry.getKey(), Set.of()).stream()
                   .anyMatch(other -> !other.equals(path) && contains(path, other)))
               .sorted(Comparator.comparing(JsonPointer::toString))

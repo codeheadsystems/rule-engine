@@ -91,6 +91,33 @@ public final class RuleCompiler {
   private final Map<String, Map<String, Set<JsonPointer>>> pathsByRule = new LinkedHashMap<>();
   private final Map<String, Map<JsonPointer, Set<String>>> inverse = new LinkedHashMap<>();
 
+  /**
+   * Which {@code (ruleId, factType)} pairs acquired a payload-root tested path from a §6.4
+   * condition rather than from a constraint the author wrote.
+   *
+   * <p>Passed to {@link ReportBuilder} so §7.4's shallow-tested-path warning can tell the two
+   * apart: a root the author wrote is actionable advice, a root this compiler inserted is a warning
+   * nobody can clear. {@code TestedPaths} deliberately does not carry this -- it is frozen into the
+   * compiled rule set and read on the update hot path, and provenance has no runtime consumer.
+   *
+   * <p>Threaded rather than reconstructed in the report builder. Reconstructing it there means the
+   * same predicate written twice in two files with nothing tying them together, and CLAUDE.md names
+   * that failure directly: duplicating one gate in another is how they drift apart. Concretely --
+   * if the §6.4 amendment's door to real read paths is ever taken, a reconstruction keyed on "does
+   * this rule have a condition" would keep suppressing, and the *authored* root warning would
+   * vanish for any rule that also carries one.
+   */
+  private final Set<String> conditionRoots = new LinkedHashSet<>();
+
+  /**
+   * Whether an author wrote a whole-payload constraint, as opposed to the compiler inserting one.
+   *
+   * <p>What makes the suppression exact rather than a trade: subtracted from
+   * {@link #conditionRoots} by {@link #suppressibleRoots()}, so a rule that both writes a root and
+   * carries a condition on the same type keeps its warning.
+   */
+  private final Set<String> authoredRoots = new LinkedHashSet<>();
+
   private RuleCompiler(final CompilerOptions options) {
     this.options = options;
   }
@@ -147,7 +174,7 @@ public final class RuleCompiler {
         version,
         // §6.5's pipeline emits the report last, on the shared graph: sharing changes which nodes
         // exist, so anything counted before it counts nodes that are about to be merged away.
-        ReportBuilder.build(compiled, network, version, options),
+        ReportBuilder.build(compiled, network, version, options, suppressibleRoots()),
         options.factSchemas());
   }
 
@@ -232,7 +259,7 @@ public final class RuleCompiler {
         case JoinConstraint join ->
             compileJoin(rule, pattern, join, aliasPositions, aliasTypes).ifPresent(joinTests::add);
         case ExpressionConstraint expression ->
-            compileCondition(rule, pattern, expression, aliasPositions.keySet())
+            compileCondition(rule, pattern, expression, aliasPositions, aliasTypes)
                 .ifPresent(expressionTests::add);
         case FieldConstraint field ->
             compileField(rule, pattern, field).ifPresent(alphaTests::add);
@@ -533,6 +560,50 @@ public final class RuleCompiler {
   }
 
   /**
+   * A rule-and-type key for the provenance sets.
+   *
+   * @param ruleId the rule
+   * @param factType the fact type
+   * @return a key neither component can collide across, neither being allowed a NUL
+   */
+  private static String key(final String ruleId, final String factType) {
+    return ruleId + '\u0000' + factType;
+  }
+
+  /**
+   * The {@code (rule, type)} pairs whose payload root came <em>only</em> from a condition.
+   *
+   * <p>A rule that also wrote {@code field: ""} keeps its shallow-tested-path warning, because that
+   * root really is actionable -- the author can constrain a deeper path. Only a root this compiler
+   * inserted, which they cannot remove without deleting their condition, is suppressed.
+   *
+   * @return the suppressible keys
+   */
+  private Set<String> suppressibleRoots() {
+    final Set<String> suppressible = new LinkedHashSet<>(conditionRoots);
+    suppressible.removeAll(authoredRoots);
+    return suppressible;
+  }
+
+  /**
+   * Records the payload root for a type a §6.4 condition reads, tagged as compiler-inserted.
+   *
+   * <p>Separate from {@link #record} rather than a flag on it, so neither has to infer provenance
+   * from the path it was handed: reaching {@code record} with a root means the author wrote
+   * {@code field: ""}, and reaching here means this compiler inserted one.
+   *
+   * @param ruleId the rule
+   * @param factType the type an alias the condition references binds
+   */
+  private void recordConditionRoot(final String ruleId, final String factType) {
+    // index(), not record(): record() tags any root it sees as authored, and routing through it
+    // would make the tag depend on whether the author happened to write their root constraint
+    // before or after the condition in the same pattern. Same three insertions, no mis-tagging.
+    index(ruleId, factType, JsonPointer.empty());
+    conditionRoots.add(key(ruleId, factType));
+  }
+
+  /**
    * Records one tested path against a rule and a fact type, and into the inverse index.
    *
    * @param ruleId the rule that reads it
@@ -540,6 +611,22 @@ public final class RuleCompiler {
    * @param path the path
    */
   private void record(final String ruleId, final String factType, final JsonPointer path) {
+    if (path.matches()) {
+      // Reached with a root only from compileField or compileRange, i.e. the author wrote
+      // `field: ""`. Conditions go through recordConditionRoot and never through here.
+      authoredRoots.add(key(ruleId, factType));
+    }
+    index(ruleId, factType, path);
+  }
+
+  /**
+   * Puts a path into the three tested-path structures, without deciding where it came from.
+   *
+   * @param ruleId the rule that reads it
+   * @param factType the type it is read on
+   * @param path the path
+   */
+  private void index(final String ruleId, final String factType, final JsonPointer path) {
     pathsByType.computeIfAbsent(factType, ignored -> new LinkedHashSet<>()).add(path);
     pathsByRule.computeIfAbsent(ruleId, ignored -> new LinkedHashMap<>())
         .computeIfAbsent(factType, ignored -> new LinkedHashSet<>()).add(path);
@@ -676,7 +763,8 @@ public final class RuleCompiler {
    */
   private Optional<ExpressionTest> compileCondition(final RuleDefinition rule,
       final PatternDefinition pattern, final ExpressionConstraint constraint,
-      final Set<String> bound) {
+      final Map<String, Integer> aliasPositions, final List<String> aliasTypes) {
+    final Set<String> bound = aliasPositions.keySet();
     /*
      * The prefix follows "<rule>: <alias>.<field>", which is what the DSL matches on to put a line
      * number on a compiler diagnostic. Written any other way the message still arrives, but located
@@ -696,9 +784,40 @@ public final class RuleCompiler {
     try {
       final CompiledExpression program =
           options.expressions().compileCondition(constraint.expression(), bound);
-      return withinBudget(where, constraint.expression(), program)
-          ? Optional.of(new ExpressionTest(constraint, program))
-          : Optional.empty();
+      if (!withinBudget(where, constraint.expression(), program)) {
+        return Optional.empty();
+      }
+      /*
+       * Every alias the condition reads makes that alias's WHOLE PAYLOAD a tested path, and both
+       * halves of that are deliberate.
+       *
+       * Recording at all: §3.4.1 propagates an update only when it changed a path some rule tests,
+       * and a condition reading o.total means the rule tests o.total as surely as `{ gt: 1000 }`
+       * would. Until Phase 3 this recorded nothing, so an update that made a condition newly true
+       * fired nothing while the equivalent retract-plus-insert fired -- a §9 Phase 1 exit criterion
+       * missed for exactly the rules that reached for §6.4's escape hatch. No differential test
+       * could find it: the gate runs in DefaultWorkingMemory, upstream of the matcher, so every
+       * shape was identically wrong.
+       *
+       * The root rather than the paths: extracting read paths from the compiled expression is the
+       * precise answer and dev.cel exposes the AST for it, but it puts a permanent obligation on
+       * this compiler to be a superset of what an arbitrary expression reads -- under-declare by
+       * one path and the engine loses a firing silently. That is §11.2's rejected `dependsOn()`
+       * trap in miniature, and §11.2's own escape from it was to let a node declare the root and be
+       * "instantly correct-but-conservative". The cost lands on the rules that opted in: every
+       * update to a fact type carrying a condition propagates. §3.4.2's fast path is untouched,
+       * because an identical payload short-circuits before the trie is consulted at all.
+       *
+       * EVERY referenced alias, not this pattern's type: a condition on the Order pattern reading
+       * c.creditLimit is made false by an update to the Customer, and recording only the Order
+       * would leave that update silently un-propagated -- the same defect, one alias over.
+       */
+      for (final String alias : constraint.referencedAliases()) {
+        // checkAliases above has already established every referenced alias is bound, so the
+        // position is never null here.
+        recordConditionRoot(rule.id(), aliasTypes.get(aliasPositions.get(alias)));
+      }
+      return Optional.of(new ExpressionTest(constraint, program));
     } catch (final ExpressionCompilationException rejected) {
       diagnostics.add(where + ": " + rejected.getMessage());
       return Optional.empty();
