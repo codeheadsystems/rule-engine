@@ -21,7 +21,7 @@ jobs:
           distribution: temurin
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       # `build` runs both `test` and `strictTest`: section 7.5 asks for the full suite to run under
       # strict mode in CI, and the strict-mode checks are exactly the ones that catch a contract
