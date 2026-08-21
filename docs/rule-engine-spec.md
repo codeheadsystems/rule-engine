@@ -435,11 +435,13 @@ Two things worth being explicit about, since this is a different performance pro
 | Fact value at path | `hasField: true` | `isNull` | `{ eq: null }` | `{ eq: <non-null> }` | `{ ne: null }` | `{ ne: <non-null> }` | range ops | `matches` | `in [...]` |
 |---|---|---|---|---|---|---|---|---|---|
 | absent (`MissingNode`) | **false** | **false** | **false** | false | **true** | **true** | **false** | false | false |
-| explicit `null` (`NullNode`) | **true** | **true** | **true** | false | **false** | **true** | **false** | false | false |
+| explicit `null` (`NullNode`) | **true** | **true** | **true** | false | **false** | **true** | **false** | false | **per element** |
 | present, comparable | true | false | false | per value | true | per value | per value | per value | per value |
 | present, wrong type (see below) | true | false | false | **false** | **true** | **true** | **false** | false | false |
 
 Note the `ne` split into two columns: `NE` is defined as `!EQ`, so `{ ne: null }` against an explicit `null` is **false**. Collapsing them into one column gets that cell wrong.
+
+Note also the `in [...]` cell on the null row. **`IN` is defined as `EQ` against each element**, so `{ in: [null] }` matches an explicit `null` exactly as `{ eq: null }` does, and `{ in: ["A", "B"] }` does not. Defining membership any other way — carving null out of it, so that the cell read a flat `false` — would make `IN` disagree with the `EQ` it is built from and would stop `NOT_IN` being `!IN`, which is the property the two `notIn` cells in the absent and wrong-type rows depend on.
 
 Three consequences worth stating out loud:
 

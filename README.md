@@ -146,26 +146,6 @@ firing, and of every firing before it in that call, is gone with the stack unwin
 
 A listener must not throw and must not call back into the session; neither is enforced.
 
-## Known divergence from the spec
-
-One, and it needs a ruling rather than a quiet decision.
-
-**`{ in: [null] }` matches an explicit JSON null.** §2.6.1's table is declared normative, and its
-`NullNode` row shows `false` in the `in` column. The implementation defines `IN` as "`EQ` against
-any element", which reproduces every cell of that table for arrays of non-null elements but makes
-`{ in: [null] }` behave exactly like `{ eq: null }`.
-
-The argument for the implementation's reading: `IN` is built from `EQ`, and `NOT_IN` is defined as
-`!IN`. Special-casing null out of membership would make `IN` disagree with the `EQ` underneath it,
-and the table's `in` column is written alongside its `{ eq: <non-null> }` column — i.e. it describes
-non-null element lists, not a deliberate carve-out for null.
-
-The argument against: the table is normative and this contradicts a cell of it.
-
-It is pinned by `ComparisonsTest.membershipAgreesWithEquality`, so changing the decision means
-changing that test. Resolve it by amending §2.6.1 or by changing `Comparisons.in` — but resolve it,
-rather than leaving the code and the spec disagreeing.
-
 ## Things worth knowing before you write a rule
 
 Three behaviours surprise people, and all three are deliberate (§2.6.1, §1):

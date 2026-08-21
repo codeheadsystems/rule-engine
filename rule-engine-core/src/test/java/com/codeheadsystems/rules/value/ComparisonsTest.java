@@ -83,6 +83,10 @@ class ComparisonsTest {
         new Cell("null / ne non-null", EXPLICIT_NULL, Operator.NE, TEXT_LITERAL, true),
         new Cell("null / gt", EXPLICIT_NULL, Operator.GT, NODES.numberNode(1), false),
         new Cell("null / in non-nulls", EXPLICIT_NULL, Operator.IN, arrayOf(TEXT_LITERAL), false),
+        new Cell("null / in including null", EXPLICIT_NULL, Operator.IN,
+            arrayOf(NULL_LITERAL, TEXT_LITERAL), true),
+        new Cell("null / notIn including null", EXPLICIT_NULL, Operator.NOT_IN,
+            arrayOf(NULL_LITERAL), false),
 
         // ---- row: present, comparable -------------------------------------------------------
         new Cell("comparable / hasField:true", COMPARABLE, Operator.HAS_FIELD, TRUE, true),
@@ -178,9 +182,8 @@ class ComparisonsTest {
     @Test
     @DisplayName("in is defined as eq against any element, so in:[null] behaves like eq: null")
     void membershipAgreesWithEquality() {
-      // The table's `in` column is written for non-null element lists, alongside its
-      // `eq: <non-null>` column. Defining IN any other way would make it disagree with the EQ it
-      // is built from, and would make NOT_IN stop being !IN.
+      // §2.6.1's "per element" cell on the null row. Carving null out of membership would make
+      // IN disagree with the EQ it is built from, and would stop NOT_IN being !IN.
       assertThat(Comparisons.test(Operator.IN, EXPLICIT_NULL, arrayOf(NULL_LITERAL))).isTrue();
       assertThat(Comparisons.test(Operator.IN, ABSENT, arrayOf(NULL_LITERAL))).isFalse();
     }

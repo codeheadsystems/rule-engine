@@ -15,13 +15,10 @@ import java.util.OptionalInt;
  * it doubles every truth table and forces authors to reason about UNKNOWN propagation through AND,
  * a larger cognitive cost than one documented asymmetry.
  *
- * <p>The one place this class interprets rather than transcribes the table is {@link Operator#IN}
- * against an explicit JSON null. §2.6.1's {@code in [...]} column is written alongside its
- * {@code eq: <non-null>} column and so describes an array of non-null elements. Rather than
- * special-case null out of membership, {@code IN} is defined here as "{@link Operator#EQ} against
- * any element", which reproduces every cell of the table for non-null element lists and makes
- * {@code { in: [null] }} behave exactly like {@code { eq: null }}. Defining it any other way would
- * make {@code IN} disagree with the {@code EQ} it is built from.
+ * <p>{@link Operator#IN} is {@link Operator#EQ} against each element, which is what §2.6.1's
+ * "per element" cell on the null row means: {@code { in: [null] }} matches an explicit null exactly
+ * as {@code { eq: null }} does. Carving null out of membership would make {@code IN} disagree with
+ * the {@code EQ} it is built from, and would stop {@link Operator#NOT_IN} being {@code !IN}.
  */
 public final class Comparisons {
 
