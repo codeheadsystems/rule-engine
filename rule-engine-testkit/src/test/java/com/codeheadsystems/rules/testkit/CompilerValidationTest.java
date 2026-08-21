@@ -220,6 +220,53 @@ class CompilerValidationTest {
   }
 
   @Test
+  @DisplayName("matches cannot be a join operator, because the pattern would come from a fact")
+  void matchesRejectedOnAJoin() {
+    // Left to compile, this throws from inside the matcher at fire time -- a compile-time-detectable
+    // authoring error escaping to production.
+    final RuleDefinition rule = Rules.rule("regex-join")
+        .when("a", "A", pattern -> pattern.hasField("k", true))
+        .when("b", "B", pattern -> pattern.ref("code", "a.k", Operator.MATCHES))
+        .then(actions -> actions.emit("out"))
+        .build();
+
+    assertThatThrownBy(() -> RuleCompiler.compile(List.of(rule)))
+        .isInstanceOf(RuleCompilationException.class)
+        .hasMessageContaining("matches cannot be used as a join operator");
+  }
+
+  @Test
+  @DisplayName("hasField and isNull cannot be join operators either")
+  void singleFactTestsRejectedOnAJoin() {
+    // Both read their polarity from a boolean literal, which a $ref cannot supply. They do not
+    // throw; they evaluate nonsense quietly, which is worse.
+    for (final Operator operator : List.of(Operator.HAS_FIELD, Operator.IS_NULL)) {
+      final RuleDefinition rule = Rules.rule("bad-join-" + operator)
+          .when("a", "A", pattern -> pattern.hasField("k", true))
+          .when("b", "B", pattern -> pattern.ref("k", "a.k", operator))
+          .then(actions -> actions.emit("out"))
+          .build();
+
+      assertThatThrownBy(() -> RuleCompiler.compile(List.of(rule)))
+          .describedAs("%s on a join", operator)
+          .isInstanceOf(RuleCompilationException.class)
+          .hasMessageContaining("cannot be used as a join operator");
+    }
+  }
+
+  @Test
+  @DisplayName("in and notIn ARE legal joins: a scalar against another fact's array is meaningful")
+  void membershipJoinsStayLegal() {
+    final RuleDefinition rule = Rules.rule("membership-join")
+        .when("a", "A", pattern -> pattern.hasField("allowed", true))
+        .when("b", "B", pattern -> pattern.ref("tier", "a.allowed", Operator.IN))
+        .then(actions -> actions.emit("out"))
+        .build();
+
+    assertThat(RuleCompiler.compile(List.of(rule)).rules()).hasSize(1);
+  }
+
+  @Test
   @DisplayName("every diagnostic is reported, not just the first")
   void allDiagnosticsReported() {
     final RuleDefinition rule = Rules.rule("many-problems")

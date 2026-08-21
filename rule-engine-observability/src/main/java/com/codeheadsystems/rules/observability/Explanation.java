@@ -14,8 +14,12 @@ import java.util.Optional;
  * @param ruleId the rule being explained
  * @param patterns one result per LHS pattern, in declaration order
  * @param verdict a one-sentence answer, when one can be given
+ * @param complete whether the search finished. When false it ran into a budget, so every count in
+ *     this explanation is a lower bound rather than a total. Reported rather than hidden, because
+ *     a diagnostic that states a wrong number confidently is worse than one that admits it stopped
  */
-public record Explanation(String ruleId, List<PatternResult> patterns, Optional<String> verdict) {
+public record Explanation(String ruleId, List<PatternResult> patterns, Optional<String> verdict,
+    boolean complete) {
 
   /**
    * Canonical constructor. Defensively copies the pattern results.
@@ -23,6 +27,7 @@ public record Explanation(String ruleId, List<PatternResult> patterns, Optional<
    * @param ruleId the rule
    * @param patterns the per-pattern results
    * @param verdict the summary
+   * @param complete whether the search finished
    */
   public Explanation {
     Objects.requireNonNull(ruleId, "ruleId");
@@ -42,6 +47,10 @@ public record Explanation(String ruleId, List<PatternResult> patterns, Optional<
     final StringBuilder text = new StringBuilder("rule ").append(ruleId).append(": ")
         .append(verdict.orElse("no verdict"))
         .append(System.lineSeparator());
+    if (!complete) {
+      text.append("  (search stopped at a budget; counts above are lower bounds)")
+          .append(System.lineSeparator());
+    }
     for (final PatternResult pattern : patterns) {
       text.append("  ").append(pattern.describe()).append(System.lineSeparator());
     }

@@ -25,6 +25,7 @@ import org.openjdk.jmh.annotations.Param;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
+import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.infra.Blackhole;
 
 /**
@@ -401,6 +402,15 @@ public class Phase0Benchmarks {
         session.insert("Order", Facts.obj(
             "id", order, "status", "PENDING",
             "customerId", order < 5 ? order : -order - 1));
+      }
+    }
+
+    /** Closes the last session of the trial, which the per-invocation setup never gets to. */
+    @TearDown(Level.Trial)
+    public void tearDown() {
+      if (session != null) {
+        session.close();
+        session = null;
       }
     }
 

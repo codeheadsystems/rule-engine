@@ -350,6 +350,136 @@ class MatchExplainerTest {
   }
 
   @Test
+  @DisplayName("a truncated search says so instead of reporting the budget as the count")
+  void truncationIsReported() {
+    // Two forty-fact populations with no join is 1600 real matches. Reporting "1000 match(es)" is a
+    // confidently stated wrong number, and an author counting matches from it gets the limit back
+    // rather than the truth.
+    final RuleDefinition crossProduct = Rules.rule("cross")
+        .when("a", "A", pattern -> pattern.hasField("k", true))
+        .when("b", "B", pattern -> pattern.hasField("k", true))
+        .then(actions -> actions.emit("hit"))
+        .build();
+    final CompiledRuleSet rules = Engine.compile(crossProduct);
+    try (RuleSession session = rules.newSession()) {
+      for (int index = 0; index < 40; index++) {
+        session.insert("A", Facts.obj("k", index));
+        session.insert("B", Facts.obj("k", index));
+      }
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain("cross");
+
+      assertThat(explanation.complete())
+          .describedAs("1600 matches exceed the reporting bound")
+          .isFalse();
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict ->
+          assertThat(verdict).contains("at least"));
+      assertThat(explanation.describe()).contains("lower bounds");
+    }
+  }
+
+  @Test
+  @DisplayName("a complete search does not claim to be truncated")
+  void completeSearchSaysSo() {
+    final CompiledRuleSet rules = Engine.compile(REVIEW);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("Order",
+          Facts.obj("id", 1, "total", 25_000, "status", "PENDING", "customerId", 7));
+      session.insert("Customer", Facts.obj("id", 7, "riskTier", "HIGH"));
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain(REVIEW.id());
+
+      assertThat(explanation.complete()).isTrue();
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict ->
+          assertThat(verdict).doesNotContain("at least"));
+      assertThat(explanation.describe()).doesNotContain("lower bounds");
+    }
+  }
+
+  @Test
+  @DisplayName("a rule with NO matches still terminates promptly, which is the whole point")
+  void zeroMatchesDoesNotHang() {
+    // The hazard the match bound did not cover: it stops once enough matches are FOUND, so a rule
+    // with none never trips it and runs the whole cross product. "Why did my rule not fire" is
+    // exactly that case. Measured at roughly cubic before the work budget: 400 facts per type took
+    // four seconds, extrapolating to minutes at a couple of thousand.
+    final RuleDefinition rule = Rules.rule("no-matches")
+        .when("a", "A", pattern -> pattern.hasField("k", true))
+        .when("b", "B", pattern -> pattern.hasField("k", true))
+        .when("c", "C", pattern -> pattern.ref("x", "a.k"))
+        .then(actions -> actions.emit("hit"))
+        .build();
+    final CompiledRuleSet rules = Engine.compile(rule);
+    try (RuleSession session = rules.newSession()) {
+      for (int index = 0; index < 400; index++) {
+        session.insert("A", Facts.obj("k", index));
+        session.insert("B", Facts.obj("k", index));
+        // No C matches any A, so the walk finds nothing and never hits a match bound.
+        session.insert("C", Facts.obj("x", -index - 1));
+      }
+
+      final long startedAt = System.nanoTime();
+      final Explanation explanation = new MatchExplainer(rules, session).explain("no-matches");
+      final java.time.Duration took = java.time.Duration.ofNanos(System.nanoTime() - startedAt);
+
+      assertThat(took)
+          .describedAs("a diagnostic that hangs on the question it exists to answer is worse "
+              + "than not having one")
+          .isLessThan(java.time.Duration.ofSeconds(2));
+      assertThat(explanation.verdict()).isPresent();
+    }
+  }
+
+  @Test
+  @DisplayName("a self-join names the inequality, not just the join that would have held")
+  void selfJoinBlamesTheRightThing() {
+    // With one order the named join WOULD hold -- it is §1's implicit inequality that rejects the
+    // pairing. Attributing it to the join alone sends the author to look at a constraint that is
+    // satisfied.
+    final RuleDefinition duplicates = Rules.rule("duplicate-orders")
+        .when("o1", "Order", pattern -> pattern.eq("status", "PENDING"))
+        .when("o2", "Order", pattern -> pattern.eq("status", "PENDING")
+            .ref("customerId", "o1.customerId"))
+        .then(actions -> actions.emit("dupe"))
+        .build();
+    final CompiledRuleSet rules = Engine.compile(duplicates);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("Order", Facts.obj("id", 1, "status", "PENDING", "customerId", 7));
+
+      assertThat(new MatchExplainer(rules, session).explain("duplicate-orders").verdict())
+          .hasValueSatisfying(verdict -> assertThat(verdict)
+              .contains("must bind a different fact from o1"));
+    }
+  }
+
+  @Test
+  @DisplayName("many fired matches are summarised, not listed to twenty thousand characters")
+  void firedMatchesAreSummarised() {
+    final RuleDefinition rule = Rules.rule("pairs")
+        .when("a", "A", pattern -> pattern.hasField("k", true))
+        .when("b", "B", pattern -> pattern.hasField("k", true))
+        .then(actions -> actions.emit("hit"))
+        .build();
+    final CompiledRuleSet rules = Engine.compile(rule);
+    try (RuleSession session = rules.newSession()) {
+      for (int index = 0; index < 20; index++) {
+        session.insert("A", Facts.obj("k", index));
+        session.insert("B", Facts.obj("k", index));
+      }
+      session.fireAllRules();
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain("pairs");
+
+      // §7.2 asks for a one-sentence answer. A count and a few examples carry the same information
+      // as four hundred bracketed tuples.
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict -> {
+        assertThat(verdict).contains("refracted").contains("more");
+        assertThat(verdict.length()).isLessThan(300);
+      });
+    }
+  }
+
+  @Test
   @DisplayName("an unknown rule id fails loudly")
   void unknownRule() {
     final CompiledRuleSet rules = Engine.compile(REVIEW);

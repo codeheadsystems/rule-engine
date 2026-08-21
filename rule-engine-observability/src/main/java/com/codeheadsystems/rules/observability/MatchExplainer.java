@@ -48,8 +48,23 @@ import java.util.Optional;
  */
 public final class MatchExplainer {
 
-  /** How many real matches to enumerate before stopping. Enough to explain, bounded enough to end. */
+  /** How many real matches to report. Enough to explain; more would be a data dump, not an answer. */
   private static final int MATCH_LIMIT = 1_000;
+
+  /**
+   * How many candidate bindings to examine before giving up.
+   *
+   * <p>Separate from {@link #MATCH_LIMIT}, and the separation is the point. A budget on <em>matches
+   * found</em> bounds the output but not the work: when a rule has <em>no</em> matches the guard
+   * never trips and the walk runs the whole cross product to completion — and "my rule has no
+   * matches" is exactly the question this class exists to answer. Measured at roughly cubic on a
+   * three-pattern rule with one disconnected pattern: 100 facts per type took 98ms, 200 took 489ms,
+   * 400 took 4s. A budget on work examined is what actually bounds it.
+   */
+  private static final int WORK_LIMIT = 250_000;
+
+  /** How many fired matches to name before summarising. §7.2 asks for a sentence, not a dump. */
+  private static final int EXAMPLES = 3;
 
   private final CompiledRuleSet ruleSet;
   private final RuleSession session;
@@ -85,9 +100,10 @@ public final class MatchExplainer {
     // Annotate first, then read the verdict off the annotated results: the join note IS one of the
     // verdicts, so handing the un-annotated list to verdict() silently loses the "nothing joined"
     // answer -- which is the one an author is least able to work out for themselves.
-    final List<long[]> matches = matches(rule, survivorsByAlias);
+    final Matches matches = matches(rule, survivorsByAlias);
     final List<PatternResult> annotated = withJoinNotes(rule, results, matches);
-    return new Explanation(ruleId, annotated, verdict(rule, annotated, matches));
+    return new Explanation(ruleId, annotated, verdict(rule, annotated, matches),
+        matches.complete());
   }
 
   /**
@@ -112,9 +128,10 @@ public final class MatchExplainer {
       results.add(result);
       survivorsByAlias.put(pattern.alias(), result.survivors());
     }
-    final List<long[]> matches = matches(rule, survivorsByAlias);
+    final Matches matches = matches(rule, survivorsByAlias);
     final List<PatternResult> annotated = withJoinNotes(rule, results, matches);
-    return new Explanation(ruleId, annotated, verdict(rule, annotated, matches));
+    return new Explanation(ruleId, annotated, verdict(rule, annotated, matches),
+        matches.complete());
   }
 
   /**
@@ -214,21 +231,46 @@ public final class MatchExplainer {
    * @return the results, with join notes filled in
    */
   private static List<PatternResult> withJoinNotes(final CompiledRule rule,
-      final List<PatternResult> results, final List<long[]> matches) {
+      final List<PatternResult> results, final Matches matches) {
     final List<PatternResult> annotated = new ArrayList<>(results.size());
     for (int position = 0; position < rule.patterns().size(); position++) {
       final CompiledPattern pattern = rule.patterns().get(position);
       final PatternResult result = results.get(position);
       final boolean joined = pattern.joinTests().isEmpty() || result.survivors().isEmpty();
-      annotated.add(joined || !matches.isEmpty()
+      annotated.add(joined || !matches.found().isEmpty()
           ? result
           : new PatternResult(result.alias(), result.factType(), result.considered(),
               result.survivors(), result.firstFailure(),
               Optional.of(result.survivors().size() + " survivor(s), but no combination of them "
-                  + "satisfies " + describeJoins(rule, pattern)),
+                  + "satisfies " + describeJoins(rule, pattern)
+                  // Attributing an empty match set purely to the written joins misleads on a
+                  // self-join, where it is §1's implicit inequality doing the rejecting and the
+                  // named join would in fact hold.
+                  + (pattern.distinctFrom().length > 0
+                      ? ", and " + pattern.alias() + " must bind a different fact from "
+                          + describeDistinct(rule, pattern)
+                      : "")),
               result.note()));
     }
     return annotated;
+  }
+
+  /**
+   * Renders the aliases a pattern must bind a different fact from.
+   *
+   * @param rule the rule
+   * @param pattern the pattern
+   * @return the alias names
+   */
+  private static String describeDistinct(final CompiledRule rule, final CompiledPattern pattern) {
+    final StringBuilder text = new StringBuilder();
+    for (final int other : pattern.distinctFrom()) {
+      if (!text.isEmpty()) {
+        text.append(" and ");
+      }
+      text.append(rule.patterns().get(other).alias());
+    }
+    return text.toString();
   }
 
   /**
@@ -251,22 +293,29 @@ public final class MatchExplainer {
    * Enumerates the rule's real matches over the surviving candidates.
    *
    * <p>Brute force, in the rule's written order, applying every cross-fact test and §1's implicit
-   * inequality. That is the point: §7.2 says this diagnostic should re-evaluate rather than ask the
+   * inequality. That is deliberate: §7.2 says this diagnostic should re-evaluate rather than ask the
    * network, because the network is built to skip work without recording why it skipped it.
    *
-   * <p>Bounded, because "why did nothing fire" is a question people ask about large sessions and an
-   * unbounded cross product would hang the thing that was supposed to help. Hitting the bound is
-   * reported rather than hidden.
+   * <p>Bounded on both axes — matches reported and candidates examined — and which of the two ran
+   * out is not reported separately, because for the reader the answer is the same: this is a lower
+   * bound.
    *
    * @param rule the rule
    * @param survivorsByAlias each pattern's surviving handles
-   * @return up to {@link #MATCH_LIMIT} real matches
+   * @return the matches found, and whether the search finished
    */
-  private List<long[]> matches(final CompiledRule rule,
+  private Matches matches(final CompiledRule rule,
       final Map<String, List<Long>> survivorsByAlias) {
     final List<long[]> found = new ArrayList<>();
-    extend(rule, survivorsByAlias, 0, new long[rule.patterns().size()], found);
-    return found;
+    // One lookup per distinct handle instead of two per join evaluation. The walk is quadratic or
+    // worse by nature, so a constant factor on its innermost operation is worth removing.
+    final Map<Long, JsonNode> payloads = new LinkedHashMap<>();
+    survivorsByAlias.values().forEach(handles -> handles.forEach(handle ->
+        payloads.computeIfAbsent(handle, id ->
+            session.get(new FactHandle(id)).map(Fact::payload).orElse(null))));
+    final int[] budget = {WORK_LIMIT};
+    extend(rule, survivorsByAlias, payloads, 0, new long[rule.patterns().size()], found, budget);
+    return new Matches(found, budget[0] > 0 && found.size() < MATCH_LIMIT);
   }
 
   /**
@@ -274,13 +323,16 @@ public final class MatchExplainer {
    *
    * @param rule the rule
    * @param survivorsByAlias each pattern's surviving handles
+   * @param payloads the survivors' payloads, resolved once
    * @param position the pattern to bind next
    * @param bound the handles bound so far
    * @param found the matches collected so far
+   * @param budget remaining candidate examinations, decremented in place
    */
   private void extend(final CompiledRule rule, final Map<String, List<Long>> survivorsByAlias,
-      final int position, final long[] bound, final List<long[]> found) {
-    if (found.size() >= MATCH_LIMIT) {
+      final Map<Long, JsonNode> payloads, final int position, final long[] bound,
+      final List<long[]> found, final int[] budget) {
+    if (found.size() >= MATCH_LIMIT || budget[0] <= 0) {
       return;
     }
     if (position == rule.patterns().size()) {
@@ -289,12 +341,16 @@ public final class MatchExplainer {
     }
     final CompiledPattern pattern = rule.patterns().get(position);
     for (final long candidate : survivorsByAlias.getOrDefault(pattern.alias(), List.of())) {
-      if (pattern.conflictsWith(bound, candidate) || !joinsHold(rule, pattern, candidate, bound)) {
+      if (--budget[0] <= 0) {
+        return;
+      }
+      if (pattern.conflictsWith(bound, candidate)
+          || !joinsHold(rule, pattern, candidate, bound, payloads)) {
         continue;
       }
       bound[position] = candidate;
-      extend(rule, survivorsByAlias, position + 1, bound, found);
-      if (found.size() >= MATCH_LIMIT) {
+      extend(rule, survivorsByAlias, payloads, position + 1, bound, found, budget);
+      if (found.size() >= MATCH_LIMIT || budget[0] <= 0) {
         return;
       }
     }
@@ -307,12 +363,15 @@ public final class MatchExplainer {
    * @param pattern the pattern
    * @param candidate the handle being considered
    * @param bound the handles bound so far
+   * @param payloads the survivors' payloads
    * @return whether the joins hold
    */
   private boolean joinsHold(final CompiledRule rule, final CompiledPattern pattern,
-      final long candidate, final long[] bound) {
+      final long candidate, final long[] bound, final Map<Long, JsonNode> payloads) {
     for (final JoinTest join : pattern.joinTests()) {
-      if (!holds(join, candidate, bound[join.otherIndex()])) {
+      final JsonNode mine = payloads.get(candidate);
+      final JsonNode theirs = payloads.get(bound[join.otherIndex()]);
+      if (mine == null || theirs == null || !join.test(mine, theirs)) {
         return false;
       }
     }
@@ -320,18 +379,12 @@ public final class MatchExplainer {
   }
 
   /**
-   * Whether one join holds between two specific facts.
+   * The matches found, and whether the search ran to completion.
    *
-   * @param join the join test
-   * @param mine the handle on the constraint-bearing side
-   * @param theirs the handle on the referenced side
-   * @return whether it holds, and false if either fact has since gone
+   * @param found the matches
+   * @param complete false when a budget stopped the search, making every count a lower bound
    */
-  private boolean holds(final JoinTest join, final long mine, final long theirs) {
-    final Optional<JsonNode> left = session.get(new FactHandle(mine)).map(Fact::payload);
-    final Optional<JsonNode> right = session.get(new FactHandle(theirs)).map(Fact::payload);
-    return left.isPresent() && right.isPresent() && join.test(left.get(), right.get());
-  }
+  private record Matches(List<long[]> found, boolean complete) {}
 
   /**
    * The one-sentence answer.
@@ -345,7 +398,7 @@ public final class MatchExplainer {
    * @return the verdict
    */
   private Optional<String> verdict(final CompiledRule rule, final List<PatternResult> results,
-      final List<long[]> matches) {
+      final Matches matches) {
     for (final PatternResult result : results) {
       if (result.note().isPresent()) {
         return result.note();
@@ -388,29 +441,40 @@ public final class MatchExplainer {
    * @param matches the real matches
    * @return the verdict
    */
-  private Optional<String> refractionVerdict(final CompiledRule rule, final List<long[]> matches) {
-    if (matches.isEmpty()) {
-      return Optional.of("every pattern matched individually, but no combination of them satisfies"
-          + " the rule's cross-fact constraints");
+  private Optional<String> refractionVerdict(final CompiledRule rule, final Matches matches) {
+    if (matches.found().isEmpty()) {
+      return Optional.of(matches.complete()
+          ? "every pattern matched individually, but no combination of them satisfies the rule's"
+              + " cross-fact constraints"
+          : "no match found before the search budget ran out; there may be one");
     }
     final List<String> fired = new ArrayList<>();
     int eligible = 0;
-    for (final long[] match : matches) {
+    for (final long[] match : matches.found()) {
       final Optional<Long> recency = session.firedAt(new ActivationKey(rule.id(), match));
       if (recency.isPresent()) {
-        fired.add(java.util.Arrays.toString(match) + " at recency " + recency.get());
+        if (fired.size() < EXAMPLES) {
+          fired.add(java.util.Arrays.toString(match) + " at recency " + recency.get());
+        }
       } else {
         eligible++;
       }
     }
-    if (fired.isEmpty()) {
-      return Optional.of(matches.size() + " match(es); all eligible, none has fired yet");
+    final int firedCount = matches.found().size() - eligible;
+    // "at least", not a total, whenever a budget stopped the search. An earlier version printed the
+    // budget itself as the count -- a confidently stated wrong number.
+    final String total = (matches.complete() ? "" : "at least ") + matches.found().size();
+    if (firedCount == 0) {
+      return Optional.of(total + " match(es); all eligible, none has fired yet");
     }
+    final String examples = String.join(", ", fired)
+        + (firedCount > fired.size() ? ", and " + (firedCount - fired.size()) + " more" : "");
     if (eligible == 0) {
-      return Optional.of("matched, but refracted — already fired: " + String.join(", ", fired));
+      return Optional.of("matched, but refracted — " + total
+          + " match(es), all already fired: " + examples);
     }
-    return Optional.of(matches.size() + " match(es): " + fired.size()
-        + " already fired (" + String.join(", ", fired) + "), " + eligible + " still eligible");
+    return Optional.of(total + " match(es): " + firedCount + " already fired (" + examples
+        + "), " + eligible + " still eligible");
   }
 
   /**
