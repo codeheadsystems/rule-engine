@@ -92,7 +92,7 @@ Stated once here, because most of the design's non-obvious choices exist to pres
             ▼
       ┌─────────────┐  one per PATTERN — holds the conjunction of that
       │ PatternNode │  pattern's alpha tests. This is the alpha memory
-      └─────┬───────┘  TREAT probes and Rete joins against. (§3.2.5)
+      └─────┬───────┘  TREAT probes and Rete joins against. (§3.2.4)
             │
             ▼
       ┌──────────┐   cross-fact join; indexed probe, not a cross product
@@ -362,7 +362,8 @@ public enum Operator {
     IN, NOT_IN,
     MATCHES,          // regex — §2.6.3 on RE2 and precompilation
     HAS_FIELD,        // field-presence on ONE fact; `literal` is a BooleanNode giving polarity
-    IS_NULL           // explicit JSON null, as distinct from absent (§2.6.1)
+    IS_NULL           // explicit JSON null, as distinct from absent (§2.6.1); `literal` is a
+                      // BooleanNode giving polarity, exactly as HAS_FIELD
 }
 ```
 
@@ -395,6 +396,8 @@ public record FieldRef(String alias, JsonPointer path) implements ValueExpr {}
 Keep this layer DSL-agnostic — a second front-end (a text DSL, say) could be bolted on later without touching anything below this line.
 
 **`HAS_FIELD`, not `EXISTS`.** `HAS_FIELD` asks whether *this fact* has a value at this path — a single-fact alpha test. It has nothing to do with existential quantification over a *pattern* ("does any `Payment` exist for this `Order`"), which is `Quantifier`'s job and a v1 non-goal (§1). Two very different features; don't give them one word. Polarity is carried in `literal` (`{ hasField: false }` means "absent"), so a single operator covers both directions.
+
+**`IS_NULL` carries polarity the same way, and inherits the same asymmetry as `NE`.** `{ isNull: false }` is the negation of the predicate, not "present and not null" — so it matches an **absent** field as readily as a present non-null one, for the same reason §2.6.1 gives for `{ ne: "CLOSED" }` matching an `Order` with no `status`. When you mean "present and not null," write `{ hasField: true }` alongside it. The compiler issues §2.6.1's optional-path warning for `{ isNull: false }` too.
 
 **`BETWEEN` is a separate constraint type**, not an `Operator`, because `FieldConstraint(field, op, literal)` cannot express two bounds and their inclusivity without overloading `literal` into a positional array — an encoding that then has to be documented, validated, and remembered. `RangeConstraint` also unifies one-sided ranges, so `GT`/`LT` on an indexed path compile into the same structure the sorted index (§3.3) already understands.
 
@@ -522,7 +525,7 @@ public non-sealed interface AlphaNode extends NetworkNode {
 }
 
 /** One per PATTERN. Holds the alpha memory: the facts satisfying the conjunction of that
- *  pattern's alpha tests. See §3.2.5 — this node is why constraint-level sharing works. */
+ *  pattern's alpha tests. See §3.2.4 — this node is why constraint-level sharing works. */
 public non-sealed interface PatternNode extends NetworkNode {
     String factType();
     String alias();
@@ -597,7 +600,7 @@ public final class SessionMemories {
 
 `NetworkNode` and `RuntimeNode` (§3.4) are two views of one object, not two graphs. `NetworkNode` is the structural face — what does this node test, what does it depend on, what is its id. `RuntimeNode` is the propagation face — given a token, what do you do. All five node types implement both, `EntryNode` included: its propagation face is the fan-out to the alpha chains for its fact type, which is where every insert enters the network.
 
-#### 3.2.5 `PatternNode`: the per-pattern alpha memory
+#### 3.2.4 `PatternNode`: the per-pattern alpha memory
 
 Constraint-level node sharing (§6.5) and TREAT need different things, and reconciling them requires a node type that a plain Rete sketch doesn't have.
 
@@ -765,7 +768,7 @@ public record ActivationKey(String ruleId, long[] handles) { /* ... */ }
 
 That is the whole definition. It needs no snapshot store and no "captured when" refinement, and the reason is worth stating because an earlier draft of this spec carried both: **a rule is dirty only when a fact it patterns was inserted, retracted, or effectively updated** (§4.1) — which is exactly the condition under which its activations' recency *should* change. Recomputation therefore cannot silently re-rank a match on unrelated traffic, because unrelated traffic does not make the rule dirty. A rule that becomes dirty has, by construction, had one of its facts change.
 
-The `final` field also cannot go stale in the heap: an effective update bumps `Fact.recency` and dirties every rule patterning that type (§3.4.2), which rebuilds those activations from scratch on the next `nextToFire()`. No activation survives an update to a fact it binds.
+The `final` field also cannot go stale in the heap: an effective update bumps `Fact.recency` and dirties every rule patterning that type (§3.4.1), which rebuilds those activations from scratch on the next `nextToFire()`. No activation survives an update to a fact it binds.
 
 This is one of the mechanisms §11.5 records as a cost of *deferring* the Rete shape rather than building both at once. If Phase 3 lands a second shape that creates activations at different times, it will need to persist recency across recomputations so the two agree — and it will be able to build that against a working implementation and a differential test, rather than against a thought experiment.
 
@@ -820,10 +823,16 @@ public interface Agenda {
     Optional<Activation> peek();      // lazily recomputes, then filters refraction (§4.1)
     Optional<Activation> nextToFire();// selects, applies refraction, removes, returns
     boolean isEmpty();                // lazily recomputes, then filters refraction (§4.1)
+    int size();                       // eligible, non-refracted activations — backs
+                                      // FireResult.residualAgendaSize (§4.7)
 }
 ```
 
-**Three methods, because the other three would have no caller.** An `activate`/`deactivate`/`deactivateAllInvolving` trio is the *Rete* interface: it exists so propagation can push activations in and pull them out as tokens arrive. Under TREAT nothing pushes and nothing pulls — the conflict set for a dirty rule is replaced wholesale at recomputation, and a retracted fact's matches disappear because the next recomputation does not produce them. Specifying those methods now would mean specifying, testing, and maintaining behavior that no v1 code path invokes. They arrive in Phase 3 with the shape that needs them.
+**`size()` counts what `isEmpty()` means.** It is the eligible, non-refracted count, so `size() == 0` and `isEmpty()` always agree; a count of everything sitting in the conflict set would report a residual agenda for a session that had genuinely drained.
+
+**All four methods lazily recompute, so memoize the recomputation within a fire cycle.** §4.7's loop calls `isEmpty()`, then `peek()` on a limit breach, then `nextToFire()` — three calls that would otherwise rebuild every dirty rule's conflict set three times over. Recompute when the dirty set is non-empty, clear the dirty set, and let the following calls read the materialized result; that is what makes these methods' shared lazy semantics affordable rather than quadratic in the number of methods the loop happens to call.
+
+**Four methods, because the other three would have no caller.** An `activate`/`deactivate`/`deactivateAllInvolving` trio is the *Rete* interface: it exists so propagation can push activations in and pull them out as tokens arrive. Under TREAT nothing pushes and nothing pulls — the conflict set for a dirty rule is replaced wholesale at recomputation, and a retracted fact's matches disappear because the next recomputation does not produce them. Specifying those methods now would mean specifying, testing, and maintaining behavior that no v1 code path invokes. They arrive in Phase 3 with the shape that needs them.
 
 Internally: per-rule match lists, plus a heap over the rule heads ordered by the conflict-resolution comparator. Replacing one rule's slice on recomputation then touches that rule's entry rather than re-heapifying the whole conflict set — which matters, because §4.1's bargain is more work per fire cycle, and a rebuild that is linear in the *whole* agenda rather than in the dirty rule's matches would compound it.
 
@@ -857,19 +866,21 @@ Semantics, precisely:
 - **A key is recorded in `fired` when its activation is consumed**, not when it completes: immediately after `nextToFire()` returns it and before the RHS runs. Recording on *success* only would let a rule whose RHS throws under `SKIP_ACTIVATION` (§4.6) be re-selected on the next cycle and throw again, forever — a retry loop that looks exactly like the non-termination refraction exists to prevent. Recording on consumption also means `ABORT_SESSION` and `RETHROW` leave the key recorded, which is correct: the session is over, and nothing will re-select it anyway.
 - **A match becomes eligible again when one of its facts is retracted, or effectively updated on a path *that rule* tests.** The scoping is essential. A type-wide rule — "any tested path, anywhere in the network" — means an update to `Order./total`, tested only by rule B, clears refraction for rule A's match where A tests only `/status`. A would then re-fire on identical data the next time it became dirty — a rule firing twice because an unrelated rule's field changed, which no author can predict from reading their rule. Scope invalidation with `TestedPaths.rulesTesting` (§2.4).
 - An update changing no tested path clears nothing, consistent with §3.4 treating it as a non-event.
-- **Refraction needs its own handle index**, shown above as `byHandle`. §4.3's reverse index covers *pending* activations and drops entries on `deactivate`/`nextToFire`; a fired activation is by definition no longer pending, so it is not in that map. Without a dedicated index, `invalidate` is an O(|fired|) scan per retract — quadratic in a long-lived session, and refraction is a growth surface there in its own right; see below.
+- **Refraction needs its own handle index**, shown above as `byHandle`. A fired activation has been removed from the conflict set at selection (§4.1), so there is nothing left to scan it out of — §4.3 makes the same point from the other side when it declines to maintain a handle→activation index for *pending* activations. Without a dedicated index, `invalidate` is an O(|fired|) scan per retract — quadratic in a long-lived session, and refraction is a growth surface there in its own right; see below.
 
-**Session growth surfaces, as a set.** `maxFacts` (§4.7) bounds working memory and nothing bounds anything else. A session accumulates four structures, and only the first is capped:
+**Session growth surfaces, as a set.** `maxFacts` (§4.7) bounds working memory and nothing bounds anything else *directly*. A session accumulates three structures, and only the first is capped:
 
 | Structure | Grows with | Bounded by |
 |---|---|---|
 | Working memory | facts inserted, less retracted | `maxFacts` |
-| `RefractionMemory.fired` + `byHandle` | every match ever fired | retract, and per-rule invalidation |
-| The agenda's handle→activation reverse index (§4.3) | pending activations | `deactivate` / `nextToFire` |
+| Node memories and their indexes (§3.3) | facts in working memory | transitively, by retract — which removes the handle from every memory and index it entered |
+| `RefractionMemory.fired` + `byHandle` | every match *ever* fired | retract, and per-rule invalidation — nothing else |
+
+Two structures are deliberately absent. The conflict set is bounded by the matches that currently exist rather than by history, because §4.1 replaces a dirty rule's slice wholesale. The agenda's handle→activation reverse index does not appear because §4.3 declines to maintain one.
 
 For the one-shot/batch sessions v1 targets (§11.1 option A) this is a non-issue: the session is discarded before anything accumulates. It is a real problem for §11.1's option B — a streaming session watching an entity for days, inserting continuously and retracting nothing — where the fired-match memory grows without bound while working memory looks healthy.
 
-**The mechanism that bounds all four is fact eviction, because they are all keyed on handles.** Give long-lived sessions a documented eviction policy (TTL, or LRU by `recency`), and specify that evicting a fact runs the **full retract path** — which cascades to refraction, snapshots, and the reverse index for free, and keeps eviction from becoming a fifth place where memories are removed by hand. This is the "time-windowed eviction is a separate concern from temporal operators" claim §1 makes: eviction is a session-lifetime concern that a streaming session needs whether or not `after`/`within` operators ever land. It is Phase 3 work, alongside the streaming session shape it exists to serve, and it should be an exit criterion for it: a streaming session under sustained insert-without-retract load must reach a steady-state heap, not a rising one.
+**The mechanism that bounds all three is fact eviction, because they are all keyed on handles.** Give long-lived sessions a documented eviction policy (TTL, or LRU by `recency`), and specify that evicting a fact runs the **full retract path** — which cascades to refraction, snapshots, and the reverse index for free, and keeps eviction from becoming a fifth place where memories are removed by hand. This is the "time-windowed eviction is a separate concern from temporal operators" claim §1 makes: eviction is a session-lifetime concern that a streaming session needs whether or not `after`/`within` operators ever land. It is Phase 3 work, alongside the streaming session shape it exists to serve, and it should be an exit criterion for it: a streaming session under sustained insert-without-retract load must reach a steady-state heap, not a rising one.
 
 **Refraction and `noLoop` are different things**, and blurring them confuses everybody:
 
@@ -916,7 +927,7 @@ The cost: an action cannot read the result of an earlier action in the same RHS.
 
 - **Multiple `setField`s on the same handle merge into one `update()`**, applied in declaration order. Naively staging each as an independent update built from the pre-RHS payload means the second overwrites the first and the earlier field change silently vanishes — the single most likely week-one bug in this design. Stage per-handle field *deltas*, not whole payloads, and materialize one payload at commit.
 
-  **Materialize onto a `deepCopy()` of the stored payload, then call `updateOwned`.** Applying the deltas to the stored `ObjectNode` in place is the obvious implementation and it is the §2.2 aliasing bug, arriving through the engine's own RHS path: §3.4.2 step 1 would diff the stored payload against itself, find nothing changed, propagate nothing, and leave every index stale. Copy once per touched handle, apply the deltas to the copy, hand ownership to `updateOwned` — which skips the copy §2.2 would otherwise make, so this costs one `deepCopy()` per mutated fact, not two. Strict mode's aliasing check (§7.5) catches the in-place version, and the engine must not be the thing that trips it.
+  **Materialize onto a `deepCopy()` of the stored payload, then call `updateOwned`.** Applying the deltas to the stored `ObjectNode` in place is the obvious implementation and it is the §2.2 aliasing bug, arriving through the engine's own RHS path: §3.4.1 step 1 would diff the stored payload against itself, find nothing changed, propagate nothing, and leave every index stale. Copy once per touched handle, apply the deltas to the copy, hand ownership to `updateOwned` — which skips the copy §2.2 would otherwise make, so this costs one `deepCopy()` per mutated fact, not two. Strict mode's aliasing check (§7.5) catches the in-place version, and the engine must not be the thing that trips it.
 - **`insertFact` allocates its handle at stage time**, not at commit. A later action in the same RHS may need to reference the newly-inserted fact (a common shape: insert a derived fact, then emit an event naming it). Allocating the handle immediately, while deferring the *propagation*, gives later actions something to name without letting them observe match consequences. The fact becomes visible to matching only at commit.
 - **A retract of a handle inserted in the same RHS** cancels both effects at commit rather than propagating an insert and a retract.
 
@@ -937,7 +948,7 @@ public interface RhsErrorHandler {
 ```
 
 - **Default is `RETHROW`**, with the partially-executed activation recorded in the trace (§7.1) and the session marked failed: subsequent operations throw `IllegalStateException`. The original exception propagates to the caller of `fireAllRules`. Silent continuation after an unexpected RHS exception is how a rule engine produces confidently wrong output.
-- **`ABORT_SESSION` differs from `RETHROW` in one respect only: it does not propagate.** The session is marked failed identically, but firing stops and `fireAllRules` *returns* a `FireResult` with `TerminationReason.LIMIT_EXCEEDED`, the records completed so far, and the failure on the trace. Choose it when the caller treats a rule failure as a decision outcome to inspect rather than an exception to handle — a batch driver that must report per-item status without a try/catch around every item. Both leave working memory as §4.6's commit phase left it; neither attempts to unwind.
+- **`ABORT_SESSION` differs from `RETHROW` in one respect only: it does not propagate.** The session is marked failed identically, but firing stops and `fireAllRules` *returns* a `FireResult` with `TerminationReason.RHS_ERROR`, the records completed so far, and the failure on the trace. **It is not `LIMIT_EXCEEDED`**: no limit was breached, and a caller switching on the reason to decide "retry with a higher `maxCycles`" would be told to do exactly the wrong thing. Choose it when the caller treats a rule failure as a decision outcome to inspect rather than an exception to handle — a batch driver that must report per-item status without a try/catch around every item. Both leave working memory as §4.6's commit phase left it; neither attempts to unwind.
 - `SKIP_ACTIVATION` — log, refract it so it cannot retry-loop, continue firing — is right for best-effort batch scoring, where one bad fact shouldn't fail 10,000 good ones. Choose it deliberately.
 - **`callFunction` handlers are untrusted for *time*, not just for effects.** A handler that blocks indefinitely stalls the session for as long as it blocks, and there is no fire-loop timeout to rescue it (§4.7). Document the contract (non-blocking, bounded) and enforce a configurable per-call timeout in strict mode.
 
@@ -979,17 +990,25 @@ public record FireResult(
     Duration took
 ) {}
 
-public enum TerminationReason { DRAINED, HALTED, LIMIT_EXCEEDED }
+/** Why firing stopped. LIMIT_EXCEEDED appears only on the partial result carried by a
+ *  RuleEngineLimitExceeded (§4.7); RHS_ERROR only under an ABORT_SESSION decision (§4.6). */
+public enum TerminationReason { DRAINED, HALTED, LIMIT_EXCEEDED, RHS_ERROR }
 
-public record FireOptions(
-    int maxCycles,                   // §4.7 — mandatory, no limit-less fire
-    int maxFacts
-) {}
+/** Built, never constructed positionally — the same argument §7.5 makes for SessionOptions,
+ *  and it applies here first: the open decision immediately below adds `maxDuration` to this
+ *  type, which as a record would break every positional construction in every caller. */
+public final class FireOptions {
+    private final int maxCycles;     // §4.7 — mandatory, no limit-less fire
+    private final int maxFacts;      // §4.7 — pairs with maxCycles
+
+    public static Builder builder() { return new Builder(); }
+    public static final class Builder { /* both limits required; build() rejects non-positive */ }
+}
 ```
 
-> **Open decision — a wall-clock bound.** `maxCycles` and `maxFacts` bound *work*, not *time*, and neither is a proxy for latency: §6.4's own example — an unindexed CEL condition over 100,000 facts — is 100,000 evaluations inside a *single* cycle, tripping neither limit. Any caller with a per-decision latency budget therefore has no engine-side enforcement and must run its own watchdog against `halt()`. Adding `maxDuration` to `FireOptions` (checked in the loop below, inside TREAT recomputation, and inside unindexed scans, with a `DurationLimit` subclass carrying `partialResult()`) would close it. Left unresolved here because it is a scope decision, not an editorial one.
+> **Open decision — a wall-clock bound.** `maxCycles` and `maxFacts` bound *work*, not *time*, and neither is a proxy for latency: §6.4's own example — an unindexed CEL condition over 100,000 facts — is 100,000 evaluations inside a *single* cycle, tripping neither limit. Any caller with a per-decision latency budget therefore has no engine-side enforcement and must run its own watchdog against `halt()`. Adding `maxDuration` to `FireOptions` — a non-breaking addition now that it is builder-backed — (checked in the loop below, inside TREAT recomputation, and inside unindexed scans, with a `DurationLimit` subclass carrying `partialResult()`) would close it. Left unresolved here because it is a scope decision, not an editorial one.
 
-The loop below is what `RuleSession.fireAllRules(FireOptions)` (§5.1) delegates to — `session` is the receiver. It is not a second, free-function API. `partialResult(fired)` and `result(fired)` are session-internal builders, not public API: both assemble a `FireResult` from the records so far plus the collecting sink's events and the session's rule-set version, differing only in `TerminationReason` — `LIMIT_EXCEEDED` and a non-zero `residualAgendaSize` for the former, `DRAINED` or `HALTED` for the latter.
+The loop below is what `RuleSession.fireAllRules(FireOptions)` (§5.1) delegates to — `session` is the receiver. It is not a second, free-function API. `partialResult(fired)` and `result(fired)` are session-internal builders, not public API: both assemble a `FireResult` from the records so far plus the collecting sink's events and the session's rule-set version, differing only in `TerminationReason` — `LIMIT_EXCEEDED` and a non-zero `residualAgendaSize` for the former, `DRAINED`, `HALTED`, or `RHS_ERROR` for the latter. Both reach the agenda through the same session-internal accessor `fireLoop` uses below; none of the three is public API (§5.1).
 
 ```java
 private FireResult fireLoop(RuleSession session, FireOptions opts) {
@@ -1078,10 +1097,9 @@ public interface RuleSession extends AutoCloseable {
     FireResult fireAllRules();                 // limits from SessionOptions
     FireResult fireAllRules(FireOptions opts); // per-call override
 
-    /** The state §4.7's fire loop reads. Exposed because the loop is a session method and
-     *  because §7.2's MatchExplainer and the testkit's oracle need the same access. */
-    WorkingMemory workingMemory();   // §2.4 — also how callers reach factsOfType
-    Agenda agenda();                 // §4.3
+    /** §2.4 — also how callers reach factsOfType. Read access; content changes only
+     *  through the insert/update/retract methods above. */
+    WorkingMemory workingMemory();
     boolean halted();                // reads the volatile flag halt() sets
 
     /** The ONLY method callable from another thread. Backed by a volatile flag. §4.7 */
@@ -1094,6 +1112,8 @@ public interface RuleSession extends AutoCloseable {
 ```
 
 The fact API is `(String, JsonNode)` throughout — there is one fact representation (§2.2) and no adapter SPI. `fireAllRules` is never limit-less: §4.7 makes `maxCycles`/`maxFacts` mandatory, so they come from `SessionOptions` and can be overridden per call.
+
+**There is deliberately no public `agenda()`.** §4.7's fire loop is a session method and reaches the agenda through a module-internal accessor, as do §7.2's `MatchExplainer` and the testkit's oracle — none of which is a caller outside the engine. Publishing the `Agenda` (§4.3) would put `nextToFire()` in reach of application code, and that method *consumes*: it removes the activation from the conflict set and records it as refracted (§4.4), so an outside call silently deletes a firing that the running loop would otherwise have performed, with no error anywhere. What callers actually want from it is already public and non-consuming — `FireResult.residualAgendaSize` for "what is left," `dryRun` (§7.5) for "what would fire, in what order," and `MatchExplainer` for "why didn't it."
 
 ### 5.2 Across-session parallelism (the primary primitive)
 
@@ -1226,7 +1246,7 @@ Every DSL key, the `Constraint` it compiles to, and whether it is indexable. **D
 | `notIn` | `region: { notIn: ["XX"] }` | `FieldConstraint(NOT_IN)` | no |
 | `matches` | `email: { matches: "^[a-z]+@example\\.com$" }` | `FieldConstraint(MATCHES)` | no — RE2, §2.6.3 |
 | `hasField` | `couponCode: { hasField: false }` | `FieldConstraint(HAS_FIELD)`, polarity in the literal | no |
-| `isNull` | `closedAt: { isNull: true }` | `FieldConstraint(IS_NULL)` | no |
+| `isNull` | `closedAt: { isNull: true }` | `FieldConstraint(IS_NULL)`, polarity in the literal | no |
 | `$ref` (as an operand) | `id: { eq: { $ref: o.customerId } }` | `JoinConstraint` | hash, on the join |
 
 `between`'s bounds are named rather than positional, and both inclusivity flags default to `true`. §2.5 argues the shape: a two-element array cannot express inclusivity without a convention that then has to be documented, validated, and remembered. `from` and `to` are individually optional, so `{ between: { from: 100 } }` and `{ gte: 100 }` compile to the identical `RangeConstraint` — prefer the short form.
@@ -1348,7 +1368,7 @@ YAML/JSON rule-file text
   → literal canonicalization (numerics via stripTrailingZeros; one Java type per class — §2.6.2)
   → node sharing FIRST (structural hash on AlphaNode definitions — two rules with an identical
     single-fact constraint share one AlphaNode; keeps the ALPHA network sublinear in rule count)
-  → PatternNode construction (one per pattern, terminating its shared alpha chain — §3.2.5)
+  → PatternNode construction (one per pattern, terminating its shared alpha chain — §3.2.4)
   → node id assignment (dense 0..n-1, fixed for the life of the CompiledRuleSet)
   → compile field accessors (JsonPointer), regexes (RE2), CEL programs — all immutable, cached
   → derived compile-time artifacts, all computed ON THE SHARED GRAPH:
@@ -1395,7 +1415,7 @@ public interface RuleEngineListener {
 public record FireRecord(
     ActivationKey key,
     long recency, int salience,                    // the conflict-resolution inputs
-    List<ActivationKey> runnersUp,                 // who lost, and why the winner won
+    List<ActivationKey> runnersUp,                 // who lost — BOUNDED, and empty by default
     List<StagedEffect> effects,                    // §4.6's staging buffer, committed
     List<EmittedEvent> emitted,
     Duration took
@@ -1415,6 +1435,8 @@ Registered per session via `SessionOptions`, so a listener is never shared mutab
 **Two callbacks need their names taken seriously.** `onUpdate`'s path set is only what the *network tests* — a listener used as an audit log would under-report actual changes, so the parameter is named for what it is. And refraction may suppress a match before an `Activation` object exists at all — under Rete it is never created, under TREAT it is created during recomputation and dropped at selection (§4.1, §4.4) — so a callback taking an `Activation` would be unimplementable in one shape and misleading in the other. Suppression gets its own callback taking the `ActivationKey`, which both shapes always have.
 
 **`FireRecord` carrying the staged effects and the runners-up is the load-bearing part.** §4.6 stages an RHS's effects and commits them atomically, so one record answers "what did this firing do" without reconstructing it from a stream of mutations. And "why did B fire before A" is a top-three question that is unanswerable from a record naming only the winner.
+
+**But `runnersUp` must be bounded and off by default, or it silently costs a full conflict-set sort on every firing.** The agenda selects a *maximum* (§4.3's heap gives you the head, not an ordering); producing the complete ranked list of losers means sorting everything eligible, once per fire cycle — which would make the trace the dominant cost of firing and would contradict `NoOpListener` costing nothing. So: `runnersUp` holds at most `runnersUpLimit` entries (a `SessionOptions` field, §7.5, default 3), it is populated only when at least one listener is registered or `dryRun` is set, and it is an empty list otherwise. A bounded top-N answers "why did B fire before A" completely — the question is about the activations that nearly won, never about the four-hundredth-ranked one.
 
 Ship three implementations, because the interface alone is not the feature:
 
@@ -1527,8 +1549,6 @@ Fail the build on errors; surface warnings in CI. A rule set is source code and 
 Several sections above assign obligations to "strict mode." It is one `SessionOptions` flag, defined here so those obligations have one home rather than six independent implementations.
 
 ```java
-/** Which JoinNode implementation and agenda shape this session uses — §11.5.
- *  RETE requires Phase 3; on a Phase 0-2 build, selecting it is a configuration error. */
 /** Built, never constructed positionally — see the note below. */
 public final class SessionOptions {
     private final FireOptions limits;                  // maxCycles, maxFacts (§4.7)
@@ -1538,6 +1558,7 @@ public final class SessionOptions {
     private final List<RuleEngineListener> listeners;  // §7.1
     private final boolean strict;                      // the table below
     private final boolean dryRun;                      // match and explain; execute no RHS
+    private final int runnersUpLimit;                  // §7.1 — default 3; 0 disables
 
     public static Builder builder() { return new Builder(); }
     public static final class Builder { /* defaults per field; build() copies defensively */ }
@@ -1623,7 +1644,7 @@ Concurrency helpers live in `-core`: `SessionActor` and the virtual-thread wrapp
 - **The update's retract half runs against the old payload, before the new one is installed** (§3.4.1 steps 3–4), and **retract propagation never re-evaluates a test** (§3.4) — it removes by handle identity. Both, or you get orphaned index entries and permanent phantom matches.
 - **The update reuses the handle** (§3.4.1 step 4). This is not cosmetic: refraction is keyed on `(ruleId, handles)`, so handle reuse is what keeps a rule that tests nothing changed from re-firing after its match is destroyed and recreated. Allocate a fresh handle and every rule re-fires on every update.
 - **Refraction invalidation is scoped per rule** (§3.4.1 step 5, §4.4), via `TestedPaths.rulesTesting`. Type-wide clearing makes a rule re-fire because an unrelated rule's field changed.
-- **RHS `setField` deltas materialize onto a `deepCopy()` of the stored payload, committed via `updateOwned`** (§4.6). Applying them in place makes §3.4.2 step 1 diff an object against itself, propagate nothing, and leave every index stale — §2.2's aliasing bug, arriving through the engine's own RHS path.
+- **RHS `setField` deltas materialize onto a `deepCopy()` of the stored payload, committed via `updateOwned`** (§4.6). Applying them in place makes §3.4.1 step 1 diff an object against itself, propagate nothing, and leave every index stale — §2.2's aliasing bug, arriving through the engine's own RHS path.
 - **Dirty-rule tracking is per-rule tested paths, not alpha-memory deltas** (§4.1). The alpha-memory predicate misses join-key-only updates and serves stale joins.
 - **Refraction is on, always** (§4.4), checked at *selection* (§4.1), invalidated per-rule (§4.4). Verify termination on a rule whose RHS mutates nothing.
 - **Numeric keys canonicalized with `stripTrailingZeros()` before hashing; `compareTo`, never `equals`, for ordering; one Java type per compatibility class** (§2.6.2).
@@ -1736,7 +1757,7 @@ Note the boundary §4.6 draws: `callFunction` is the closed set's escape hatch a
 
 Under (B), mechanism 1 **disappears entirely** — §4.2's recency is `max(Fact.recency)` computed in the constructor, because a rule is dirty only when a fact it patterns changed, which is exactly when its activations' recency should change anyway. Mechanisms 2 and 3 **stay**, because both are independently justified: the tie-break is less plumbing than a counter and is required as the total-order term the determinism contract needs, and per-rule refraction scoping prevents a rule re-firing because an unrelated rule's field changed. So the load-bearing half of the agreement machinery was already free, and the expensive half is the half that is deferrable.
 
-Removing it also removed a defect. Under (C), §3.4.2's update algorithm had to clear refraction *before* re-asserting, or Rete's terminal-side refraction check would suppress an activation that the subsequent invalidation then made eligible — with no further token to recreate it — silently dropping a firing TREAT performs. That hazard is purely a two-shape divergence. With one shape it cannot occur.
+Removing it also removed a defect. Under (C), §3.4.1's update algorithm had to clear refraction *before* re-asserting, or Rete's terminal-side refraction check would suppress an activation that the subsequent invalidation then made eligible — with no further token to recreate it — silently dropping a firing TREAT performs. That hazard is purely a two-shape divergence. With one shape it cannot occur.
 
 **What Phase 3 owes when it lands the second shape.** The exit criterion is unchanged and still non-negotiable: *TREAT and Rete produce identical firing sequences on the same input.* If they can diverge, the choice of session type silently changes business outcomes and every §11.1 argument about picking per workload collapses. What changes is how that claim gets established — by differential-testing a new implementation against a shipped, exercised v1 engine and the Phase 0 oracle, rather than by anticipating in a design document which mechanisms two hypothetical implementations would need to share. That is a better position to prove it from, not a worse one.
 
