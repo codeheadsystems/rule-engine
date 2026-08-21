@@ -176,10 +176,35 @@ class JoinPlanTest {
         .build();
     final CompiledRule compiled = RuleCompiler.compile(List.of(rule)).rules().getFirst();
 
-    // The compiler records the inequality on the later pattern, but it is symmetric: whichever of
-    // the two is bound second is where it has to be checked, and it must be checked exactly once.
-    final JoinPlan plan = JoinPlan.of(compiled, new int[] {3, 3});
-    assertThat(plan.steps().getFirst().distinctFrom()).isEmpty();
-    assertThat(plan.steps().get(1).distinctFrom()).hasSize(1);
+    // The compiler records the inequality on the later pattern only, pointing at earlier positions.
+    // It is symmetric, so whichever end is bound second is where it must be checked -- exactly once,
+    // and never zero times.
+    //
+    // An earlier version of this test passed equal sizes, which meant the strict `<` tie-break
+    // always bound position 0 first. It therefore only ever exercised the direction that already
+    // worked, and missed a defect that let one fact bind both aliases. Both orderings now.
+    final JoinPlan writtenOrder = JoinPlan.of(compiled, new int[] {1, 3});
+    assertThat(writtenOrder.steps()).extracting(JoinPlan.Step::position).containsExactly(0, 1);
+    assertThat(writtenOrder.steps().getFirst().distinctFrom()).isEmpty();
+    assertThat(writtenOrder.steps().get(1).distinctFrom()).containsExactly(0);
+
+    final JoinPlan reversed = JoinPlan.of(compiled, new int[] {3, 1});
+    assertThat(reversed.steps()).extracting(JoinPlan.Step::position).containsExactly(1, 0);
+    assertThat(reversed.steps().getFirst().distinctFrom()).isEmpty();
+    assertThat(reversed.steps().get(1))
+        .describedAs("bound second, so this is the only step that can enforce the inequality")
+        .satisfies(step -> assertThat(step.distinctFrom()).containsExactly(1));
+  }
+
+  @Test
+  @DisplayName("a pattern is never required to differ from itself")
+  void noSelfInequality() {
+    final RuleDefinition rule = Rules.rule("solo")
+        .when("o", "Order", pattern -> pattern.eq("status", "PENDING"))
+        .then(actions -> actions.emit("hit"))
+        .build();
+    final CompiledRule compiled = RuleCompiler.compile(List.of(rule)).rules().getFirst();
+
+    assertThat(JoinPlan.of(compiled, new int[] {3}).steps().getFirst().distinctFrom()).isEmpty();
   }
 }

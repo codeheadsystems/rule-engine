@@ -16,9 +16,13 @@ import java.util.Optional;
  * @param survivors the handles still matching after every single-fact constraint
  * @param firstFailure the constraint that eliminated the most candidates, if any were eliminated
  * @param joinNote what the cross-fact constraints did to the survivors, when there were any
+ * @param note anything else that went wrong with this pattern -- a pinned fact that is no longer
+ *     asserted, or one of the wrong type. §7.2's record has no place for these, and reporting them
+ *     through {@code joinNote} would misdescribe them as a join outcome, which is a different and
+ *     much more confusing failure
  */
 public record PatternResult(String alias, String factType, int considered, List<Long> survivors,
-    Optional<ConstraintFailure> firstFailure, Optional<String> joinNote) {
+    Optional<ConstraintFailure> firstFailure, Optional<String> joinNote, Optional<String> note) {
 
   /**
    * Canonical constructor. Defensively copies the survivor list.
@@ -29,12 +33,14 @@ public record PatternResult(String alias, String factType, int considered, List<
    * @param survivors the surviving handles
    * @param firstFailure the eliminating constraint, if any
    * @param joinNote the join outcome, if relevant
+   * @param note anything else that went wrong
    */
   public PatternResult {
     Objects.requireNonNull(alias, "alias");
     Objects.requireNonNull(factType, "factType");
     Objects.requireNonNull(firstFailure, "firstFailure");
     Objects.requireNonNull(joinNote, "joinNote");
+    Objects.requireNonNull(note, "note");
     survivors = List.copyOf(survivors);
   }
 
@@ -49,7 +55,8 @@ public record PatternResult(String alias, String factType, int considered, List<
         .append(considered).append(" considered, ")
         .append(survivors.size()).append(" matched");
     firstFailure.ifPresent(failure -> text.append("; ").append(failure.describe()));
-    joinNote.ifPresent(note -> text.append("; ").append(note));
+    joinNote.ifPresent(join -> text.append("; ").append(join));
+    note.ifPresent(other -> text.append("; ").append(other));
     return text.toString();
   }
 }

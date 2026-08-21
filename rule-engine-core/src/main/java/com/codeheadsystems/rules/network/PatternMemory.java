@@ -29,12 +29,16 @@ import java.util.TreeSet;
  * iteration order would start depending on unrelated update traffic. That is the same reasoning
  * §2.4 gives for ordering {@code factsOfType} by handle id rather than by recency.
  *
- * <p>Firing order does not actually depend on this -- conflict resolution is a total order on the
- * match itself, precisely so that enumeration order cannot reach the agenda -- but keeping the
- * network's enumeration order identical to the naive matcher's is what lets the two be compared
- * activation-for-activation rather than only firing-for-firing. The cost is {@code O(log n)}
- * membership operations instead of {@code O(1)}, which is a profiling target, not a correctness
- * one.
+ * <p>Firing order does not depend on this -- conflict resolution is a total order on the match
+ * itself, precisely so that enumeration order cannot reach the agenda. What ascending order buys is
+ * that <em>this</em> matcher enumerates reproducibly across runs and hosts, which is what makes a
+ * failure reproducible and a listener trace stable.
+ *
+ * <p>It does <strong>not</strong> mean the two matchers enumerate alike. An earlier version of this
+ * comment claimed that, and it stopped being true when the join planner started choosing the
+ * binding order per fire cycle: the network and the oracle now create activations in different
+ * orders and only the <em>firing</em> sequence is guaranteed to agree. The {@code O(log n)}
+ * membership cost is therefore bought for reproducibility alone, and is a profiling target.
  */
 public final class PatternMemory implements NodeMemory {
 
@@ -117,16 +121,22 @@ public final class PatternMemory implements NodeMemory {
    *
    * @param path the indexed path
    * @param value the value to match, taken from the other side of a join
-   * @return the matching handle ids ascending, or empty when the path is not hash-indexed
+   * @return the matching handle ids ascending, or empty when this probe cannot be served -- either
+   *     the path is not hash-indexed, or the value has no canonical hash key and so could never
+   *     have been indexed in the first place
    */
   public Optional<SortedSet<Long>> probeEqual(final JsonPointer path, final JsonNode value) {
     final Map<Object, SortedSet<Long>> index = hashIndexes.get(path);
     if (index == null) {
       return Optional.empty();
     }
-    return Optional.of(Canonical.hashKey(value)
-        .map(key -> index.getOrDefault(key, EMPTY))
-        .orElse(EMPTY));
+    // A value with no canonical hash key -- absent, an explicit null, or a container -- cannot be
+    // looked up, because facts holding such values were never filed under a key either. Reporting
+    // "index applied, zero candidates" would be a silent lost match: §2.6.1 says null equals null
+    // and that two objects compare structurally, so those matches are real. Report "no index
+    // usable" instead and let the caller scan, which is the same discipline probeRange already
+    // follows for a non-numeric bound.
+    return Canonical.hashKey(value).map(key -> index.getOrDefault(key, EMPTY));
   }
 
   /**

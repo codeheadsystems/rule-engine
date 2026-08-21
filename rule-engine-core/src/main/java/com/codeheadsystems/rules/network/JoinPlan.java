@@ -1,6 +1,5 @@
 package com.codeheadsystems.rules.network;
 
-import com.codeheadsystems.rules.rule.CompiledPattern;
 import com.codeheadsystems.rules.rule.CompiledRule;
 import com.codeheadsystems.rules.rule.JoinTest;
 import java.util.ArrayList;
@@ -60,15 +59,46 @@ public final class JoinPlan {
   public static JoinPlan of(final CompiledRule rule, final int[] sizes) {
     final int arity = rule.patterns().size();
     final List<List<Edge>> edgesByPosition = edges(rule);
+    final List<BitSet> mustDiffer = inequalities(rule);
     final BitSet bound = new BitSet(arity);
     final List<Step> steps = new ArrayList<>(arity);
 
     for (int taken = 0; taken < arity; taken++) {
       final int next = choose(arity, sizes, edgesByPosition, bound, taken == 0);
       bound.set(next);
-      steps.add(step(rule, next, edgesByPosition.get(next), bound));
+      steps.add(step(next, edgesByPosition.get(next), mustDiffer.get(next), bound));
     }
     return new JoinPlan(List.copyOf(steps));
+  }
+
+  /**
+   * The implicit inequalities of §1, made symmetric.
+   *
+   * <p><strong>This symmetry is load-bearing and its absence is a self-match.</strong> The compiler
+   * records the inequality only on the <em>later</em> pattern, pointing at earlier positions,
+   * because it is written for a matcher that binds left to right. A plan is free to bind the later
+   * pattern first -- on size, or because it is the connected one -- and an inequality read only in
+   * the written direction is then enforced <em>zero</em> times: both steps see an empty set, and
+   * one fact binds both aliases of a same-type pair.
+   *
+   * <p>Symmetrising here rather than in the compiler keeps {@code CompiledPattern} exactly what a
+   * left-to-right matcher needs, and puts the reordering-specific requirement next to the reordering.
+   *
+   * @param rule the rule
+   * @return per position, the positions whose fact it must differ from, in both directions
+   */
+  private static List<BitSet> inequalities(final CompiledRule rule) {
+    final List<BitSet> byPosition = new ArrayList<>(rule.patterns().size());
+    for (int position = 0; position < rule.patterns().size(); position++) {
+      byPosition.add(new BitSet(rule.patterns().size()));
+    }
+    for (int position = 0; position < rule.patterns().size(); position++) {
+      for (final int other : rule.patterns().get(position).distinctFrom()) {
+        byPosition.get(position).set(other);
+        byPosition.get(other).set(position);
+      }
+    }
+    return byPosition;
   }
 
   /**
@@ -123,35 +153,28 @@ public final class JoinPlan {
   /**
    * Builds the step for one position: which tests become applicable when it is bound.
    *
-   * <p>A join test is applied at the step where its <em>second</em> endpoint is bound, which is the
-   * first moment both payloads exist. Under a fixed left-to-right order that is always the
-   * constraint-bearing pattern; under a chosen order it can be either end, which is why the tests
-   * are gathered here rather than read off the pattern.
+   * <p>A test is applied at the step where its <em>second</em> endpoint is bound, which is the first
+   * moment both payloads exist. Under a fixed left-to-right order that is always the
+   * constraint-bearing pattern; under a chosen order it can be either end, which is why both the
+   * join edges and the inequalities are gathered symmetrically rather than read off the pattern.
    *
-   * @param rule the rule
    * @param position the position being bound
-   * @param edges that position's join edges
+   * @param edges that position's join edges, from both directions
+   * @param mustDiffer the positions whose fact this one must differ from, from both directions
    * @param bound which positions are bound after this step
    * @return the step
    */
-  private static Step step(final CompiledRule rule, final int position, final List<Edge> edges,
+  private static Step step(final int position, final List<Edge> edges, final BitSet mustDiffer,
       final BitSet bound) {
     final List<Edge> applicable = edges.stream()
         .filter(edge -> bound.get(edge.otherPosition()))
         .toList();
-    final CompiledPattern pattern = rule.patterns().get(position);
-    final int[] distinct = new int[pattern.distinctFrom().length];
-    int count = 0;
-    for (final int other : pattern.distinctFrom()) {
-      if (bound.get(other)) {
-        distinct[count++] = other;
-      }
-    }
-    // Same-type inequalities are symmetric, so one bound only ever needs checking from whichever
-    // end is bound second. Trimming to the bound side keeps every check meaningful.
-    final int[] trimmed = new int[count];
-    System.arraycopy(distinct, 0, trimmed, 0, count);
-    return new Step(position, applicable, trimmed);
+    final BitSet applicableInequalities = (BitSet) mustDiffer.clone();
+    applicableInequalities.and(bound);
+    // Exclude this position itself: it is in `bound` by now, and a pattern is never required to
+    // differ from itself.
+    applicableInequalities.clear(position);
+    return new Step(position, applicable, applicableInequalities.stream().toArray());
   }
 
   /**

@@ -193,6 +193,172 @@ class NetworkEquivalenceTest {
   }
 
   @Test
+  @DisplayName("a self-join the planner reorders still forbids one fact binding both aliases")
+  void selfJoinSurvivesReordering() {
+    // §1's implicit inequality is recorded by the compiler on the LATER pattern only, pointing at
+    // earlier positions, because that is what a left-to-right matcher needs. A plan that binds the
+    // later pattern first would then enforce it zero times, and one order binds both aliases.
+    //
+    // No size asymmetry is needed to provoke it: o1 is disconnected and o2 is connected, so
+    // connectivity alone reorders them.
+    final List<RuleDefinition> rules = List.of(Rules.rule("pair")
+        .when("c", "Customer", pattern -> pattern.hasField("id", true))
+        .when("o1", "Order", pattern -> pattern.eq("status", "PENDING"))
+        .when("o2", "Order", pattern -> pattern.eq("status", "PENDING")
+            .ref("customerId", "c.id"))
+        .then(actions -> actions.emit("pair",
+            "a", Rules.ref("o1.id"), "b", Rules.ref("o2.id")))
+        .build());
+
+    MatcherEquivalence.assertEquivalent(rules, session -> {
+      session.insert("Customer", Facts.obj("id", 7));
+      session.insert("Order", Facts.obj("id", 1, "status", "PENDING", "customerId", 7));
+      session.insert("Order", Facts.obj("id", 2, "status", "PENDING", "customerId", 7));
+    });
+  }
+
+  @Test
+  @DisplayName("a self-join reordered by size, which is the other way in")
+  void selfJoinReorderedBySize() {
+    final List<RuleDefinition> rules = List.of(Rules.rule("dupe")
+        .when("o1", "Order", pattern -> pattern.gt("total", 0))
+        .when("o2", "Order", pattern -> pattern.gt("total", 100)
+            .ref("customerId", "o1.customerId"))
+        .then(actions -> actions.emit("dupe",
+            "a", Rules.ref("o1.id"), "b", Rules.ref("o2.id")))
+        .build());
+
+    MatcherEquivalence.assertEquivalent(rules, session -> {
+      for (int order = 0; order < 5; order++) {
+        session.insert("Order", Facts.obj(
+            "id", order, "total", order == 4 ? 500 : 10, "customerId", 7));
+      }
+    });
+  }
+
+  @Test
+  @DisplayName("a join key that is an explicit null still matches, because null equals null")
+  void nullValuedJoinKey() {
+    // A null has no canonical hash key, so a fact holding one was never filed in the hash index.
+    // A probe that reported "index applied, zero candidates" rather than "no index usable" would
+    // lose the match silently -- and §2.6.1 is explicit that an explicit null equals an explicit
+    // null.
+    final List<RuleDefinition> rules = List.of(Rules.rule("null-join")
+        .when("a", "A", pattern -> pattern.hasField("k", true))
+        .when("b", "B", pattern -> pattern.ref("k", "a.k"))
+        .then(actions -> actions.emit("hit"))
+        .build());
+
+    MatcherEquivalence.assertEquivalent(rules, session -> {
+      session.insert("A", Facts.obj("k", (Object) null));
+      session.insert("B", Facts.obj("k", (Object) null));
+      session.insert("A", Facts.obj("k", "present"));
+      session.insert("B", Facts.obj("k", "present"));
+    });
+  }
+
+  @Test
+  @DisplayName("a join key that is an object or an array still matches structurally")
+  void containerValuedJoinKey() {
+    final List<RuleDefinition> rules = List.of(Rules.rule("object-join")
+        .when("a", "A", pattern -> pattern.hasField("k", true))
+        .when("b", "B", pattern -> pattern.ref("k", "a.k"))
+        .then(actions -> actions.emit("hit"))
+        .build());
+
+    MatcherEquivalence.assertEquivalent(rules, session -> {
+      session.insert("A", Facts.obj("k", Facts.obj("x", 1)));
+      session.insert("B", Facts.obj("k", Facts.obj("x", 1)));
+      session.insert("B", Facts.obj("k", Facts.obj("x", 2)));
+      session.insert("A", Facts.obj("k", Facts.array(1, 2)));
+      session.insert("B", Facts.obj("k", Facts.array(1, 2)));
+    });
+  }
+
+  @Test
+  @DisplayName("a range join probed from the reversed end")
+  void reversedRangeProbe() {
+    // The only path that exercises Operator.reversed() for the four range operators. It needs the
+    // constraint-bearing pattern to be bound FIRST, so that the referenced side is the one probed
+    // and its operator has to be read backwards. Equal memory sizes never produce that, which is
+    // why the original corpus -- whose only range join has two patterns with identical alpha tests
+    // -- left this entirely uncovered.
+    final List<RuleDefinition> rules = List.of(Rules.rule("cheaper")
+        .when("a", "Quote", pattern -> pattern.eq("sku", "A"))
+        .when("b", "Quote", pattern -> pattern.eq("sku", "B")
+            .ref("price", "a.price", Operator.LT))
+        .then(actions -> actions.emit("cheaper",
+            "a", Rules.ref("a.vendor"), "b", Rules.ref("b.vendor")))
+        .build());
+
+    MatcherEquivalence.assertEquivalent(rules, session -> {
+      for (int price = 1; price <= 10; price++) {
+        session.insert("Quote", Facts.obj("sku", "A", "vendor", "a" + price, "price", price));
+      }
+      session.insert("Quote", Facts.obj("sku", "B", "vendor", "b1", "price", 5));
+    });
+  }
+
+  @Test
+  @DisplayName("three same-type aliases: every pair distinct, under any binding order")
+  void threeWaySelfJoin() {
+    // The inequality is recorded on the later pattern only, so o3 names {o1, o2}, o2 names {o1},
+    // and o1 names nothing. Symmetrising has to produce exactly one check per PAIR -- not zero when
+    // the plan reverses a pair, and not two when it happens to bind them in written order.
+    //
+    // Three interchangeable orders should give 3! = 6 ordered matches. Four would be a missing
+    // check; three would be a double-count eliminating good matches.
+    final List<RuleDefinition> rules = List.of(Rules.rule("triple")
+        .when("o1", "Order", pattern -> pattern.eq("status", "PENDING"))
+        .when("o2", "Order", pattern -> pattern.eq("status", "PENDING")
+            .ref("customerId", "o1.customerId"))
+        .when("o3", "Order", pattern -> pattern.eq("status", "PENDING")
+            .ref("customerId", "o1.customerId"))
+        .then(actions -> actions.emit("triple",
+            "a", Rules.ref("o1.id"), "b", Rules.ref("o2.id"), "c", Rules.ref("o3.id")))
+        .build());
+
+    final FiringSequence sequence = MatcherEquivalence.assertEquivalent(rules, session -> {
+      for (int order = 0; order < 3; order++) {
+        session.insert("Order", Facts.obj("id", order, "status", "PENDING", "customerId", 7));
+      }
+    });
+    assertThat(sequence.steps())
+        .describedAs("three distinct orders in three ordered slots")
+        .hasSize(6);
+    assertThat(sequence.steps())
+        .allSatisfy(step -> assertThat(step.handles()).doesNotHaveDuplicates());
+  }
+
+  @Test
+  @DisplayName("same-type aliases with mixed connectivity, so the plan reorders them")
+  void selfJoinWithMixedConnectivity() {
+    // o2 is connected to the customer, o1 and o3 are not, so the plan is free to interleave them
+    // in an order that bears no relation to how they were written.
+    final List<RuleDefinition> rules = List.of(Rules.rule("mixed-triple")
+        .when("o1", "Order", pattern -> pattern.eq("status", "PENDING"))
+        .when("c", "Customer", pattern -> pattern.hasField("id", true))
+        .when("o2", "Order", pattern -> pattern.eq("status", "PENDING")
+            .ref("customerId", "c.id"))
+        .when("o3", "Order", pattern -> pattern.eq("status", "PENDING"))
+        .then(actions -> actions.emit("mixed",
+            "a", Rules.ref("o1.id"), "b", Rules.ref("o2.id"), "c", Rules.ref("o3.id")))
+        .build());
+
+    final FiringSequence sequence = MatcherEquivalence.assertEquivalent(rules, session -> {
+      session.insert("Customer", Facts.obj("id", 7));
+      for (int order = 0; order < 3; order++) {
+        session.insert("Order", Facts.obj("id", order, "status", "PENDING", "customerId", 7));
+      }
+    });
+    assertThat(sequence.steps()).hasSize(6);
+    assertThat(sequence.steps()).allSatisfy(step -> {
+      // The customer handle appears alongside three distinct order handles.
+      assertThat(step.handles()).hasSize(4).doesNotHaveDuplicates();
+    });
+  }
+
+  @Test
   @DisplayName("rules whose RHS mutates working memory, so the network churns mid-fire")
   void mutatingRules() {
     final List<RuleDefinition> mutating = List.of(

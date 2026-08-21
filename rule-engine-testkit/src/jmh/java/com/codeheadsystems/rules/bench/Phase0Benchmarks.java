@@ -343,7 +343,7 @@ public class Phase0Benchmarks {
     }
   }
 
-  /** Two large populations joined by a highly selective key, so matching dominates. */
+  /** Two large populations joined by a highly selective key, with the session built per invocation. */
   @State(Scope.Thread)
   public static class SelectiveJoin {
 
@@ -357,10 +357,11 @@ public class Phase0Benchmarks {
 
     private CompiledRuleSet ruleSet;
     private com.codeheadsystems.rules.session.SessionOptions options;
+    private RuleSession session;
 
     /** Compiles the rule and prepares the session configuration. */
     @Setup(Level.Trial)
-    public void setUp() {
+    public void setUpTrial() {
       ruleSet = RuleCompiler.compile(List.of(Rules.rule("order-customer")
           .when("o", "Order", pattern -> pattern.eq("status", "PENDING"))
           .when("c", "Customer", pattern -> pattern.ref("id", "o.customerId"))
@@ -372,57 +373,66 @@ public class Phase0Benchmarks {
     }
 
     /**
-     * The compiled rules.
+     * Builds and populates a fresh session, OUTSIDE the measured region.
      *
-     * @return the rule set
-     */
-    public CompiledRuleSet ruleSet() {
-      return ruleSet;
-    }
-
-    /**
-     * The session configuration under test.
+     * <p>{@code Level.Invocation} carries a documented health warning, and it is taken deliberately
+     * here. The previous version of this benchmark measured session construction and
+     * {@code 2 x facts} copying inserts along with the join, and those inserts turned out to be
+     * between half and three quarters of the network arm — enough that its "linear growth" reading
+     * described insert cost rather than join cost. Insert cost is linear in {@code facts}, so a
+     * network doing a perfectly linear join and one doing no join at all would both have looked
+     * linear.
      *
-     * @return the options
+     * <p>The warning is about invocations too short to time around, at the nanosecond scale. The
+     * measured work here is hundreds of microseconds to hundreds of milliseconds, so the setup
+     * boundary is far below the noise floor.
      */
-    public com.codeheadsystems.rules.session.SessionOptions options() {
-      return options;
-    }
-  }
-
-  /**
-   * The benchmark that actually isolates the join.
-   *
-   * <p>An earlier version of this used a lopsided population -- two thousand orders against three
-   * customers -- and measured almost nothing, because two thirds of the orders <em>matched</em> and
-   * the six hundred resulting firings dwarfed the matching. Whatever the join did was invisible
-   * underneath the right-hand sides.
-   *
-   * <p>So: both sides large, and the join key selective enough that only a handful of pairs match.
-   * The oracle has no way to avoid comparing every order against every customer, which is
-   * {@code facts^2} join evaluations; the network probes an index once per order. Few matches means
-   * few firings, so what is left on the clock is the join and nothing else.
-   *
-   * <p>This is §3.3's claim stated as an experiment: indexed probing is "the single biggest lever
-   * for join-heavy rule sets, and exactly what hand-rolled 'simple' engines skip and then can't
-   * scale."
-   *
-   * @param state the prepared rule set
-   * @return the fire result
-   */
-  @Benchmark
-  public FireResult selectiveJoin(final SelectiveJoin state) {
-    try (RuleSession session = state.ruleSet().newSession(state.options())) {
-      for (int customer = 0; customer < state.facts; customer++) {
+    @Setup(Level.Invocation)
+    public void setUpInvocation() {
+      if (session != null) {
+        session.close();
+      }
+      session = ruleSet.newSession(options);
+      for (int customer = 0; customer < facts; customer++) {
         session.insert("Customer", Facts.obj("id", customer));
       }
-      for (int order = 0; order < state.facts; order++) {
+      for (int order = 0; order < facts; order++) {
         // Only five orders name a customer that exists; the rest point into empty space.
         session.insert("Order", Facts.obj(
             "id", order, "status", "PENDING",
             "customerId", order < 5 ? order : -order - 1));
       }
-      return session.fireAllRules();
     }
+
+    /**
+     * The populated session under test.
+     *
+     * @return the session
+     */
+    public RuleSession session() {
+      return session;
+    }
+  }
+
+  /**
+   * The join, and only the join.
+   *
+   * <p>Both sides large, and the join key selective enough that only five pairs match — so few
+   * right-hand sides fire and nothing hides behind them. The oracle has no way to avoid comparing
+   * every order against every customer, which is {@code facts^2} join evaluations; the network
+   * probes an index once per fact.
+   *
+   * <p>Population and session construction happen in per-invocation setup, so what is on the clock
+   * is matching. That correction matters: the earlier whole-session version of this benchmark was
+   * majority insert cost, which is the same species of mistake as an even earlier version that was
+   * majority right-hand-side cost. A join benchmark has to be made to measure the join; it does not
+   * happen by writing one.
+   *
+   * @param state the populated session
+   * @return the fire result
+   */
+  @Benchmark
+  public FireResult selectiveJoin(final SelectiveJoin state) {
+    return state.session().fireAllRules();
   }
 }

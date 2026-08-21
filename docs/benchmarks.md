@@ -148,39 +148,61 @@ benchmark.**
 
 So: both sides large, and a join key selective enough that only five pairs match.
 
+**And then it was wrong a second time, in a subtler way.** That version still measured session
+construction and `2 x facts` copying inserts along with the join. A review measured the split and
+found inserts were between half and three quarters of the network arm — so the "linear growth"
+reading described insert cost, not join cost. Insert cost is linear in `facts`, which means a
+network doing a perfectly linear join and one doing *no join at all* would both have looked linear.
+The conclusion was unsupported even though it happened to be true.
+
+Population and session construction now happen in per-invocation setup, so the measured region is
+`fireAllRules` alone. The correction is visible in the numbers: at 2000 facts the network arm went
+from 1 048us to 206us, i.e. **80% of what the previous table called join cost was insert cost.**
+
 ```
 Benchmark                       (facts)  (matcher)          Score           Error  Units
-Phase0Benchmarks.selectiveJoin      500    NETWORK        258 703 ±       420 441  ns/op
-Phase0Benchmarks.selectiveJoin      500      NAIVE     14 119 156 ±    15 354 859  ns/op
-Phase0Benchmarks.selectiveJoin     2000    NETWORK      1 048 269 ±       201 680  ns/op
-Phase0Benchmarks.selectiveJoin     2000      NAIVE    233 620 100 ±    41 917 504  ns/op
+Phase0Benchmarks.selectiveJoin      500    NETWORK         68 211 ±       225 756  ns/op
+Phase0Benchmarks.selectiveJoin      500      NAIVE     14 978 866 ±    14 803 190  ns/op
+Phase0Benchmarks.selectiveJoin     2000    NETWORK        206 033 ±       153 216  ns/op
+Phase0Benchmarks.selectiveJoin     2000      NAIVE    304 932 781 ±   141 780 185  ns/op
 ```
 
-**The ratio is roughly 55x at 500 a side and 200x at 2000**, and the error bars are wide enough that
-those multiples should be treated as "one to two orders of magnitude" rather than as figures. What
-the numbers support without any statistical care at all is the shape:
+**Read the error bars.** The network figures carry relative errors of 74% and over 300%, because
+the absolute numbers are small and three two-second iterations is not much. Treat them as
+"tens to hundreds of microseconds", never as figures. The oracle's are 46% and 99%.
+
+What survives all of that is the separation and the shape, both of which are far outside the noise:
 
 | | 500 -> 2000 facts (4x) | growth |
 |---|---|---|
-| Network | 259us -> 1 048us | **4.05x — linear** |
-| Oracle | 14.1ms -> 234ms | **16.5x — quadratic** |
+| Network | 68us -> 206us | **3.0x — linear or better** |
+| Oracle | 15.0ms -> 305ms | **20.4x — quadratic** (4^2 = 16) |
 
-Four times the facts costs the network four times the work and the oracle sixteen. That is the
-difference between probing an index once per fact and comparing every fact against every other, and
-it is the claim §3.3 makes: indexed join probing is "the single biggest lever for join-heavy rule
-sets, and exactly what hand-rolled 'simple' engines skip and then can't scale."
+Four times the facts costs the network about four times the work and the oracle about sixteen to
+twenty. That is the difference between probing an index once per fact and comparing every fact
+against every other, and it is §3.3's claim measured: indexed join probing is "the single biggest
+lever for join-heavy rule sets, and exactly what hand-rolled 'simple' engines skip and then can't
+scale."
 
-The separation is large enough to survive the noise. The multiples are not; do not quote them.
+The separation is two to three orders of magnitude. Do not quote that as a multiple either — with
+the network arm this noisy, the honest statement is the growth exponent, not the ratio.
 
 ## What is still not measured
 
-- **The join planner specifically.** The benchmark above has equal-sized sides, so it measures
+- **The join planner specifically.** Both sides of this benchmark are the same size, so it measures
   indexed probing and not the per-fire reordering. Isolating the planner needs a lopsided join whose
-  matches stay few — a harder shape to construct, since lopsidedness tends to come with either very
+  matches stay few, which is an awkward shape to construct: lopsidedness usually brings either very
   many matches or very few candidates. `JoinPlanTest` asserts the ordering decisions structurally;
   no benchmark yet puts a number on what they are worth.
-- **Node sharing's effect on insert cost**, unchanged from the Phase 1 note: the benchmark rule sets
-  have almost no duplicate constraints, so they exercise none of the sharing §6.5's sublinearity
-  claim is about.
-- **The prefix trie**, likewise: six tested paths is far too few for the difference to appear.
+- **Node sharing's effect on insert cost.** The benchmark rule sets have almost no duplicate
+  constraints, so they exercise none of the sharing §6.5's sublinearity claim is about.
+- **The prefix trie.** Six tested paths is far too few for the difference to appear.
 - **Concurrent multi-session throughput**, still Phase 4's deliverable.
+
+## A note on this file's own history
+
+Three versions of the join benchmark: the first measured right-hand sides, the second measured
+inserts, the third measures the join. Both earlier ones produced a plausible number and a plausible
+story. Neither was measuring what its heading said. If you add a benchmark here, say what is inside
+the measured region and what is outside it, and check that the thing you are claiming credit for is
+actually the majority of what is on the clock.

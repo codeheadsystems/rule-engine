@@ -340,6 +340,27 @@ public final class RuleCompiler {
       final PatternDefinition pattern, final JoinConstraint constraint,
       final Map<String, Integer> aliasPositions, final List<String> aliasTypes) {
     final String where = rule.id() + ": " + pattern.alias() + "." + constraint.field();
+    switch (constraint.op()) {
+      case MATCHES -> {
+        // A join's "literal" is the other fact's value, and MATCHES needs a pattern compiled at
+        // rule-compile time. Left to run, it throws from inside the matcher at fire time -- a
+        // compile-time-detectable authoring error escaping to production.
+        diagnostics.add(where + ": matches cannot be used as a join operator, because the pattern"
+            + " would have to be compiled from another fact's value at fire time");
+        return Optional.empty();
+      }
+      case HAS_FIELD, IS_NULL -> {
+        // Both read their polarity from a boolean literal. Against another fact's value that is
+        // not wrong so much as meaningless, and it fails silently rather than loudly.
+        diagnostics.add(where + ": " + constraint.op() + " is a single-fact test and cannot be used"
+            + " as a join operator; it carries its polarity in a boolean literal, which a $ref"
+            + " cannot supply");
+        return Optional.empty();
+      }
+      default -> {
+        // Comparisons and membership are all meaningful across two facts.
+      }
+    }
     final Integer other = aliasPositions.get(constraint.otherAlias());
     if (other == null) {
       diagnostics.add(where + ": $ref names alias '" + constraint.otherAlias()

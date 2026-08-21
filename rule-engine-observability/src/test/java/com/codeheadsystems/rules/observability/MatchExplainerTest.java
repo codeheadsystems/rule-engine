@@ -108,7 +108,7 @@ class MatchExplainerTest {
       final Explanation explanation = new MatchExplainer(rules, session).explain(REVIEW.id());
 
       assertThat(explanation.verdict()).hasValueSatisfying(verdict ->
-          assertThat(verdict).contains("none joined to any o").contains("id"));
+          assertThat(verdict).contains("no combination").contains("c.id EQ o.customerId"));
       assertThat(explanation.patterns()).anySatisfy(pattern ->
           assertThat(pattern.joinNote()).isPresent());
     }
@@ -129,7 +129,7 @@ class MatchExplainerTest {
       final Explanation explanation = new MatchExplainer(rules, session).explain(REVIEW.id());
 
       assertThat(explanation.verdict()).hasValueSatisfying(verdict ->
-          assertThat(verdict).contains("refracted").contains("already fired at recency"));
+          assertThat(verdict).contains("refracted").contains("already fired").contains("recency"));
       assertThat(explanation.describe()).contains("refracted");
     }
   }
@@ -193,7 +193,7 @@ class MatchExplainerTest {
       assertThat(explanation.patterns().getFirst().considered()).isEqualTo(1);
       assertThat(explanation.patterns().get(1).considered()).isEqualTo(2);
       assertThat(explanation.verdict()).hasValueSatisfying(verdict ->
-          assertThat(verdict).contains("none joined"));
+          assertThat(verdict).contains("no combination"));
     }
   }
 
@@ -207,8 +207,10 @@ class MatchExplainerTest {
       final Explanation explanation = new MatchExplainer(rules, session)
           .explain(REVIEW.id(), Map.of("o", customer));
 
-      assertThat(explanation.patterns().getFirst().joinNote())
+      assertThat(explanation.patterns().getFirst().note())
+          .describedAs("a wrong-typed pinned fact is not a join outcome")
           .hasValueSatisfying(note -> assertThat(note).contains("is a Customer"));
+      assertThat(explanation.patterns().getFirst().joinNote()).isEmpty();
     }
   }
 
@@ -220,10 +222,130 @@ class MatchExplainerTest {
       final FactHandle order = session.insert("Order", Facts.obj("id", 1, "total", 25_000));
       session.retract(order);
 
-      assertThat(new MatchExplainer(rules, session)
-          .explain(REVIEW.id(), Map.of("o", order))
-          .patterns().getFirst().joinNote())
+      // Fifty other Orders are in working memory, so a verdict of "no Order fact exists" would be
+      // flatly untrue -- which is what reporting `considered = 0` here used to produce.
+      for (int extra = 0; extra < 50; extra++) {
+        session.insert("Order", Facts.obj("id", 100 + extra, "total", 25_000));
+      }
+      final Explanation explanation = new MatchExplainer(rules, session)
+          .explain(REVIEW.id(), Map.of("o", order));
+
+      assertThat(explanation.patterns().getFirst().note())
           .hasValueSatisfying(note -> assertThat(note).contains("not in working memory"));
+      assertThat(explanation.verdict())
+          .hasValueSatisfying(verdict -> assertThat(verdict).contains("not in working memory"));
+    }
+  }
+
+  @Test
+  @DisplayName("several matches that ALL fired are all reported, not one representative")
+  void everyMatchFired() {
+    // The verdict used to be built from the first survivor of each pattern -- an arbitrary
+    // combination, usually not a match at all. With two orders and two customers inserted in an
+    // order that makes the first-of-each pairing a non-match, it announced "eligible and has not
+    // fired yet" about a rule that had fired twice.
+    final CompiledRuleSet rules = Engine.compile(REVIEW);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("Order",
+          Facts.obj("id", 1, "total", 25_000, "status", "PENDING", "customerId", 1));
+      session.insert("Order",
+          Facts.obj("id", 2, "total", 25_000, "status", "PENDING", "customerId", 2));
+      session.insert("Customer", Facts.obj("id", 2, "riskTier", "HIGH"));
+      session.insert("Customer", Facts.obj("id", 1, "riskTier", "HIGH"));
+
+      assertThat(session.fireAllRules().firedCount()).isEqualTo(2);
+
+      assertThat(new MatchExplainer(rules, session).explain(REVIEW.id()).verdict())
+          .hasValueSatisfying(verdict -> assertThat(verdict)
+              .contains("refracted")
+              .doesNotContain("has not fired yet"));
+    }
+  }
+
+  @Test
+  @DisplayName("a mix of fired and eligible matches says which is which")
+  void someFiredSomeEligible() {
+    final CompiledRuleSet rules = Engine.compile(REVIEW);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("Order",
+          Facts.obj("id", 1, "total", 25_000, "status", "PENDING", "customerId", 1));
+      session.insert("Customer", Facts.obj("id", 1, "riskTier", "HIGH"));
+      assertThat(session.fireAllRules().firedCount()).isEqualTo(1);
+
+      // A second match arrives after the first has fired.
+      session.insert("Order",
+          Facts.obj("id", 2, "total", 25_000, "status", "PENDING", "customerId", 1));
+
+      assertThat(new MatchExplainer(rules, session).explain(REVIEW.id()).verdict())
+          .hasValueSatisfying(verdict -> assertThat(verdict)
+              .contains("2 match(es)").contains("1 already fired").contains("1 still eligible"));
+    }
+  }
+
+  @Test
+  @DisplayName("a self-join that fired is reported as fired, not as eligible")
+  void selfJoinThatFired() {
+    // The old verdict paired the first survivor of o1 with the first survivor of o2 -- the same
+    // handle -- producing a key that can never fire, so a self-join always looked eligible.
+    final RuleDefinition duplicates = Rules.rule("duplicate-orders")
+        .when("o1", "Order", pattern -> pattern.eq("status", "PENDING"))
+        .when("o2", "Order", pattern -> pattern.eq("status", "PENDING")
+            .ref("customerId", "o1.customerId"))
+        .then(actions -> actions.emit("dupe"))
+        .build();
+    final CompiledRuleSet rules = Engine.compile(duplicates);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("Order", Facts.obj("id", 1, "status", "PENDING", "customerId", 7));
+      session.insert("Order", Facts.obj("id", 2, "status", "PENDING", "customerId", 7));
+      assertThat(session.fireAllRules().firedCount()).isEqualTo(2);
+
+      assertThat(new MatchExplainer(rules, session).explain("duplicate-orders").verdict())
+          .hasValueSatisfying(verdict -> assertThat(verdict)
+              .contains("refracted").doesNotContain("has not fired yet"));
+    }
+  }
+
+  @Test
+  @DisplayName("a single fact does not join to itself on a self-join")
+  void oneFactDoesNotSelfPair() {
+    final RuleDefinition duplicates = Rules.rule("duplicate-orders")
+        .when("o1", "Order", pattern -> pattern.eq("status", "PENDING"))
+        .when("o2", "Order", pattern -> pattern.eq("status", "PENDING")
+            .ref("customerId", "o1.customerId"))
+        .then(actions -> actions.emit("dupe"))
+        .build();
+    final CompiledRuleSet rules = Engine.compile(duplicates);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("Order", Facts.obj("id", 1, "status", "PENDING", "customerId", 7));
+
+      assertThat(new MatchExplainer(rules, session).explain("duplicate-orders").verdict())
+          .describedAs("one order cannot be both o1 and o2")
+          .hasValueSatisfying(verdict -> assertThat(verdict).contains("no combination"));
+    }
+  }
+
+  @Test
+  @DisplayName("two joins each satisfiable alone but never together is reported, not missed")
+  void joinsSatisfiableOnlySeparately() {
+    // The old join note returned on the first join that had no satisfying pair. With each join
+    // individually satisfiable it emitted nothing and the verdict claimed eligibility for a rule
+    // with zero matches.
+    final RuleDefinition twoJoins = Rules.rule("two-joins")
+        .when("a", "A", pattern -> pattern.hasField("k", true))
+        .when("b", "B", pattern -> pattern.hasField("k", true))
+        .when("c", "C", pattern -> pattern.ref("x", "a.k").ref("y", "b.k"))
+        .then(actions -> actions.emit("hit"))
+        .build();
+    final CompiledRuleSet rules = Engine.compile(twoJoins);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("A", Facts.obj("k", 1));
+      session.insert("B", Facts.obj("k", 2));
+      session.insert("C", Facts.obj("x", 1, "y", 99));
+      session.insert("C", Facts.obj("x", 99, "y", 2));
+
+      assertThat(new MatchExplainer(rules, session).explain("two-joins").verdict())
+          .hasValueSatisfying(verdict -> assertThat(verdict)
+              .contains("no combination").doesNotContain("has not fired yet"));
     }
   }
 

@@ -48,6 +48,9 @@ import java.util.Optional;
  */
 public final class MatchExplainer {
 
+  /** How many real matches to enumerate before stopping. Enough to explain, bounded enough to end. */
+  private static final int MATCH_LIMIT = 1_000;
+
   private final CompiledRuleSet ruleSet;
   private final RuleSession session;
 
@@ -82,8 +85,9 @@ public final class MatchExplainer {
     // Annotate first, then read the verdict off the annotated results: the join note IS one of the
     // verdicts, so handing the un-annotated list to verdict() silently loses the "nothing joined"
     // answer -- which is the one an author is least able to work out for themselves.
-    final List<PatternResult> annotated = withJoinNotes(rule, results, survivorsByAlias);
-    return new Explanation(ruleId, annotated, verdict(rule, annotated, survivorsByAlias));
+    final List<long[]> matches = matches(rule, survivorsByAlias);
+    final List<PatternResult> annotated = withJoinNotes(rule, results, matches);
+    return new Explanation(ruleId, annotated, verdict(rule, annotated, matches));
   }
 
   /**
@@ -108,8 +112,9 @@ public final class MatchExplainer {
       results.add(result);
       survivorsByAlias.put(pattern.alias(), result.survivors());
     }
-    final List<PatternResult> annotated = withJoinNotes(rule, results, survivorsByAlias);
-    return new Explanation(ruleId, annotated, verdict(rule, annotated, survivorsByAlias));
+    final List<long[]> matches = matches(rule, survivorsByAlias);
+    final List<PatternResult> annotated = withJoinNotes(rule, results, matches);
+    return new Explanation(ruleId, annotated, verdict(rule, annotated, matches));
   }
 
   /**
@@ -141,7 +146,7 @@ public final class MatchExplainer {
     return new PatternResult(pattern.alias(), pattern.factType(), population.size(), survivors,
         failures.values().stream().max((left, right) ->
             Integer.compare(left.eliminated(), right.eliminated())),
-        Optional.empty());
+        Optional.empty(), Optional.empty());
   }
 
   /**
@@ -154,11 +159,15 @@ public final class MatchExplainer {
   private PatternResult analysePinned(final CompiledPattern pattern, final FactHandle pinned) {
     final Optional<Fact> fact = session.get(pinned);
     if (fact.isEmpty()) {
-      return new PatternResult(pattern.alias(), pattern.factType(), 0, List.of(), Optional.empty(),
+      // `considered` stays 1: a fact WAS named and looked at. Reporting 0 here made the verdict
+      // announce "no Order fact exists" in a session holding fifty of them.
+      return new PatternResult(pattern.alias(), pattern.factType(), 1, List.of(), Optional.empty(),
+          Optional.empty(),
           Optional.of("fact #" + pinned.id() + " is not in working memory"));
     }
     if (!fact.get().type().equals(pattern.factType())) {
       return new PatternResult(pattern.alias(), pattern.factType(), 1, List.of(), Optional.empty(),
+          Optional.empty(),
           Optional.of("fact #" + pinned.id() + " is a " + fact.get().type()
               + ", but " + pattern.alias() + " matches " + pattern.factType()));
     }
@@ -167,7 +176,7 @@ public final class MatchExplainer {
         failed.isPresent() ? List.of() : List.of(pinned.id()),
         failed.map(test -> new ConstraintFailure(test.constraint(), pinned.id(),
             test.accessor().get(fact.get().payload()), 1)),
-        Optional.empty());
+        Optional.empty(), Optional.empty());
   }
 
   /**
@@ -193,53 +202,121 @@ public final class MatchExplainer {
   /**
    * Adds a note to each pattern about what its cross-fact constraints did.
    *
-   * <p>A pattern can have survivors and still contribute nothing, because none of them joins to
-   * anything. That is a distinct failure from "no fact passed the constraints", and it is the one
-   * an author is least likely to work out for themselves — everything they can see looks right.
+   * <p>Derived from the <em>real</em> matches rather than from pairwise probing. An earlier version
+   * asked, per join, "does any pair satisfy this one join", and returned on the first join that had
+   * none. That is wrong in both directions: it reports nothing when two joins on one pattern are
+   * each individually satisfiable but never together, and on a self-join it happily pairs a fact
+   * with itself.
    *
    * @param rule the rule
    * @param results the per-pattern results so far
-   * @param survivorsByAlias each pattern's survivors
+   * @param matches every real match, already enumerated
    * @return the results, with join notes filled in
    */
-  private List<PatternResult> withJoinNotes(final CompiledRule rule,
-      final List<PatternResult> results, final Map<String, List<Long>> survivorsByAlias) {
+  private static List<PatternResult> withJoinNotes(final CompiledRule rule,
+      final List<PatternResult> results, final List<long[]> matches) {
     final List<PatternResult> annotated = new ArrayList<>(results.size());
     for (int position = 0; position < rule.patterns().size(); position++) {
       final CompiledPattern pattern = rule.patterns().get(position);
       final PatternResult result = results.get(position);
-      annotated.add(pattern.joinTests().isEmpty() || result.survivors().isEmpty()
+      final boolean joined = pattern.joinTests().isEmpty() || result.survivors().isEmpty();
+      annotated.add(joined || !matches.isEmpty()
           ? result
           : new PatternResult(result.alias(), result.factType(), result.considered(),
               result.survivors(), result.firstFailure(),
-              joinNote(rule, pattern, result, survivorsByAlias)));
+              Optional.of(result.survivors().size() + " survivor(s), but no combination of them "
+                  + "satisfies " + describeJoins(rule, pattern)),
+              result.note()));
     }
     return annotated;
   }
 
   /**
-   * Describes what a pattern's joins did to its survivors.
+   * Renders a pattern's join constraints for a diagnostic.
    *
    * @param rule the rule
    * @param pattern the pattern
-   * @param result its result so far
-   * @param survivorsByAlias each pattern's survivors
-   * @return the note, or empty when at least one pairing joined
+   * @return the constraints, as the author wrote them
    */
-  private Optional<String> joinNote(final CompiledRule rule, final CompiledPattern pattern,
-      final PatternResult result, final Map<String, List<Long>> survivorsByAlias) {
-    for (final JoinTest join : pattern.joinTests()) {
-      final CompiledPattern other = rule.patterns().get(join.otherIndex());
-      final List<Long> otherSurvivors = survivorsByAlias.getOrDefault(other.alias(), List.of());
-      final boolean anyPairJoins = result.survivors().stream().anyMatch(mine ->
-          otherSurvivors.stream().anyMatch(theirs -> holds(join, mine, theirs)));
-      if (!anyPairJoins) {
-        return Optional.of(result.survivors().size() + " survivor(s), none joined to any "
-            + other.alias() + " on " + join.source().field()
-            + " " + join.source().op() + " " + other.alias() + "." + join.source().otherField());
+  private static String describeJoins(final CompiledRule rule, final CompiledPattern pattern) {
+    return pattern.joinTests().stream()
+        .map(join -> pattern.alias() + "." + join.source().field()
+            + " " + join.source().op() + " "
+            + rule.patterns().get(join.otherIndex()).alias() + "." + join.source().otherField())
+        .reduce((left, right) -> left + " and " + right)
+        .orElse("its joins");
+  }
+
+  /**
+   * Enumerates the rule's real matches over the surviving candidates.
+   *
+   * <p>Brute force, in the rule's written order, applying every cross-fact test and §1's implicit
+   * inequality. That is the point: §7.2 says this diagnostic should re-evaluate rather than ask the
+   * network, because the network is built to skip work without recording why it skipped it.
+   *
+   * <p>Bounded, because "why did nothing fire" is a question people ask about large sessions and an
+   * unbounded cross product would hang the thing that was supposed to help. Hitting the bound is
+   * reported rather than hidden.
+   *
+   * @param rule the rule
+   * @param survivorsByAlias each pattern's surviving handles
+   * @return up to {@link #MATCH_LIMIT} real matches
+   */
+  private List<long[]> matches(final CompiledRule rule,
+      final Map<String, List<Long>> survivorsByAlias) {
+    final List<long[]> found = new ArrayList<>();
+    extend(rule, survivorsByAlias, 0, new long[rule.patterns().size()], found);
+    return found;
+  }
+
+  /**
+   * Depth-first extension over the surviving candidates.
+   *
+   * @param rule the rule
+   * @param survivorsByAlias each pattern's surviving handles
+   * @param position the pattern to bind next
+   * @param bound the handles bound so far
+   * @param found the matches collected so far
+   */
+  private void extend(final CompiledRule rule, final Map<String, List<Long>> survivorsByAlias,
+      final int position, final long[] bound, final List<long[]> found) {
+    if (found.size() >= MATCH_LIMIT) {
+      return;
+    }
+    if (position == rule.patterns().size()) {
+      found.add(bound.clone());
+      return;
+    }
+    final CompiledPattern pattern = rule.patterns().get(position);
+    for (final long candidate : survivorsByAlias.getOrDefault(pattern.alias(), List.of())) {
+      if (pattern.conflictsWith(bound, candidate) || !joinsHold(rule, pattern, candidate, bound)) {
+        continue;
+      }
+      bound[position] = candidate;
+      extend(rule, survivorsByAlias, position + 1, bound, found);
+      if (found.size() >= MATCH_LIMIT) {
+        return;
       }
     }
-    return Optional.empty();
+  }
+
+  /**
+   * Whether a candidate satisfies every cross-fact test of its pattern.
+   *
+   * @param rule the rule
+   * @param pattern the pattern
+   * @param candidate the handle being considered
+   * @param bound the handles bound so far
+   * @return whether the joins hold
+   */
+  private boolean joinsHold(final CompiledRule rule, final CompiledPattern pattern,
+      final long candidate, final long[] bound) {
+    for (final JoinTest join : pattern.joinTests()) {
+      if (!holds(join, candidate, bound[join.otherIndex()])) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**
@@ -264,11 +341,16 @@ public final class MatchExplainer {
    *
    * @param rule the rule
    * @param results the per-pattern results
-   * @param survivorsByAlias each pattern's survivors
+   * @param matches the real matches
    * @return the verdict
    */
   private Optional<String> verdict(final CompiledRule rule, final List<PatternResult> results,
-      final Map<String, List<Long>> survivorsByAlias) {
+      final List<long[]> matches) {
+    for (final PatternResult result : results) {
+      if (result.note().isPresent()) {
+        return result.note();
+      }
+    }
     for (final PatternResult result : results) {
       if (result.considered() == 0) {
         return Optional.of("no " + result.factType() + " fact exists");
@@ -283,37 +365,52 @@ public final class MatchExplainer {
     }
     for (final PatternResult result : results) {
       if (result.joinNote().isPresent()) {
-        return Optional.of(result.joinNote().get());
+        return result.joinNote();
       }
     }
-    return refractionVerdict(rule, survivorsByAlias);
+    return refractionVerdict(rule, matches);
   }
 
   /**
-   * The verdict for a rule whose patterns all matched: it probably already fired.
+   * The verdict for a rule whose patterns all matched and whose joins hold: it probably fired.
    *
    * <p>§7.2 calls this "the one nobody guesses". A rule that "stopped working" has usually already
-   * fired on those exact facts, and saying so — with the recency it fired at — is the difference
-   * between an explanation and a list of constraints the author can see are satisfied.
+   * fired on those exact facts, and saying so — with the recency — is the difference between an
+   * explanation and a list of constraints the author can see are satisfied.
+   *
+   * <p>Checked against <strong>every</strong> real match, not one representative. An earlier version
+   * built a key from the first survivor of each pattern, which is an arbitrary combination that
+   * usually is not a match at all — on any self-join it paired a fact with itself, a key that can
+   * never have fired by construction — so the verdict this method exists for was unreachable in
+   * every case with more than one fact per pattern.
    *
    * @param rule the rule
-   * @param survivorsByAlias each pattern's survivors
+   * @param matches the real matches
    * @return the verdict
    */
-  private Optional<String> refractionVerdict(final CompiledRule rule,
-      final Map<String, List<Long>> survivorsByAlias) {
-    final long[] firstMatch = new long[rule.patterns().size()];
-    for (int position = 0; position < rule.patterns().size(); position++) {
-      final List<Long> survivors =
-          survivorsByAlias.getOrDefault(rule.patterns().get(position).alias(), List.of());
-      if (survivors.isEmpty()) {
-        return Optional.empty();
-      }
-      firstMatch[position] = survivors.getFirst();
+  private Optional<String> refractionVerdict(final CompiledRule rule, final List<long[]> matches) {
+    if (matches.isEmpty()) {
+      return Optional.of("every pattern matched individually, but no combination of them satisfies"
+          + " the rule's cross-fact constraints");
     }
-    return session.firedAt(new ActivationKey(rule.id(), firstMatch))
-        .map(recency -> "matched, but refracted — already fired at recency " + recency)
-        .or(() -> Optional.of("every pattern matched; the rule is eligible and has not fired yet"));
+    final List<String> fired = new ArrayList<>();
+    int eligible = 0;
+    for (final long[] match : matches) {
+      final Optional<Long> recency = session.firedAt(new ActivationKey(rule.id(), match));
+      if (recency.isPresent()) {
+        fired.add(java.util.Arrays.toString(match) + " at recency " + recency.get());
+      } else {
+        eligible++;
+      }
+    }
+    if (fired.isEmpty()) {
+      return Optional.of(matches.size() + " match(es); all eligible, none has fired yet");
+    }
+    if (eligible == 0) {
+      return Optional.of("matched, but refracted — already fired: " + String.join(", ", fired));
+    }
+    return Optional.of(matches.size() + " match(es): " + fired.size()
+        + " already fired (" + String.join(", ", fired) + "), " + eligible + " still eligible");
   }
 
   /**
