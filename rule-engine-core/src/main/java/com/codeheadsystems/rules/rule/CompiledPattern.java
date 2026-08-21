@@ -16,6 +16,8 @@ import java.util.Objects;
  * @param factType the fact type this pattern matches
  * @param alphaTests the single-fact tests, in declaration order
  * @param joinTests the cross-fact tests, each referring to an earlier pattern position
+ * @param expressionTests the compiled §6.4 conditions written on this pattern, evaluated as an
+ *     unindexed post-filter against a complete tuple rather than narrowing anything
  * @param distinctFrom the earlier pattern positions whose fact this pattern's fact must differ
  *     from. This is §1's implicit inequality between same-type aliases in one rule: distinct
  *     aliases bind distinct facts, so {@code Order as o1, Order as o2} finds two <em>different</em>
@@ -27,6 +29,7 @@ public record CompiledPattern(
     String factType,
     List<AlphaTest> alphaTests,
     List<JoinTest> joinTests,
+    List<ExpressionTest> expressionTests,
     int[] distinctFrom) {
 
   /**
@@ -43,6 +46,7 @@ public record CompiledPattern(
     Objects.requireNonNull(factType, "factType");
     alphaTests = List.copyOf(alphaTests);
     joinTests = List.copyOf(joinTests);
+    expressionTests = List.copyOf(expressionTests);
     distinctFrom = distinctFrom.clone();
   }
 

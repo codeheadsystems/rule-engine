@@ -5,7 +5,11 @@ import com.codeheadsystems.rules.listener.RuleEngineListener;
 import com.codeheadsystems.rules.listener.SuppressReason;
 import com.codeheadsystems.rules.match.Activation;
 import com.codeheadsystems.rules.match.Tuple;
+import com.fasterxml.jackson.databind.node.MissingNode;
+import com.codeheadsystems.rules.expr.ExpressionBindings;
+import com.codeheadsystems.rules.expr.ExpressionEvaluationException;
 import com.codeheadsystems.rules.rule.CompiledPattern;
+import com.codeheadsystems.rules.rule.ExpressionTest;
 import com.codeheadsystems.rules.rule.CompiledRule;
 import java.util.ArrayList;
 import java.util.BitSet;
@@ -264,7 +268,99 @@ public abstract class RecomputingAgenda implements Agenda {
    * @return the matches
    */
   private List<Activation> recompute(final CompiledRule rule, final List<String> aliases) {
-    return matchesOf(rule, aliases);
+    return postFilter(rule, matchesOf(rule, aliases));
+  }
+
+  /**
+   * Applies §6.4's expression conditions to whatever the matcher found.
+   *
+   * <p><strong>Here, in the shared base, rather than in either matcher -- and that placement is the
+   * point.</strong> Everything that decides <em>which</em> activation fires already lives in this
+   * class so that the two matchers cannot disagree, and an expression is exactly the kind of thing
+   * that would drift if written twice. Filtering the matches each matcher returns means the naive
+   * oracle and the network apply identical conditions by construction, and
+   * {@code MatcherEquivalence} cannot fail for a reason that belongs to only one of them.
+   *
+   * <p>The network gives up nothing by it. §6.4 already makes an expression an unindexed
+   * post-filter: there is no index for it to have used and no probe for it to have narrowed, which
+   * is the visible cost §6.3 wants an escape hatch to carry.
+   *
+   * <p>Evaluated against a <em>complete</em> tuple, even for a condition that reads one alias.
+   * Evaluating a single-alias condition earlier would be a real optimisation and would produce the
+   * same answers, since a complete tuple binds that alias to the same fact -- so it is an
+   * optimisation to make when there is a measurement asking for it, not before.
+   *
+   * @param rule the rule
+   * @param matches every complete match the matcher found
+   * @return the matches whose conditions all hold, in the order they were found
+   */
+  private List<Activation> postFilter(final CompiledRule rule, final List<Activation> matches) {
+    if (matches.isEmpty() || !rule.hasExpressionTests()) {
+      return matches;
+    }
+    final List<Activation> surviving = new ArrayList<>(matches.size());
+    for (final Activation activation : matches) {
+      if (holdsFor(rule, activation)) {
+        surviving.add(activation);
+      }
+    }
+    return surviving;
+  }
+
+  /**
+   * Whether every condition on a rule holds for one match.
+   *
+   * @param rule the rule
+   * @param activation the complete match
+   * @return true when no condition rejected it
+   */
+  private boolean holdsFor(final CompiledRule rule, final Activation activation) {
+    final ExpressionBindings bindings =
+        alias -> activation.tuple().aliases().contains(alias)
+            ? activation.tuple().payloadOf(alias, workingMemory)
+            : MissingNode.getInstance();
+    for (final CompiledPattern pattern : rule.patterns()) {
+      for (final ExpressionTest test : pattern.expressionTests()) {
+        if (!evaluate(rule, pattern, test, bindings)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Evaluates one condition, naming it if it fails.
+   *
+   * <p><strong>A condition that throws aborts the fire cycle, and there is no policy that catches
+   * it.</strong> That is worth stating plainly rather than discovering: §4.6's {@code RhsErrorHandler}
+   * governs the right-hand side, and a condition is evaluated here, in the agenda, while the
+   * conflict set is being built. There is nothing to skip and continue past -- matching is not a
+   * per-rule operation the way firing is, and a matcher that silently treated an evaluation failure
+   * as "no match" would turn a broken expression into rules that quietly stop firing, which is the
+   * failure mode this engine works hardest to avoid.
+   *
+   * <p>So the exception propagates, and the one thing this method owes the operator is enough
+   * context to find the cause immediately: which rule, which alias, and the expression text. The
+   * bare message from the expression compiler names none of them.
+   *
+   * @param rule the rule being matched
+   * @param pattern the pattern the condition was written on
+   * @param test the compiled condition
+   * @param bindings the tuple's facts
+   * @return whether the condition holds
+   */
+  private static boolean evaluate(final CompiledRule rule, final CompiledPattern pattern,
+      final ExpressionTest test, final ExpressionBindings bindings) {
+    try {
+      return test.program().test(bindings);
+    } catch (final RuntimeException failed) {
+      throw new ExpressionEvaluationException(
+          "rule '" + rule.id() + "', condition on alias '" + pattern.alias() + "' ("
+              + test.source().expression() + "): " + failed.getMessage()
+              + ". A condition that fails to evaluate stops the fire cycle -- there is no"
+              + " per-match error policy on the left-hand side (§6.4)", failed);
+    }
   }
 
   /**

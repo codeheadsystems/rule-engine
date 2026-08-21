@@ -1,5 +1,6 @@
 package com.codeheadsystems.rules.compiler;
 
+import com.codeheadsystems.rules.expr.ExpressionCompiler;
 import com.codeheadsystems.rules.schema.FactSchemas;
 import java.util.LinkedHashSet;
 import java.util.Objects;
@@ -20,6 +21,8 @@ public final class CompilerOptions {
   private final Set<String> declaredFactTypes;
   private final boolean checkFactTypes;
   private final FactSchemas factSchemas;
+  private final ExpressionCompiler expressions;
+  private final long expressionBudget;
 
   private CompilerOptions(final Builder builder) {
     this.declaredFunctions = Set.copyOf(builder.declaredFunctions);
@@ -27,6 +30,8 @@ public final class CompilerOptions {
     this.declaredFactTypes = Set.copyOf(builder.declaredFactTypes);
     this.checkFactTypes = builder.checkFactTypes;
     this.factSchemas = builder.factSchemas;
+    this.expressions = builder.expressions;
+    this.expressionBudget = builder.expressionBudget;
   }
 
   /**
@@ -74,6 +79,25 @@ public final class CompilerOptions {
     return factSchemas;
   }
 
+  /**
+   * The compiler for §6.4 expressions.
+   *
+   * @return the registered compiler, or one that rejects every expression with a message saying
+   *     which module would accept it
+   */
+  public ExpressionCompiler expressions() {
+    return expressions;
+  }
+
+  /**
+   * The largest estimated cost a single expression may carry (§6.4).
+   *
+   * @return the budget; {@link Long#MAX_VALUE} when the caller set none
+   */
+  public long expressionBudget() {
+    return expressionBudget;
+  }
+
   /** Builds {@link CompilerOptions}. */
   public static final class Builder {
 
@@ -82,6 +106,8 @@ public final class CompilerOptions {
     private final Set<String> declaredFactTypes = new LinkedHashSet<>();
     private boolean checkFactTypes;
     private FactSchemas factSchemas = FactSchemas.none();
+    private ExpressionCompiler expressions = ExpressionCompiler.unavailable();
+    private long expressionBudget = Long.MAX_VALUE;
 
     /** Creates a builder carrying the defaults. */
     private Builder() {
@@ -147,6 +173,43 @@ public final class CompilerOptions {
      */
     public Builder factSchemas(final FactSchemas schemas) {
       this.factSchemas = Objects.requireNonNull(schemas, "schemas");
+      return this;
+    }
+
+    /**
+     * Registers a compiler for §6.4's expression escape hatch.
+     *
+     * <p>Without one, a rule using {@code condition:} or an expression value is a compile error
+     * naming the module that would accept it. That is §6.4's "explicit, visible cost, not a hidden
+     * default" applied to the dependency as well as to the syntax: an engine that silently gained
+     * an expression evaluator would have gained protobuf, guava and antlr with it.
+     *
+     * @param compiler the compiler, typically the CEL one from {@code rule-engine-cel}
+     * @return this builder
+     */
+    public Builder expressions(final ExpressionCompiler compiler) {
+      this.expressions = Objects.requireNonNull(compiler, "compiler");
+      return this;
+    }
+
+    /**
+     * Caps what a single expression may cost, estimated at compile time (§6.4).
+     *
+     * <p>§6.4 asks for a bound at both ends -- an estimate now and a limit at run time -- and is
+     * careful about why the estimate alone is not enough: CEL guarantees termination, not linear
+     * time, and comprehensions over two lists are O(n·m). Note what a per-expression budget does
+     * <em>not</em> bound, which §6.4 also says plainly: how many times the engine runs it. An
+     * unindexed condition against 100 000 facts is 100 000 evaluations, each within budget.
+     *
+     * @param budget the largest estimated cost a single expression may carry
+     * @return this builder
+     * @throws IllegalArgumentException if the budget is not positive
+     */
+    public Builder expressionBudget(final long budget) {
+      if (budget <= 0) {
+        throw new IllegalArgumentException("expression budget must be positive, got " + budget);
+      }
+      this.expressionBudget = budget;
       return this;
     }
 

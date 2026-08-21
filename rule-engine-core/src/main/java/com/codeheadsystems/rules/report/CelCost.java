@@ -16,7 +16,9 @@ import java.util.Objects;
  * @param ruleId the rule carrying the expression
  * @param estimated what the static estimator made of it
  * @param budget the configured ceiling
- * @param overBudget whether the estimate exceeds the ceiling, which is a compile error
+ * @param overBudget whether the estimate exceeds the ceiling. Always false on a report you can
+ *     reach, since an over-budget expression fails compilation; the field records which
+ *     ceiling was in force rather than reporting a survivor
  */
 public record CelCost(String ruleId, long estimated, long budget, boolean overBudget) {
 

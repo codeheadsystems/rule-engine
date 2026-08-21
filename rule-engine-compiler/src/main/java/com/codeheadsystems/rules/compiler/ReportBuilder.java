@@ -7,6 +7,8 @@ import com.codeheadsystems.rules.report.Diagnostic;
 import com.codeheadsystems.rules.report.SharingStats;
 import com.codeheadsystems.rules.report.UnindexedConstraint;
 import com.codeheadsystems.rules.rule.ActionDefinition;
+import com.codeheadsystems.rules.expr.CompiledExpression;
+import com.codeheadsystems.rules.rule.CompiledPattern;
 import com.codeheadsystems.rules.rule.CompiledRule;
 import com.codeheadsystems.rules.rule.Constraint;
 import com.codeheadsystems.rules.rule.ExpressionConstraint;
@@ -62,9 +64,54 @@ final class ReportBuilder {
         List.of(),
         warnings(rules, options.factSchemas()),
         unindexed(rules),
-        List.<CelCost>of(),
+        expressionCosts(rules, options.expressionBudget()),
         sharing(rules, network),
         unreachable(rules, options));
+  }
+
+  /**
+   * What each expression was estimated to cost, against the budget (§6.4, §7.4).
+   *
+   * <p>§7.4 wants this so that an author can see which expressions are expensive before load does
+   * the telling. Read it with §6.4's caveat in hand: a budget bounds ONE evaluation, and a
+   * condition is evaluated once per candidate, so a cheap expression on an unindexed pattern can
+   * still dominate a fire cycle. The number here is a structural estimate, not a time.
+   *
+   * <p>Conditions and value expressions both appear. They cost very differently -- a condition runs
+   * per candidate, a value once per firing -- which is a distinction the report cannot draw for the
+   * same reason §7.4's record has no field for it, and one worth keeping in mind when reading a
+   * total.
+   *
+   * @param rules the compiled rules
+   * @param budget the configured ceiling
+   * @return one entry per compiled expression, in rule order
+   */
+  private static List<CelCost> expressionCosts(final List<CompiledRule> rules, final long budget) {
+    final List<CelCost> costs = new ArrayList<>();
+    for (final CompiledRule rule : rules) {
+      for (final CompiledPattern pattern : rule.patterns()) {
+        pattern.expressionTests().forEach(test -> costs.add(cost(rule, test.program(), budget)));
+      }
+      rule.valueExpressions().values()
+          .forEach(program -> costs.add(cost(rule, program, budget)));
+    }
+    return costs;
+  }
+
+  /**
+   * One expression's cost entry.
+   *
+   * @param rule the owning rule
+   * @param program the compiled expression
+   * @param budget the configured ceiling
+   * @return the entry
+   */
+  private static CelCost cost(final CompiledRule rule, final CompiledExpression program,
+      final long budget) {
+    // Never over budget on a rule set that compiled: the compiler rejects an over-budget
+    // expression, so this flag records the ceiling that was in force rather than a survivor.
+    return new CelCost(rule.id(), program.estimatedCost(), budget,
+        program.estimatedCost() > budget);
   }
 
   /**

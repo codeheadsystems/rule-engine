@@ -8,6 +8,8 @@ import com.codeheadsystems.rules.match.Activation;
 import com.codeheadsystems.rules.rule.ActionDefinition;
 import com.codeheadsystems.rules.rule.CallFunction;
 import com.codeheadsystems.rules.rule.Emit;
+import com.codeheadsystems.rules.expr.CompiledExpression;
+import com.codeheadsystems.rules.rule.ExpressionValue;
 import com.codeheadsystems.rules.rule.FieldRef;
 import com.codeheadsystems.rules.rule.InsertFact;
 import com.codeheadsystems.rules.rule.Literal;
@@ -484,7 +486,11 @@ public final class RhsExecutor {
       final Staging staging) {
     final JsonNode resolved = switch (expr) {
       case Literal literal -> literal.value();
-      case FieldRef ref -> source(ref, activation, staging).at(ref.path());
+      case FieldRef ref -> payloadOf(ref.alias(), activation, staging)
+          .orElseThrow(() -> new IllegalStateException(
+              "$ref names unbound alias '" + ref.alias() + "'"))
+          .at(ref.path());
+      case ExpressionValue expression -> evaluate(expression, activation, staging);
     };
     return resolved.isMissingNode()
         ? JsonNodeFactory.instance.nullNode()
@@ -500,15 +506,43 @@ public final class RhsExecutor {
    * @return the payload of the fact the alias names
    * @throws IllegalStateException if the alias is unbound
    */
-  private JsonNode source(final FieldRef ref, final Activation activation, final Staging staging) {
-    if (activation.tuple().aliases().contains(ref.alias())) {
-      return activation.tuple().payloadOf(ref.alias(), workingMemory);
+  private Optional<JsonNode> payloadOf(final String alias, final Activation activation,
+      final Staging staging) {
+    if (activation.tuple().aliases().contains(alias)) {
+      return Optional.of(activation.tuple().payloadOf(alias, workingMemory));
     }
-    final PendingInsert insert = staging.insertsByAlias.get(ref.alias());
-    if (insert == null) {
-      throw new IllegalStateException("$ref names unbound alias '" + ref.alias() + "'");
+    final PendingInsert insert = staging.insertsByAlias.get(alias);
+    return insert == null ? Optional.empty() : Optional.of(insert.payload);
+  }
+
+  /**
+   * Evaluates a §6.4 expression against the firing match.
+   *
+   * <p>Once per firing, not once per candidate -- which is what makes an expression on this side
+   * cheap where §6.4 warns at length about one on the other.
+   *
+   * <p>The bindings see exactly what a {@code $ref} sees: the tuple's aliases, plus any alias bound
+   * by an {@code insertFact} already staged in this same right-hand side. An alias that is bound by
+   * neither reads as missing rather than throwing, because {@code ExpressionBindings} promises a
+   * value -- and an expression naming an alias the rule does not bind was rejected at compile time,
+   * so reaching that here would mean the compiler let something through.
+   *
+   * @param expression the expression to evaluate
+   * @param activation the firing match
+   * @param staging the buffer, for aliases this right-hand side has already inserted
+   * @return the value it produced
+   */
+  private JsonNode evaluate(final ExpressionValue expression, final Activation activation,
+      final Staging staging) {
+    final CompiledExpression program =
+        activation.rule().valueExpressions().get(expression.expression());
+    if (program == null) {
+      throw new IllegalStateException(
+          "no compiled program for expression '" + expression.expression()
+              + "'; the rule set was built without one");
     }
-    return insert.payload;
+    return program.evaluate(alias -> payloadOf(alias, activation, staging)
+        .orElseGet(JsonNodeFactory.instance::missingNode));
   }
 
   /** The staging buffer for one right-hand side. */

@@ -188,8 +188,10 @@ class CompilerValidationTest {
   }
 
   @Test
-  @DisplayName("the CEL escape hatch is rejected with the phase it arrives in")
-  void celIsDeferred() {
+  @DisplayName("an expression with no compiler registered names the module that would accept it")
+  void expressionsNeedACompiler() {
+    // §6.4 makes the escape hatch an explicit, opt-in cost -- of a dependency as much as of
+    // evaluation -- so its absence is a compile error rather than a NoClassDefFoundError later.
     final RuleDefinition rule = Rules.rule("cel")
         .when("o", "Order", pattern -> pattern.constraint(
             new ExpressionConstraint("o.total > 10000", Set.of("o"))))
@@ -198,7 +200,21 @@ class CompilerValidationTest {
 
     assertThatThrownBy(() -> RuleCompiler.compile(List.of(rule)))
         .isInstanceOf(RuleCompilationException.class)
-        .hasMessageContaining("Phase 5");
+        .hasMessageContaining("rule-engine-cel");
+  }
+
+  @Test
+  @DisplayName("an expression reading an alias the rule does not bind is rejected")
+  void expressionAliasMustBeBound() {
+    final RuleDefinition rule = Rules.rule("unbound")
+        .when("o", "Order", pattern -> pattern.constraint(
+            new ExpressionConstraint("c.tier == 'HIGH'", Set.of("c"))))
+        .then(actions -> actions.emit("out"))
+        .build();
+
+    assertThatThrownBy(() -> RuleCompiler.compile(List.of(rule)))
+        .isInstanceOf(RuleCompilationException.class)
+        .hasMessageContaining("does not bind");
   }
 
   @Test

@@ -227,6 +227,49 @@ event comes back as the return value of the fire call, so a rule is testable wit
 A `callFunction` runs real code at commit time, is not transactional, and if it throws, the changes
 that already landed stay landed.
 
+## When operator maps aren't enough
+
+There is an escape hatch, and it is deliberately a little inconvenient to reach: it needs an extra
+module and an explicit registration, because it gives up the indexed fast path.
+
+```yaml
+apiVersion: rules.v1
+rules:
+  - id: interesting-order
+    when:
+      - fact: Order
+        as: o
+        where:
+          region: { eq: "US" }                       # keep this: it still narrows the search
+        condition: "o.subtotal > 50 && (o.tier in ['A','B'] || o.priorityFlag)"
+    then:
+      - action: setField
+        target: o
+        field: band
+        value: { $expr: "o.subtotal > 500 ? 'HIGH' : 'LOW'" }
+```
+
+Use it for the two things operator maps genuinely cannot say: nested `OR`/`NOT`, and arithmetic
+across fields. Keep your indexable constraints in `where` — the condition runs *after* them, once per
+surviving candidate, so what `where` removes is work the condition never does.
+
+`$expr` on the right is the cheap one: it runs once per firing. It is also the better answer to
+"I need to compute a value" than `callFunction`, which runs at commit time and is not transactional.
+
+Three things will bite you if nobody says them:
+
+- **An absent field is an error here, not a false.** Everything else in this guide treats absence as
+  a value; CEL does not. Write `has(o.coupon) && o.coupon != ''`.
+- **Comparing a decimal against a whole number works; adding them does not.** `o.subtotal > 50` is
+  fine whatever the subtotal is, but `o.subtotal + o.tax` needs `double(o.subtotal) + o.tax` when the
+  two are different kinds of number. Do money arithmetic before the fact reaches the engine.
+- **A condition that fails to evaluate stops the whole fire cycle** — there is no per-match error
+  policy on this side. Guard what you read.
+- **You cannot read a clock.** That is on purpose — the engine promises the same facts produce the
+  same firings, and a rule that can read the time breaks it. Insert the time as a fact.
+
+See [the reference](dsl-reference.md#the-expression-escape-hatch) for registration and cost limits.
+
 ## Running it
 
 ```java

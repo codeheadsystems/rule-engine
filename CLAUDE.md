@@ -55,6 +55,7 @@ end-to-end. That is why coverage is aggregated at the root — a per-module repo
 | `rule-engine-compiler` | `RuleDefinition` → `CompiledRuleSet`: validation, accessor/pattern compilation, `TestedPaths`, network build, version hash, `CompilerReport` |
 | `rule-engine-dsl` | JSON/YAML rule files → `RuleDefinition`; the `rules.v1` schema; located diagnostics |
 | `rule-engine-schema` | The optional `FactSchemas` of §2.3, backed by networknt JSON Schema |
+| `rule-engine-cel` | The optional §6.4 expression escape hatch, backed by dev.cel |
 | `rule-engine-observability` | `TracingListener`, `JfrListener`, `MatchExplainer` |
 | `rule-engine-testkit` | `Rules` builder, `Engine`/`FiringSequence`, `MatcherEquivalence`, `ShuffleHarness`, JMH benchmarks — **main** source set, not test: consumers use these |
 
@@ -147,8 +148,7 @@ surfaced (`RangeConstraint`'s un-normalised inclusivity, and the testkit builder
 
 ### Optional modules plug in through a `-core` SPI
 
-`-schema` (and `-cel`, when it lands) follow the pattern `TestedPaths`, `HostFunction` and
-`EventSink` already use: **`-core` declares an interface, an optional module implements it, and it
+`-schema` and `-cel` follow the pattern `TestedPaths`, `HostFunction` and `EventSink` already use: **`-core` declares an interface, an optional module implements it, and it
 is wired in through `CompilerOptions` and frozen into the `CompiledRuleSet`.** `-core` gains no
 dependency either time.
 
@@ -157,6 +157,19 @@ dependency either time.
 own vocabulary instead, and answers `UNKNOWN`/empty wherever schema introspection stops being simple
 (`$ref`, `allOf`, `oneOf`) — an unmade check costs what you had before registering a schema, where a
 guessed one would reject a correct rule. Validation has no such limit.
+
+**CEL (§6.4) evaluates in two places, and one of them is a structural decision.** A pattern
+`condition:` is a post-filter applied in **`RecomputingAgenda`, the shared base — not in either
+matcher**. Everything that decides which activation fires already lives there so the two matchers
+cannot diverge, and an expression is exactly what would drift if written twice; this way
+`MatcherEquivalence` holds by construction. An `$expr` value resolves in `RhsExecutor.resolve`, once
+per firing rather than once per candidate.
+
+Note where reality departs from §6.4: it says dev.cel "ships a static cost estimator and a runtime
+cost limit — set both". As of 0.14.0 it ships neither. `CelExpressions` uses its own structural
+estimate at compile time and dev.cel's `comprehensionMaxIterations`/parse limits at run time, and
+says so. Determinism is a property of that environment: CEL's standard set has no clock, and
+`CelExpressions` binds only the tuple's aliases — adding a binding there is a §7.3 decision.
 
 ### Update, refraction, RHS
 

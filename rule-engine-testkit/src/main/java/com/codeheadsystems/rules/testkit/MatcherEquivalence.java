@@ -2,6 +2,7 @@ package com.codeheadsystems.rules.testkit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.codeheadsystems.rules.compiler.CompilerOptions;
 import com.codeheadsystems.rules.compiler.RuleCompiler;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
@@ -55,8 +56,25 @@ public final class MatcherEquivalence {
    */
   public static FiringSequence assertEquivalent(final List<RuleDefinition> rules,
       final Consumer<RuleSession> scenario, final SessionOptions.Builder options) {
-    final CompiledRuleSet forOracle = RuleCompiler.compile(rules);
-    final CompiledRuleSet forNetwork = RuleCompiler.compile(rules);
+    return assertEquivalent(rules, scenario, options, CompilerOptions.defaults());
+  }
+
+  /**
+   * Runs a scenario under both matchers and asserts they agree.
+   *
+   * @param rules the rule set
+   * @param scenario what to do to the session before firing
+   * @param options session configuration, which the harness completes with the matcher choice
+   * @param compilerOptions how to compile -- needed by any rule set that registers an expression
+   *     compiler (§6.4) or fact schemas (§2.3), which otherwise cannot be checked for equivalence
+   *     at all
+   * @return the firing sequence both matchers produced
+   */
+  public static FiringSequence assertEquivalent(final List<RuleDefinition> rules,
+      final Consumer<RuleSession> scenario, final SessionOptions.Builder options,
+      final CompilerOptions compilerOptions) {
+    final CompiledRuleSet forOracle = RuleCompiler.compile(rules, compilerOptions);
+    final CompiledRuleSet forNetwork = RuleCompiler.compile(rules, compilerOptions);
 
     final FiringSequence oracle = Engine.run(forOracle,
         options.matching(MatchingStrategy.NAIVE).build(), scenario);

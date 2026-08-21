@@ -164,7 +164,7 @@
     },
 
     "payload": {
-      "description": "Field name to value. A value is a literal or a fire-time { $ref: alias.field }; the DSL compiler tells them apart. Names may be dotted, and compile to nested paths the way a where-block field does.",
+      "description": "Field name to value. A value is a literal, a fire-time { $ref: alias.field }, or a { $expr: ... } expression of section 6.4; the DSL compiler tells them apart. Names may be dotted, and compile to nested paths the way a where-block field does.",
       "type": "object",
       "additionalProperties": true
     }

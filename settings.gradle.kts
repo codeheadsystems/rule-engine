@@ -23,5 +23,8 @@ include("rule-engine-dsl")
 // §8: the optional SchemaRegistry of §2.3. Beside -dsl because they share the JSON
 // Schema tooling -- one gate points at rule files, the other at fact payloads.
 include("rule-engine-schema")
+// §8: the CEL escape hatch of §6.4. Its own module because CEL brings protobuf, guava
+// and antlr, and none of that belongs near a rule set that never writes an expression.
+include("rule-engine-cel")
 include("rule-engine-observability")
 include("rule-engine-testkit")

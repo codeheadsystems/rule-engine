@@ -1,15 +1,18 @@
 package com.codeheadsystems.rules.observability;
 
 import com.codeheadsystems.rules.fact.Fact;
+import com.codeheadsystems.rules.expr.ExpressionBindings;
 import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.match.ActivationKey;
 import com.codeheadsystems.rules.rule.AlphaTest;
 import com.codeheadsystems.rules.rule.CompiledPattern;
+import com.codeheadsystems.rules.rule.ExpressionTest;
 import com.codeheadsystems.rules.rule.CompiledRule;
 import com.codeheadsystems.rules.rule.JoinTest;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
 import com.codeheadsystems.rules.session.RuleSession;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.MissingNode;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -240,8 +243,14 @@ public final class MatchExplainer {
       // combination YET, which is a different sentence -- and since verdict() returns a join note
       // before it ever reaches the budget-aware wording, emitting one here would make that wording
       // unreachable for every rule with a join and turn a lower bound into a definite negative.
+      /*
+       * `matches.found()` excludes tuples a §6.4 condition removed, so an empty match set no longer
+       * implies the joins failed -- and blaming a join that in fact holds sends the author to
+       * inspect correct code. Same lesson as the budget guard beside it: only claim "nothing
+       * joined" when nothing else can account for the emptiness.
+       */
       final boolean joined = pattern.joinTests().isEmpty() || result.survivors().isEmpty()
-          || !matches.complete();
+          || !matches.complete() || matches.removedEverything();
       annotated.add(joined || !matches.found().isEmpty()
           ? result
           : new PatternResult(result.alias(), result.factType(), result.considered(),
@@ -319,8 +328,11 @@ public final class MatchExplainer {
         payloads.computeIfAbsent(handle, id ->
             session.get(new FactHandle(id)).map(Fact::payload).orElse(null))));
     final int[] budget = {WORK_LIMIT};
-    extend(rule, survivorsByAlias, payloads, 0, new long[rule.patterns().size()], found, budget);
-    return new Matches(found, budget[0] > 0 && found.size() < MATCH_LIMIT);
+    final int[] outcomes = {0, 0};
+    extend(rule, survivorsByAlias, payloads, 0, new long[rule.patterns().size()], found, budget,
+        outcomes);
+    return new Matches(found, budget[0] > 0 && found.size() < MATCH_LIMIT,
+        outcomes[0], outcomes[1]);
   }
 
   /**
@@ -333,15 +345,28 @@ public final class MatchExplainer {
    * @param bound the handles bound so far
    * @param found the matches collected so far
    * @param budget remaining candidate examinations, decremented in place
+   * @param outcomes counts, in place, complete tuples a §6.4 condition rejected [0] and ones
+   *     whose condition could not be evaluated at all [1]
    */
   private void extend(final CompiledRule rule, final Map<String, List<Long>> survivorsByAlias,
       final Map<Long, JsonNode> payloads, final int position, final long[] bound,
-      final List<long[]> found, final int[] budget) {
+      final List<long[]> found, final int[] budget, final int[] outcomes) {
     if (found.size() >= MATCH_LIMIT || budget[0] <= 0) {
       return;
     }
     if (position == rule.patterns().size()) {
-      found.add(bound.clone());
+      /*
+       * §6.4's conditions are applied here, on the complete tuple, for the same reason the agenda
+       * applies them there: they are an unindexed post-filter, not something that narrows a
+       * pattern. Without this the explainer reported matches the engine would never fire -- the
+       * exact inverse of the defect commit d973982 fixed, and worse, because §7.2 exists to answer
+       * "why did my rule not fire" and a phantom match sends the author looking somewhere else.
+       */
+      switch (conditionOutcome(rule, bound, payloads)) {
+        case HELD -> found.add(bound.clone());
+        case REJECTED -> outcomes[0]++;
+        case FAILED -> outcomes[1]++;
+      }
       return;
     }
     final CompiledPattern pattern = rule.patterns().get(position);
@@ -354,7 +379,7 @@ public final class MatchExplainer {
         continue;
       }
       bound[position] = candidate;
-      extend(rule, survivorsByAlias, payloads, position + 1, bound, found, budget);
+      extend(rule, survivorsByAlias, payloads, position + 1, bound, found, budget, outcomes);
       if (found.size() >= MATCH_LIMIT || budget[0] <= 0) {
         return;
       }
@@ -384,12 +409,112 @@ public final class MatchExplainer {
   }
 
   /**
-   * The matches found, and whether the search ran to completion.
+   * What the combination walk found.
    *
-   * @param found the matches
+   * @param found the complete tuples that satisfy every join and every §6.4 condition
    * @param complete false when a budget stopped the search, making every count a lower bound
+   * @param rejectedByCondition how many otherwise-complete tuples a condition answered false for.
+   *     Counted separately because it is the one verdict an author cannot work out from the
+   *     per-pattern detail: every pattern matched, every join held, and the rule still did not fire
+   * @param failedToEvaluate how many a condition could not be evaluated for at all. A different
+   *     answer entirely, and the more urgent one: at run time that is not a filtered-out match, it
+   *     is an exception that stops the fire cycle
    */
-  private record Matches(List<long[]> found, boolean complete) {}
+  private record Matches(List<long[]> found, boolean complete, int rejectedByCondition,
+      int failedToEvaluate) {
+
+    /**
+     * Whether a §6.4 condition is why nothing matched.
+     *
+     * @return true when conditions removed every complete tuple
+     */
+    private boolean removedEverything() {
+      /*
+       * `complete` is not optional here. A search stopped by its budget has examined some prefix of
+       * the combinations, so "a condition rejected each of them" would assert an exhaustiveness the
+       * walk never reached -- and the count would be the budget rather than a count, which is
+       * exactly the defect commit 10588b2 fixed by hand ("stop it reporting a budget as a count").
+       * Falling through leaves refractionVerdict's budget wording, which is already careful.
+       */
+      return complete && found.isEmpty() && rejectedByCondition + failedToEvaluate > 0;
+    }
+  }
+
+  /** What a rule's conditions did to one complete tuple. */
+  private enum ConditionOutcome { HELD, REJECTED, FAILED }
+
+  /**
+   * How to say that a §6.4 condition is why nothing matched.
+   *
+   * <p>The two outcomes are worded apart because they are different problems. A condition that
+   * answered false filtered the facts out, which may well be what the author intended elsewhere in
+   * the rule. A condition that could not be evaluated does not filter anything at run time -- it
+   * throws, and stops the fire cycle -- so telling somebody their facts were "rejected" would point
+   * them at their data when the fault is in the expression.
+   *
+   * @param matches what the walk found
+   * @return the verdict
+   */
+  private static String conditionVerdict(final Matches matches) {
+    if (matches.rejectedByCondition() == 0) {
+      return matches.failedToEvaluate()
+          + " combination(s) matched every pattern and join, but a 'condition' expression could not"
+          + " be evaluated against any of them. At run time that is not a filtered-out match: it"
+          + " throws and stops the fire cycle (§6.4)";
+    }
+    if (matches.failedToEvaluate() == 0) {
+      return matches.rejectedByCondition()
+          + " combination(s) matched every pattern and join, but a 'condition' expression rejected"
+          + " each of them (§6.4)";
+    }
+    return matches.rejectedByCondition() + " combination(s) were rejected by a 'condition'"
+        + " expression and " + matches.failedToEvaluate() + " could not be evaluated at all,"
+        + " the latter throwing and stopping the fire cycle at run time (§6.4)";
+  }
+
+  /**
+   * Whether every §6.4 condition on a rule holds for one complete tuple.
+   *
+   * <p>Re-evaluated here rather than read from anywhere, which is {@code MatchExplainer}'s whole
+   * approach: the matching network is optimised not to record why something failed, so the only way
+   * to know is to ask again, slowly.
+   *
+   * <p>An expression that throws is reported as "did not hold" rather than propagated. Everywhere
+   * else that is the wrong trade -- §6.4 wants failures visible -- but this class exists to explain
+   * a rule that is already not firing, and a diagnostic tool that throws while diagnosing is worse
+   * than one that says less. The count still surfaces in the verdict.
+   *
+   * @param rule the rule
+   * @param bound the handles bound, in pattern order
+   * @param payloads the survivors' payloads
+   * @return whether the conditions held, said no, or could not be evaluated
+   */
+  private ConditionOutcome conditionOutcome(final CompiledRule rule, final long[] bound,
+      final Map<Long, JsonNode> payloads) {
+    if (!rule.hasExpressionTests()) {
+      return ConditionOutcome.HELD;
+    }
+    final Map<String, JsonNode> byAlias = new LinkedHashMap<>();
+    for (int position = 0; position < rule.patterns().size(); position++) {
+      byAlias.put(rule.patterns().get(position).alias(), payloads.get(bound[position]));
+    }
+    final ExpressionBindings bindings = alias -> {
+      final JsonNode payload = byAlias.get(alias);
+      return payload == null ? MissingNode.getInstance() : payload;
+    };
+    for (final CompiledPattern pattern : rule.patterns()) {
+      for (final ExpressionTest test : pattern.expressionTests()) {
+        try {
+          if (!test.program().test(bindings)) {
+            return ConditionOutcome.REJECTED;
+          }
+        } catch (final RuntimeException failed) {
+          return ConditionOutcome.FAILED;
+        }
+      }
+    }
+    return ConditionOutcome.HELD;
+  }
 
   /**
    * The one-sentence answer.
@@ -420,6 +545,14 @@ public final class MatchExplainer {
             + "(s) considered; none matched " + result.alias()
             + result.firstFailure().map(failure -> " — " + failure.describe()).orElse(""));
       }
+    }
+    /*
+     * Before the join notes, not after. A condition that removed every tuple has already suppressed
+     * those notes above, but ordering it first says plainly that this branch is the more specific
+     * answer: the joins did hold, and something after them said no.
+     */
+    if (matches.removedEverything()) {
+      return Optional.of(conditionVerdict(matches));
     }
     for (final PatternResult result : results) {
       if (result.joinNote().isPresent()) {

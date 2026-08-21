@@ -47,10 +47,14 @@ compiler's own, which are re-reported against the line that caused them. `Compil
 came with it: `CompiledRuleSet.report()` names every constraint no index can serve, how much node
 sharing actually happened, and which rules nothing can activate.
 
-**What does not, and where it arrives:** streaming sessions and Rete joins (Phase 3), the
-concurrency helpers and hot reload (Phase 4), and Phase 5's two optional halves — the CEL escape
-hatch of §6.4 and the `SchemaRegistry` of §2.3. Negation, accumulation, truth maintenance and CEP
-are §1 non-goals with documented interim answers.
+**Phase 5 is now complete**, including both halves §9 marks optional: `FactSchemas` (§2.3) and the
+CEL escape hatch (§6.4). An expression can appear as a pattern `condition:` or as an `$expr` value in
+a `then` block — the second being a deliberate extension of §11.3's closed verb set, argued in
+`docs/dsl-reference.md`. Both live in modules nobody has to depend on.
+
+**What does not, and where it arrives:** streaming sessions and Rete joins (Phase 3), and the
+concurrency helpers and hot reload (Phase 4). Negation, accumulation, truth maintenance and CEP are
+§1 non-goals with documented interim answers.
 
 ## Modules
 
@@ -59,11 +63,10 @@ are §1 non-goals with documented interim answers.
 | `rule-engine-core` | Fact model, working memory, matching primitives, agenda, refraction, sessions |
 | `rule-engine-compiler` | `RuleDefinition` → `CompiledRuleSet`: validation, accessor and pattern compilation, tested paths, version hash, `CompilerReport` |
 | `rule-engine-dsl` | JSON *and* YAML rule files → `RuleDefinition`, plus the `rules.v1` rule-file schema |
+| `rule-engine-cel` | The optional §6.4 expression escape hatch, backed by dev.cel |
 | `rule-engine-schema` | The optional `FactSchemas` of §2.3, backed by JSON Schema |
 | `rule-engine-observability` | `TracingListener`, `JfrListener`, `MatchExplainer` |
 | `rule-engine-testkit` | Fixtures, the firing-sequence oracle, the shuffle-determinism and matcher-equivalence harnesses, JMH benchmarks |
-
-`-cel` (§8) arrives with the last optional half of Phase 5: the CEL escape hatch of §6.4.
 
 ## Example
 

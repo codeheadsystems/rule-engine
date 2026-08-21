@@ -5,6 +5,7 @@ import com.codeheadsystems.rules.compiler.RuleCompilationException;
 import com.codeheadsystems.rules.compiler.RuleCompiler;
 import com.codeheadsystems.rules.rule.ActionDefinition;
 import com.codeheadsystems.rules.rule.Constraint;
+import com.codeheadsystems.rules.rule.ExpressionConstraint;
 import com.codeheadsystems.rules.rule.PatternDefinition;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
@@ -14,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.TreeSet;
 
 /**
@@ -134,6 +136,7 @@ public final class RuleFiles {
       final String pointer = "/rules/" + index;
       diagnostics.inRule(rule.id());
       assembly.byRule.put(rule.id(), parsed.index().nearest(pointer + "/id"));
+      recordExpressionSites(rule, pointer, parsed, assembly);
       assembly.rules.add(new RuleDefinition(
           rule.id(),
           rule.salience(),
@@ -163,13 +166,21 @@ public final class RuleFiles {
     for (int index = 0; index < rule.when().size(); index++) {
       final WhenNode pattern = rule.when().get(index);
       final String pointer = rulePointer + "/when/" + index;
-      if (pattern.condition() != null) {
-        diagnostics.error(DslError.CONDITION_NOT_IMPLEMENTED, pointer + "/condition",
-            "the CEL 'condition' escape hatch of §6.4 is not implemented yet; it arrives with the"
-                + " -cel module. Express this with operator maps, which §6.3 keeps the indexable"
-                + " default");
-      }
       final List<Constraint> constraints = new ArrayList<>();
+      if (pattern.condition() != null) {
+        /*
+         * §6.4's escape hatch. The referenced aliases are left empty deliberately: the expression
+         * language owns variable resolution, and the compiler declares exactly the rule's aliases
+         * to it, so an expression naming something else is rejected there -- by a parser that knows
+         * the syntax, rather than by a second one guessing at it here.
+         */
+        constraints.add(new ExpressionConstraint(pattern.condition(), Set.of()));
+        // So a compiler diagnostic about the expression lands on the condition's own line rather
+        // than on the rule's id. The key matches the prefix RuleCompiler writes.
+        assembly.byConstraint.put(rule.id() + ": " + pattern.as() + ": condition",
+            new Assembly.ConstraintSite(
+                parsed.index().nearest(pointer + "/condition"), rule.id()));
+      }
       for (final Map.Entry<String, JsonNode> entry : pattern.where().entrySet()) {
         final String at =
             pointer + "/where/" + entry.getKey().replace("~", "~0").replace("/", "~1");
@@ -208,6 +219,57 @@ public final class RuleFiles {
   }
 
   /**
+   * Records where each §6.4 expression is written, so a compiler diagnostic can be located.
+   *
+   * <p>The compiler knows an expression only by its source text -- it never sees the document -- so
+   * the key is that text, and the DSL supplies the line. Without this an expression diagnostic
+   * falls back to the rule's {@code id:}, which for free-form text is the construct least able to
+   * afford it.
+   *
+   * @param rule the rule as written
+   * @param rulePointer the rule's JSON Pointer
+   * @param parsed the document
+   * @param assembly what to record into
+   */
+  private static void recordExpressionSites(final RuleNode rule, final String rulePointer,
+      final RuleFileReader.Parsed parsed, final Assembly assembly) {
+    for (int index = 0; index < rule.then().size(); index++) {
+      final ThenNode action = rule.then().get(index);
+      final String at = rulePointer + "/then/" + index;
+      record(action.value(), at + "/value", rule, parsed, assembly);
+      action.payload().forEach((name, value) -> record(value,
+          at + "/payload/" + name.replace("~", "~0").replace("/", "~1"), rule, parsed, assembly));
+      action.args().forEach((name, value) -> record(value,
+          at + "/args/" + name.replace("~", "~0").replace("/", "~1"), rule, parsed, assembly));
+    }
+  }
+
+  /**
+   * Records one value's location when it is an expression.
+   *
+   * @param value the value as written
+   * @param pointer its JSON Pointer
+   * @param rule the enclosing rule
+   * @param parsed the document
+   * @param assembly what to record into
+   */
+  private static void record(final JsonNode value, final String pointer, final RuleNode rule,
+      final RuleFileReader.Parsed parsed, final Assembly assembly) {
+    if (References.isExpression(value) && value.get(References.EXPR).isTextual()) {
+      /*
+       * putIfAbsent, so the FIRST occurrence wins -- matching RuleCompiler, which dedups identical
+       * expression text and therefore compiles and reports the first one. With aliases bound
+       * progressively the two occurrences need not be equally valid: an expression naming an
+       * insertFact alias is invalid before that insert and fine after it, so last-wins pointed the
+       * author at the working copy and told them it was broken.
+       */
+      assembly.byConstraint.putIfAbsent(
+          rule.id() + ": expression " + value.get(References.EXPR).textValue(),
+          new Assembly.ConstraintSite(parsed.index().nearest(pointer), rule.id()));
+    }
+  }
+
+  /**
    * What a run of {@link #assemble} produced.
    *
    * <p>The two location maps are keyed on the exact prefixes {@code RuleCompiler} writes its
@@ -230,6 +292,12 @@ public final class RuleFiles {
      * <p>The rule id is carried rather than parsed back out of the map key. The key is
      * {@code "<ruleId>: <alias>.<field>"} and a rule id may legally contain a colon, so splitting
      * on the first one would silently truncate the id it reported.
+     *
+     * <p>Note the key space also holds {@code "<ruleId>: expression <source>"}, which embeds
+     * arbitrary expression text. A rule id containing {@code ": expression "} can therefore collide
+     * with another rule's expression key and take its location. Adversarial rather than accidental,
+     * and recorded here rather than defended against: the cost of the collision is a diagnostic
+     * pointing at the wrong line, and the cost of a defence would be a key nobody can read.
      *
      * @param location where the constraint is in the file
      * @param ruleId the rule that wrote it

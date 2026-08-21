@@ -2,6 +2,8 @@ package com.codeheadsystems.rules.compiler;
 
 import com.codeheadsystems.rules.access.JsonPointerAccessor;
 import com.codeheadsystems.rules.access.Paths;
+import com.codeheadsystems.rules.expr.CompiledExpression;
+import com.codeheadsystems.rules.expr.ExpressionCompilationException;
 import com.codeheadsystems.rules.network.Network;
 import com.codeheadsystems.rules.rule.ActionDefinition;
 import com.codeheadsystems.rules.rule.AlphaTest;
@@ -11,6 +13,8 @@ import com.codeheadsystems.rules.rule.CompiledRule;
 import com.codeheadsystems.rules.rule.Constraint;
 import com.codeheadsystems.rules.rule.Emit;
 import com.codeheadsystems.rules.rule.ExpressionConstraint;
+import com.codeheadsystems.rules.rule.ExpressionTest;
+import com.codeheadsystems.rules.rule.ExpressionValue;
 import com.codeheadsystems.rules.rule.FieldConstraint;
 import com.codeheadsystems.rules.rule.FieldRef;
 import com.codeheadsystems.rules.rule.FieldTest;
@@ -19,6 +23,7 @@ import com.codeheadsystems.rules.rule.JoinConstraint;
 import com.codeheadsystems.rules.rule.JoinTest;
 import com.codeheadsystems.rules.rule.Literal;
 import com.codeheadsystems.rules.rule.Operator;
+import com.codeheadsystems.rules.rule.PayloadField;
 import com.codeheadsystems.rules.rule.PatternDefinition;
 import com.codeheadsystems.rules.rule.Quantifier;
 import com.codeheadsystems.rules.rule.RangeConstraint;
@@ -188,12 +193,21 @@ public final class RuleCompiler {
 
     validateActions(rule, aliasPositions.keySet());
 
+    /*
+     * Aliases an insertFact introduces count as bound for an expression, exactly as they do for a
+     * $ref: §6.2.2 allocates the handle at stage time so a later action in the same right-hand side
+     * can name it, and an expression is a later action's value like any other.
+     */
+    final Map<String, CompiledExpression> valueExpressions =
+        compileValueExpressions(rule, aliasPositions.keySet());
+
     if (diagnostics.size() != before) {
       return Optional.empty();
     }
     return Optional.of(new CompiledRule(
         rule.id(), rule.salience(), rule.noLoop(), rule.agendaGroup(), patterns, rule.then(),
-        pathsByRule.getOrDefault(rule.id(), Map.of()), rule));
+        pathsByRule.getOrDefault(rule.id(), Map.of()),
+        valueExpressions, rule));
   }
 
   /**
@@ -211,14 +225,15 @@ public final class RuleCompiler {
       final Map<String, Integer> aliasPositions, final List<String> aliasTypes) {
     final List<AlphaTest> alphaTests = new ArrayList<>();
     final List<JoinTest> joinTests = new ArrayList<>();
+    final List<ExpressionTest> expressionTests = new ArrayList<>();
 
     for (final Constraint constraint : pattern.constraints()) {
       switch (constraint) {
         case JoinConstraint join ->
             compileJoin(rule, pattern, join, aliasPositions, aliasTypes).ifPresent(joinTests::add);
-        case ExpressionConstraint expression -> diagnostics.add(rule.id()
-            + ": the CEL 'condition' escape hatch is not implemented in v1 (expression: '"
-            + expression.expression() + "'). It arrives with the DSL front-end in Phase 5");
+        case ExpressionConstraint expression ->
+            compileCondition(rule, pattern, expression, aliasPositions.keySet())
+                .ifPresent(expressionTests::add);
         case FieldConstraint field ->
             compileField(rule, pattern, field).ifPresent(alphaTests::add);
         case RangeConstraint range ->
@@ -235,6 +250,7 @@ public final class RuleCompiler {
       }
     }
     return new CompiledPattern(pattern.alias(), pattern.factType(), alphaTests, joinTests,
+        expressionTests,
         distinct.stream().mapToInt(Integer::intValue).toArray());
   }
 
@@ -511,6 +527,8 @@ public final class RuleCompiler {
         // A constant references nothing.
       }
       case FieldRef ref -> requireAlias(rule, bound, ref.alias(), "$ref");
+      case ExpressionValue expression -> expression.referencedAliases()
+          .forEach(alias -> requireAlias(rule, bound, alias, "expression"));
     }
   }
 
@@ -635,6 +653,165 @@ public final class RuleCompiler {
   private static boolean isOrdering(final Operator operator) {
     return operator == Operator.GT || operator == Operator.GTE
         || operator == Operator.LT || operator == Operator.LTE;
+  }
+
+  /**
+   * Compiles one pattern condition (§6.4).
+   *
+   * <p>Three things are checked here rather than left to the expression compiler, because the
+   * expression compiler does not know about rules: that a compiler is registered at all, that the
+   * expression reads only aliases this rule binds, and that its estimated cost is within
+   * {@code CompilerOptions.expressionBudget}.
+   *
+   * <p>A failure is a diagnostic, never a thrown exception. §6.5 reports every problem in a rule
+   * set in one pass, and an expression is the one construct whose compiler is somebody else's code
+   * -- letting it abort the batch would make one bad expression hide every other problem in the
+   * file.
+   *
+   * @param rule the enclosing rule
+   * @param pattern the enclosing pattern
+   * @param constraint the condition as written
+   * @param bound every alias the rule binds
+   * @return the compiled test, or empty if it was rejected
+   */
+  private Optional<ExpressionTest> compileCondition(final RuleDefinition rule,
+      final PatternDefinition pattern, final ExpressionConstraint constraint,
+      final Set<String> bound) {
+    /*
+     * The prefix follows "<rule>: <alias>.<field>", which is what the DSL matches on to put a line
+     * number on a compiler diagnostic. Written any other way the message still arrives, but located
+     * at the rule rather than at the condition -- and free-form expression text is the construct
+     * most in need of a line.
+     */
+    /*
+     * "<rule>: <alias>: condition", with a colon rather than a dot before the last word. The DSL
+     * matches this prefix to put a line number on the diagnostic, and a dot would make the key
+     * indistinguishable from a field constraint on a field actually named `condition` -- which is
+     * not an exotic name, and whose registration would win.
+     */
+    final String where = rule.id() + ": " + pattern.alias() + ": condition";
+    if (!checkAliases(where, constraint.referencedAliases(), bound)) {
+      return Optional.empty();
+    }
+    try {
+      final CompiledExpression program =
+          options.expressions().compileCondition(constraint.expression(), bound);
+      return withinBudget(where, constraint.expression(), program)
+          ? Optional.of(new ExpressionTest(constraint, program))
+          : Optional.empty();
+    } catch (final ExpressionCompilationException rejected) {
+      diagnostics.add(where + ": " + rejected.getMessage());
+      return Optional.empty();
+    }
+  }
+
+  /**
+   * Compiles every expression a rule's actions use (§6.4).
+   *
+   * <p>Keyed by source text, which deduplicates two identical expressions into one program -- the
+   * same sharing §6.5 does for alpha nodes, available here for free because an expression's meaning
+   * is a function of its text and the aliases in scope.
+   *
+   * @param rule the rule
+   * @param whenAliases the aliases the {@code when} block binds; insert aliases are added as the
+   *     walk reaches the action that introduces them
+   * @return the compiled programs by source text
+   */
+  private Map<String, CompiledExpression> compileValueExpressions(final RuleDefinition rule,
+      final Set<String> whenAliases) {
+    final Map<String, CompiledExpression> programs = new LinkedHashMap<>();
+    /*
+     * Grown as the actions are walked, not gathered up front. §6.2.2 allocates an insertFact's
+     * handle at stage time so a LATER action can name it, and validateActions already holds $ref to
+     * exactly that: an alias must be bound by `when` or by an EARLIER insert. Folding every insert
+     * alias in before the walk let an expression name a fact that does not exist yet -- accepted at
+     * compile time, and an unresolved variable at fire time -- while the same rule written with
+     * $ref was correctly rejected.
+     */
+    final Set<String> bound = new LinkedHashSet<>(whenAliases);
+    for (final ActionDefinition action : rule.then()) {
+      for (final ValueExpr value : valuesOf(action)) {
+        if (!(value instanceof ExpressionValue expression)
+            || programs.containsKey(expression.expression())) {
+          continue;
+        }
+        // Keyed per operand, so the diagnostic lands on the line the expression is written on
+        // rather than on the rule's id. The DSL registers the matching key at the same pointer.
+        final String where = rule.id() + ": expression " + expression.expression();
+        if (!checkAliases(where, expression.referencedAliases(), bound)) {
+          continue;
+        }
+        try {
+          final CompiledExpression program =
+              options.expressions().compileValue(expression.expression(), bound);
+          if (withinBudget(where, expression.expression(), program)) {
+            programs.put(expression.expression(), program);
+          }
+        } catch (final ExpressionCompilationException rejected) {
+          diagnostics.add(where + ": " + rejected.getMessage());
+        }
+      }
+      if (action instanceof InsertFact insert) {
+        insert.alias().ifPresent(bound::add);
+      }
+    }
+    return programs;
+  }
+
+  /**
+   * Every value expression one action carries.
+   *
+   * @param action the action
+   * @return its values, in declaration order
+   */
+  private static List<ValueExpr> valuesOf(final ActionDefinition action) {
+    return switch (action) {
+      case SetField set -> List.of(set.value());
+      case InsertFact insert -> insert.payload().stream().map(PayloadField::value).toList();
+      case Emit emit -> emit.payload().stream().map(PayloadField::value).toList();
+      case CallFunction call -> call.args().stream().map(PayloadField::value).toList();
+      case RetractFact ignored -> List.of();
+    };
+  }
+
+  /**
+   * Checks that an expression reads only aliases the rule binds.
+   *
+   * @param where the diagnostic prefix
+   * @param referenced the aliases the expression reads
+   * @param bound every alias the rule binds
+   * @return true when every referenced alias is bound
+   */
+  private boolean checkAliases(final String where, final Set<String> referenced,
+      final Set<String> bound) {
+    boolean valid = true;
+    for (final String alias : referenced) {
+      if (!bound.contains(alias)) {
+        diagnostics.add(where + ": reads alias '" + alias + "', which this rule does not bind");
+        valid = false;
+      }
+    }
+    return valid;
+  }
+
+  /**
+   * Checks an expression's estimated cost against the configured budget (§6.4).
+   *
+   * @param where the diagnostic prefix
+   * @param expression the source text, for the message
+   * @param program the compiled expression
+   * @return true when the estimate is within budget
+   */
+  private boolean withinBudget(final String where, final String expression,
+      final CompiledExpression program) {
+    if (program.estimatedCost() <= options.expressionBudget()) {
+      return true;
+    }
+    diagnostics.add(where + ": estimated cost " + program.estimatedCost()
+        + " exceeds the configured budget of " + options.expressionBudget()
+        + " (expression: '" + expression + "'). Note that a budget bounds ONE evaluation, and an"
+        + " unindexed condition is evaluated once per candidate (§6.4)");
+    return false;
   }
 
   /**

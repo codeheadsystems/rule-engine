@@ -4,6 +4,7 @@ import com.codeheadsystems.rules.access.Paths;
 import com.codeheadsystems.rules.rule.ActionDefinition;
 import com.codeheadsystems.rules.rule.CallFunction;
 import com.codeheadsystems.rules.rule.Emit;
+import com.codeheadsystems.rules.rule.ExpressionValue;
 import com.codeheadsystems.rules.rule.FieldRef;
 import com.codeheadsystems.rules.rule.InsertFact;
 import com.codeheadsystems.rules.rule.Literal;
@@ -148,6 +149,16 @@ final class Actions {
    */
   private static Optional<ValueExpr> valueOf(final JsonNode value, final String pointer,
       final Diagnostics diagnostics) {
+    if (References.isExpression(value)) {
+      /*
+       * §6.4 on the right-hand side. The aliases are left empty here on purpose: this layer parses
+       * syntax and the expression's variables are the compiler's business, which is where they are
+       * checked against what the rule binds. Guessing them by scanning the source text would be a
+       * second, worse parser for a language this module does not implement.
+       */
+      return References.readExpression(value, pointer, diagnostics)
+          .map(source -> new ExpressionValue(source, java.util.Set.of()));
+    }
     if (References.isRef(value)) {
       return References.readRef(value, pointer, diagnostics)
           .flatMap(ref -> path(ref.field(), pointer, diagnostics)

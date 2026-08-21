@@ -407,8 +407,8 @@ class DslDiagnosticsTest {
   class Condition {
 
     @Test
-    @DisplayName("is rejected by name, saying where it arrives rather than 'unknown key'")
-    void conditionNotImplemented() {
+    @DisplayName("without a registered compiler, says so against the line that used it")
+    void conditionNeedsACompiler() {
       final DslDiagnostic diagnostic = only("""
           apiVersion: rules.v1
           rules:
@@ -420,9 +420,13 @@ class DslDiagnosticsTest {
               then: [{ action: emit, event: e }]
           """);
 
-      assertThat(diagnostic.error()).isEqualTo(DslError.CONDITION_NOT_IMPLEMENTED);
-      assertThat(diagnostic.message()).contains("-cel");
-      assertThat(diagnostic.location().orElseThrow().line()).isEqualTo(7);
+      // §6.4 makes the escape hatch an opt-in cost of a dependency as well as of evaluation, so
+      // its absence is a compile error naming the module -- located, like every other diagnostic.
+      assertThat(diagnostic.error()).isEqualTo(DslError.SEMANTIC);
+      assertThat(diagnostic.message()).contains("rule-engine-cel");
+      assertThat(diagnostic.location().orElseThrow().line())
+          .as("the condition's own line, not the rule's id -- expression text most needs a line")
+          .isEqualTo(7);
     }
   }
 
@@ -534,13 +538,7 @@ class DslDiagnosticsTest {
           when: [{ fact: Order, as: o }]
           then: [{ action: setField, target: o, field: "a..b", value: 1 }]
       """,
-      """
-      apiVersion: rules.v1
-      rules:
-        - id: uses-cel
-          when: [{ fact: Order, as: o, condition: "o.total > 1" }]
-          then: [{ action: emit, event: e }]
-      """,
+
       """
       apiVersion: rules.v1
       rules:

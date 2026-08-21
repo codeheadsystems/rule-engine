@@ -36,68 +36,26 @@ class DocExamplesTest {
   /** The project root, for README, which makes the same promise its Java example does. */
   private static final Path ROOT = Path.of("..");
 
-  /**
-   * One rule file lifted out of a document.
-   *
-   * @param file the document it came from
-   * @param line the 1-based line the block starts on, so a failure is navigable
-   * @param yaml the block's text
-   */
-  private record Example(String file, int line, String yaml) {
-
-    private String describe() {
-      return file + ":" + line;
-    }
-  }
-
-  private static List<Example> examplesIn(final String fileName) throws IOException {
-    return examplesIn(fileName.equals("README.md") ? ROOT : DOCS, fileName);
-  }
-
-  private static List<Example> examplesIn(final Path directory, final String fileName)
-      throws IOException {
+  private static List<DocExamples.Example> examplesIn(final String fileName) throws IOException {
+    final Path directory = fileName.equals("README.md") ? ROOT : DOCS;
     final Path path = directory.resolve(fileName);
     assertThat(path).as("the documentation moved; this test needs to move with it").exists();
-
-    final List<String> lines = Files.readAllLines(path, StandardCharsets.UTF_8);
-    final List<Example> found = new ArrayList<>();
-    int index = 0;
-    while (index < lines.size()) {
-      if (!lines.get(index).strip().equals("```yaml")) {
-        index++;
-        continue;
-      }
-      final int start = index + 1;
-      int end = start;
-      while (end < lines.size() && !lines.get(end).strip().equals("```")) {
-        end++;
-      }
-      final List<String> body = lines.subList(start, Math.min(end, lines.size()));
-      if (!body.isEmpty() && body.getFirst().strip().startsWith("apiVersion:")) {
-        found.add(new Example(fileName, start + 1, String.join("\n", body) + "\n"));
-      }
-      index = end + 1;
-    }
-    return found;
-  }
-
-  /**
-   * How many complete rule files a document claims to contain.
-   *
-   * @param fileName the document
-   * @return the number of lines starting an {@code apiVersion:} block
-   * @throws IOException if the document cannot be read
-   */
-  private static int declaredRuleFilesIn(final String fileName) throws IOException {
-    final Path directory = fileName.equals("README.md") ? ROOT : DOCS;
-    return (int) Files.readAllLines(directory.resolve(fileName), StandardCharsets.UTF_8).stream()
-        .filter(line -> line.strip().startsWith("apiVersion:"))
-        .count();
+    return DocExamples.in(path);
   }
 
   private static void assertEveryExampleCompiles(final String fileName, final int atLeast)
       throws IOException {
-    final List<Example> examples = examplesIn(fileName);
+    final List<DocExamples.Example> all = examplesIn(fileName);
+    /*
+     * Examples using §6.4's escape hatch need a registered ExpressionCompiler, and -testkit does
+     * not depend on -cel: that module brings protobuf, guava and antlr, which have no business on
+     * the classpath of every consumer of this harness. CelDocExamplesTest compiles exactly those,
+     * and the two counts are asserted against each other below so neither side can quietly stop
+     * covering its half.
+     */
+    final List<DocExamples.Example> examples = all.stream()
+        .filter(example -> !example.needsExpressionCompiler())
+        .toList();
 
     /*
      * A floor rather than an exact count, so adding an example does not fail the build -- but a
@@ -108,11 +66,12 @@ class DocExamplesTest {
     assertThat(examples)
         .as("no complete rule files found in %s -- has the fence convention changed?", fileName)
         .hasSizeGreaterThanOrEqualTo(atLeast);
-    assertThat(examples)
+    assertThat(all)
         .as("%s contains rule files this test did not collect", fileName)
-        .hasSize(declaredRuleFilesIn(fileName));
+        .hasSize(DocExamples.declaredIn(
+            (fileName.equals("README.md") ? ROOT : DOCS).resolve(fileName)));
 
-    for (final Example example : examples) {
+    for (final DocExamples.Example example : examples) {
       assertThatCode(() -> RuleFiles.compile(RuleSource.yaml(example.describe(), example.yaml())))
           .as("the rule file printed at %s does not compile:%n%s",
               example.describe(), example.yaml())
@@ -171,7 +130,7 @@ class DocExamplesTest {
     @Test
     @DisplayName("and is the same rule as the Java example beside it, down to the version hash")
     void readmeYamlMatchesReadmeJava() throws IOException {
-      final Example yaml = examplesIn("README.md").stream()
+      final DocExamples.Example yaml = examplesIn("README.md").stream()
           .filter(example -> example.yaml().contains("id: high-value-order-review"))
           .findFirst()
           .orElseThrow(() -> new AssertionError("README no longer prints the worked rule file"));
@@ -217,7 +176,7 @@ class DocExamplesTest {
     @Test
     @DisplayName("fires and emits exactly what the guide says it does")
     void guideExampleBehavesAsDocumented() throws IOException {
-      final Example joined = examplesIn("dsl-guide.md").stream()
+      final DocExamples.Example joined = examplesIn("dsl-guide.md").stream()
           .filter(example -> example.yaml().contains("id: high-value-order-review"))
           .findFirst()
           .orElseThrow(() -> new AssertionError(
@@ -245,7 +204,7 @@ class DocExamplesTest {
     @Test
     @DisplayName("the flattening example finds the bulk line item and not the small one")
     void flatteningExampleBehavesAsDocumented() throws IOException {
-      final Example bulk = examplesIn("dsl-guide.md").stream()
+      final DocExamples.Example bulk = examplesIn("dsl-guide.md").stream()
           .filter(example -> example.yaml().contains("id: bulk-line-item"))
           .findFirst()
           .orElseThrow(() -> new AssertionError(

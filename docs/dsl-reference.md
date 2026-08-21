@@ -579,22 +579,116 @@ set, which has no beta network — join order is chosen fresh each fire cycle ra
 as a graph. `sharing.joinEdges` is what v1 can honestly say about join complexity. A real
 `joinNodes` arrives with the Rete shape in Phase 3.
 
-## Not implemented yet
+## The expression escape hatch
 
-`condition:` is accepted by the schema and rejected by the compiler with
-`condition-not-implemented`, so that you get a message naming the feature rather than "unknown key".
+For boolean logic operator maps make awkward — nested AND/OR/NOT, arithmetic across fields — there
+is an opt-in expression form backed by [CEL](https://cel.dev/). It is deliberately *not* the default:
+§6.3 keeps the indexable path the one you get without asking.
 
-```yaml
-when:
-  - fact: Order
-    as: o
-    condition: "o.total > 10000 && o.region in ['US','EU']"   # not yet
+**It needs the `rule-engine-cel` module and an explicit registration.** Without them, a rule using an
+expression is a compile error naming what is missing:
+
+```java
+CompiledRuleSet rules = RuleFiles.compile(sources,
+    CompilerOptions.builder()
+        .expressions(CelExpressions.create())
+        .expressionBudget(500)              // optional; caps one expression's estimated cost
+        .build());
 ```
 
-It arrives with the `-cel` module, backed by CEL — non-Turing-complete, guaranteed to terminate, and
-cost-bounded at both compile and run time. It will deliberately bypass indexing, which is why it is
-an escape hatch and not a default.
+### `condition:` — on the left
 
-Also deferred, each with an interim answer in §1 of the spec: negation (`NOT_EXISTS`), accumulation,
-backward chaining, truth maintenance, and temporal operators. The short version of all of them is
-the same: compute it at ingestion and insert the answer as a fact.
+```yaml
+apiVersion: rules.v1
+rules:
+  - id: interesting-order
+    when:
+      - fact: Order
+        as: o
+        where:
+          region: { eq: "US" }                                   # still indexed
+        condition: "o.subtotal > 50 && (o.tier in ['A','B'] || o.priorityFlag)"
+    then:
+      - action: emit
+        event: interesting
+```
+
+A condition may read any alias the rule binds, so it spans facts as freely as a `$ref` does. It sits
+beside operator maps rather than replacing them — and it should, because the operator maps are what
+still narrow the search.
+
+**A condition is an unindexed post-filter.** It is evaluated once per candidate match, after the
+indexed work has cut the field down. That is the visible cost the escape hatch is meant to carry, and
+it is why it appears in the compiler report as `CEL_EXPRESSION`. Keep the indexable constraints doing
+the narrowing and let the condition express only what they cannot.
+
+### `$expr` — on the right
+
+```yaml
+then:
+  - action: setField
+    target: o
+    field: band
+    value: { $expr: "o.subtotal > 50 ? 'HIGH' : 'LOW'" }
+  - action: emit
+    event: priced
+    payload:
+      total: { $expr: "o.subtotal + o.tax" }
+```
+
+`$expr` joins `$ref` as a recognised `$`-prefixed key, with the same rules: it must be the whole
+operand, `$$expr` writes a literal field named `$expr`, and a bare `$expr` nested inside a literal is
+an error.
+
+**An expression on the right is much cheaper than one on the left** — it runs once per *firing*, not
+once per candidate. It is also the reason to reach for `callFunction` less: computing
+`subtotal + tax` used to need it, and `callFunction` runs at commit and is explicitly not
+transactional, so a pure computation had to be bought with the one action that can leave half-applied
+state behind.
+
+### Three things to know
+
+**An absent field is an error, not a false.** This is the sharpest difference between the two halves
+of this DSL. An operator map treats absence as a value — §2.6.1 makes `eq` false and `ne` true
+against it. CEL treats a missing key as an evaluation error. Guard it the way CEL does:
+
+```yaml
+condition: "has(o.coupon) && o.coupon != ''"
+```
+
+An *explicit* null is different and does work: it arrives as CEL's `null`, so `o.closedAt == null`
+behaves as you would expect. Comparing a null with `>` is still an error, as it is in CEL generally.
+
+**A condition that fails to evaluate stops the fire cycle.** There is no per-match error policy on
+the left-hand side — `RhsErrorHandler` governs actions, and a condition runs while the conflict set
+is being built. The exception names the rule, the alias and the expression. This is the strongest
+reason to keep conditions simple and guard what they read.
+
+**Comparisons work across integers and decimals; mixed *arithmetic* does not.** `o.price > 100`
+holds whether `price` is `150` or `150.5`. But CEL has no `int + double` overload, so
+`o.subtotal + o.tax` fails if one is `10` and the other `1.5` — convert explicitly:
+`double(o.subtotal) + o.tax`. §2.6.2 canonicalises through `BigDecimal` and CEL has no such type, so
+integral values within `long` range are exact and everything else goes through `double`. Compute
+money before the fact reaches the engine.
+
+**An expression must produce something JSON can hold.** A CEL `null`, number, string, boolean, list
+or map is fine. A `type()`, a `bytes` or a `duration` is refused with an error rather than written
+into the fact as a string — quietly storing `"NULL_VALUE"` where a null belonged is the failure that
+rule is there to prevent.
+
+**Cost is bounded at both ends, and neither bound is a promise about time.** A compile-time estimate
+is checked against `expressionBudget`; at run time, comprehension iterations, parse depth and node
+count are capped. CEL guarantees *termination*, not linear time — nested comprehensions over two
+lists are O(n·m), which is what the iteration cap exists for. And note what a per-expression budget
+does not bound: how many times the engine runs it. An unindexed condition against 100,000 facts is
+100,000 evaluations, each within budget.
+
+Expressions cannot read a clock, a random source, or anything outside the facts bound to the rule's
+aliases. That is not incidental — §7.3's determinism contract depends on it. If a rule needs the
+time, insert it as a fact.
+
+## Not implemented yet
+
+Deferred, each with an interim answer in §1 of the spec: negation (`NOT_EXISTS`), accumulation,
+backward chaining, truth maintenance, and temporal operators. The short version of all of them is the
+same: compute it at ingestion and insert the answer as a fact.

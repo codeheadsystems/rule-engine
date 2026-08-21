@@ -2,6 +2,7 @@ package com.codeheadsystems.rules.testkit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.codeheadsystems.rules.compiler.CompilerOptions;
 import com.codeheadsystems.rules.compiler.RuleCompiler;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.RuleSession;
@@ -54,7 +55,23 @@ public final class ShuffleHarness {
    */
   public static FiringSequence assertDeterministic(final List<RuleDefinition> rules,
       final Consumer<RuleSession> scenario) {
-    return assertDeterministic(rules, scenario, DEFAULT_PERMUTATIONS, SessionOptions.defaults());
+    return assertDeterministic(rules, scenario, DEFAULT_PERMUTATIONS, SessionOptions.defaults(),
+        CompilerOptions.defaults());
+  }
+
+  /**
+   * Asserts that a scenario produces one firing sequence regardless of rule declaration order.
+   *
+   * @param rules the rule set
+   * @param scenario what to do to the session before firing
+   * @param compilerOptions how to compile -- needed by any rule set that registers an expression
+   *     compiler (§6.4) or fact schemas (§2.3)
+   * @return the firing sequence every permutation produced
+   */
+  public static FiringSequence assertDeterministic(final List<RuleDefinition> rules,
+      final Consumer<RuleSession> scenario, final CompilerOptions compilerOptions) {
+    return assertDeterministic(rules, scenario, DEFAULT_PERMUTATIONS, SessionOptions.defaults(),
+        compilerOptions);
   }
 
   /**
@@ -69,14 +86,30 @@ public final class ShuffleHarness {
   public static FiringSequence assertDeterministic(final List<RuleDefinition> rules,
       final Consumer<RuleSession> scenario, final int permutations,
       final SessionOptions options) {
-    final FiringSequence expected = run(rules, scenario, options);
+    return assertDeterministic(rules, scenario, permutations, options, CompilerOptions.defaults());
+  }
+
+  /**
+   * Asserts that a scenario produces one firing sequence regardless of rule declaration order.
+   *
+   * @param rules the rule set
+   * @param scenario what to do to the session before firing
+   * @param permutations how many orderings to try. The seed is fixed, so a failure reproduces
+   * @param options the session configuration
+   * @param compilerOptions how to compile
+   * @return the firing sequence every permutation produced
+   */
+  public static FiringSequence assertDeterministic(final List<RuleDefinition> rules,
+      final Consumer<RuleSession> scenario, final int permutations,
+      final SessionOptions options, final CompilerOptions compilerOptions) {
+    final FiringSequence expected = run(rules, scenario, options, compilerOptions);
     // A fixed seed: a determinism test that is itself non-deterministic reports a different
     // permutation every time it fails, which makes the failure much harder to act on.
     final Random shuffler = new Random(20250820L);
     for (int attempt = 0; attempt < permutations; attempt++) {
       final List<RuleDefinition> permuted = new ArrayList<>(rules);
       Collections.shuffle(permuted, shuffler);
-      final FiringSequence actual = run(permuted, scenario, options);
+      final FiringSequence actual = run(permuted, scenario, options, compilerOptions);
       assertThat(actual)
           .describedAs(
               "firing sequence changed when the rules were declared in a different order "
@@ -97,10 +130,12 @@ public final class ShuffleHarness {
    * @param rules the rule set, in some order
    * @param scenario what to do to the session before firing
    * @param options the session configuration
+   * @param compilerOptions how to compile
    * @return the firing sequence
    */
   private static FiringSequence run(final List<RuleDefinition> rules,
-      final Consumer<RuleSession> scenario, final SessionOptions options) {
-    return Engine.run(RuleCompiler.compile(rules), options, scenario);
+      final Consumer<RuleSession> scenario, final SessionOptions options,
+      final CompilerOptions compilerOptions) {
+    return Engine.run(RuleCompiler.compile(rules, compilerOptions), options, scenario);
   }
 }

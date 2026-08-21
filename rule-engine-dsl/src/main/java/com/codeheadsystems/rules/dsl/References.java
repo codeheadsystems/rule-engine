@@ -37,6 +37,9 @@ final class References {
   /** The reference key. */
   static final String REF = "$ref";
 
+  /** The expression key of §6.4, which sits in the same operand position as {@link #REF}. */
+  static final String EXPR = "$expr";
+
   private References() {
     throw new UnsupportedOperationException("no instances");
   }
@@ -63,6 +66,41 @@ final class References {
   }
 
   /**
+   * Whether a value is in the shape of a §6.4 expression.
+   *
+   * @param operand the value
+   * @return true when it is an object carrying an {@code $expr} key
+   */
+  static boolean isExpression(final JsonNode operand) {
+    return operand != null && operand.isObject() && operand.has(EXPR);
+  }
+
+  /**
+   * Reads an expression operand.
+   *
+   * @param operand the value, already known to be {@linkplain #isExpression expression-shaped}
+   * @param pointer the operand's JSON Pointer, for diagnostics
+   * @param diagnostics collects problems
+   * @return the expression source, or empty when it was malformed
+   */
+  static Optional<String> readExpression(final JsonNode operand, final String pointer,
+      final Diagnostics diagnostics) {
+    if (operand.size() > 1) {
+      diagnostics.error(DslError.MALFORMED_OPERAND, pointer,
+          "an $expr is the whole operand; this one also carries " + otherKeys(operand, EXPR));
+      return Optional.empty();
+    }
+    final JsonNode source = operand.get(EXPR);
+    if (!source.isTextual()) {
+      diagnostics.error(DslError.MALFORMED_OPERAND, pointer,
+          "an $expr holds expression source as a string, got "
+              + source.getNodeType().toString().toLowerCase(Locale.ROOT));
+      return Optional.empty();
+    }
+    return Optional.of(source.textValue());
+  }
+
+  /**
    * Reads a reference operand.
    *
    * @param operand the value, already known to be {@linkplain #isRef reference-shaped}
@@ -74,7 +112,7 @@ final class References {
       final Diagnostics diagnostics) {
     if (operand.size() > 1) {
       diagnostics.error(DslError.MALFORMED_REFERENCE, pointer,
-          "a $ref is the whole operand; this one also carries " + otherKeys(operand)
+          "a $ref is the whole operand; this one also carries " + otherKeys(operand, REF)
               + ". §6.2.3 reserves that shape for later use, and this engine does not implement it");
       return Optional.empty();
     }
@@ -186,6 +224,10 @@ final class References {
       final String childPointer = pointer + "/" + key.replace("~", "~0").replace("/", "~1");
       if (key.startsWith("$$")) {
         rewritten.set(key.substring(1), unescape(field.getValue(), childPointer, diagnostics));
+      } else if (EXPR.equals(key)) {
+        diagnostics.error(DslError.MALFORMED_OPERAND, childPointer,
+            "an $expr is only meaningful as a whole operand, not nested inside a literal."
+                + " Write $$expr if you meant a literal field named '$expr'");
       } else if (REF.equals(key)) {
         diagnostics.error(DslError.MALFORMED_REFERENCE, childPointer,
             "a $ref is only meaningful as a whole operand, not nested inside a literal."
@@ -206,12 +248,13 @@ final class References {
    * Names the keys accompanying a {@code $ref}, for the diagnostic that rejects them.
    *
    * @param operand the reference-shaped operand
+   * @param own the key that belongs there, and so is not reported
    * @return the other keys, quoted and comma-separated
    */
-  private static String otherKeys(final JsonNode operand) {
+  private static String otherKeys(final JsonNode operand, final String own) {
     return operand.properties().stream()
         .map(Map.Entry::getKey)
-        .filter(key -> !REF.equals(key))
+        .filter(key -> !own.equals(key))
         .map(key -> "'" + key + "'")
         .collect(Collectors.joining(", "));
   }

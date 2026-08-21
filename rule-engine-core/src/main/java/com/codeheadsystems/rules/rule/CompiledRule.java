@@ -1,6 +1,8 @@
 package com.codeheadsystems.rules.rule;
 
+import com.codeheadsystems.rules.expr.CompiledExpression;
 import com.fasterxml.jackson.core.JsonPointer;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
@@ -32,6 +34,7 @@ import java.util.Set;
  * @param testedPaths per fact type, the paths <em>this rule</em> reads. This is
  *     {@link TestedPaths#forRule}'s backing, and its per-rule scoping is what keeps refraction
  *     invalidation from clearing a rule because an unrelated rule's field changed (§4.4)
+ * @param valueExpressions the compiled §6.4 expressions this rule's actions use, by source text
  * @param source the definition, kept for diagnostics and §7.2's explanations
  */
 public record CompiledRule(
@@ -42,6 +45,7 @@ public record CompiledRule(
     java.util.List<CompiledPattern> patterns,
     java.util.List<ActionDefinition> actions,
     Map<String, Set<JsonPointer>> testedPaths,
+    Map<String, CompiledExpression> valueExpressions,
     RuleDefinition source) {
 
   /**
@@ -54,6 +58,7 @@ public record CompiledRule(
    * @param patterns the compiled LHS
    * @param actions the RHS
    * @param testedPaths the per-type paths this rule reads
+   * @param valueExpressions the compiled §6.4 expressions its actions use, by source text
    * @param source the originating definition
    */
   public CompiledRule {
@@ -67,6 +72,13 @@ public record CompiledRule(
     final Map<String, Set<JsonPointer>> frozen = new LinkedHashMap<>();
     testedPaths.forEach((factType, paths) -> frozen.put(factType, Set.copyOf(paths)));
     testedPaths = Map.copyOf(frozen);
+    /*
+     * Insertion-ordered, not Map.copyOf: that factory salts its iteration order per JVM, and
+     * ReportBuilder walks these values to build §7.4's CelCost list. Firing determinism was never
+     * at risk -- only get() is on the agenda path -- but a report a build asserts on has to be the
+     * same report twice.
+     */
+    valueExpressions = Collections.unmodifiableMap(new LinkedHashMap<>(valueExpressions));
   }
 
   /**
@@ -86,5 +98,22 @@ public record CompiledRule(
       types.add(pattern.factType());
     }
     return types;
+  }
+
+  /**
+   * Whether any of this rule's patterns carries a §6.4 condition.
+   *
+   * <p>Asked once per recomputation so that a rule set using no expressions -- which is every rule
+   * set that has not opted into §6.4's cost -- pays nothing for the post-filter beyond this check.
+   *
+   * @return true when at least one pattern has a compiled condition
+   */
+  public boolean hasExpressionTests() {
+    for (final CompiledPattern pattern : patterns) {
+      if (!pattern.expressionTests().isEmpty()) {
+        return true;
+      }
+    }
+    return false;
   }
 }

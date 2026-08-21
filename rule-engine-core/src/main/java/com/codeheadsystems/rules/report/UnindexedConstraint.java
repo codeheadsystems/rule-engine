@@ -63,8 +63,10 @@ public record UnindexedConstraint(String ruleId, String alias, String field, Rea
     /**
      * A CEL {@code condition}, which §6.4 makes an explicit, visible cost.
      *
-     * <p>Never produced in v1: the escape hatch arrives with the {@code -cel} module, and until
-     * then a {@code condition} is a compile error rather than an unindexed constraint.
+     * <p>Produced whenever a rule carries a {@code condition}. §6.4 makes an expression an
+     * unindexed post-filter by design -- there is no index for it to have used -- so this is the
+     * cost being visible rather than a problem to fix, and the reason to keep the indexable
+     * constraints beside it doing the narrowing.
      */
     CEL_EXPRESSION,
 

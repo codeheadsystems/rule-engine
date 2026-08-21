@@ -74,9 +74,6 @@ public enum DslError {
    */
   MALFORMED_ACTION("malformed-action"),
 
-  /** The CEL escape hatch of §6.4, which arrives with the {@code -cel} module. */
-  CONDITION_NOT_IMPLEMENTED("condition-not-implemented"),
-
   /**
    * A diagnostic from {@link com.codeheadsystems.rules.compiler.RuleCompiler}, re-reported against
    * the line that caused it.
