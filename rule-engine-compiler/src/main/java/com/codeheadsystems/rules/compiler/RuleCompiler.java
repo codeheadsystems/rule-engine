@@ -131,6 +131,7 @@ public final class RuleCompiler {
     }
     return new DefaultCompiledRuleSet(
         compiled,
+        NetworkBuilder.build(compiled),
         new DefaultTestedPaths(pathsByType, pathsByRule, inverse),
         version(rules));
   }

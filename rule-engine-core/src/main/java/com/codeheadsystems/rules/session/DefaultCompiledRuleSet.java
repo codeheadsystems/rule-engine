@@ -1,5 +1,6 @@
 package com.codeheadsystems.rules.session;
 
+import com.codeheadsystems.rules.network.Network;
 import com.codeheadsystems.rules.rule.CompiledRule;
 import com.codeheadsystems.rules.rule.TestedPaths;
 import java.util.List;
@@ -16,6 +17,7 @@ import java.util.Objects;
 public final class DefaultCompiledRuleSet implements CompiledRuleSet {
 
   private final List<CompiledRule> rules;
+  private final Network network;
   private final TestedPaths testedPaths;
   private final String version;
 
@@ -23,12 +25,14 @@ public final class DefaultCompiledRuleSet implements CompiledRuleSet {
    * Creates a compiled rule set. Produced by the compiler; not usually constructed by hand.
    *
    * @param rules the compiled rules, in compilation order
+   * @param network the compiled matching network
    * @param testedPaths which payload paths the rule set reads
    * @param version a content hash of the source rules plus the compiler version (§5.6)
    */
-  public DefaultCompiledRuleSet(final List<CompiledRule> rules, final TestedPaths testedPaths,
-      final String version) {
+  public DefaultCompiledRuleSet(final List<CompiledRule> rules, final Network network,
+      final TestedPaths testedPaths, final String version) {
     this.rules = List.copyOf(rules);
+    this.network = Objects.requireNonNull(network, "network");
     this.testedPaths = Objects.requireNonNull(testedPaths, "testedPaths");
     this.version = Objects.requireNonNull(version, "version");
   }
@@ -46,6 +50,11 @@ public final class DefaultCompiledRuleSet implements CompiledRuleSet {
   @Override
   public List<CompiledRule> rules() {
     return rules;
+  }
+
+  @Override
+  public Network network() {
+    return network;
   }
 
   @Override

@@ -50,6 +50,7 @@ public final class SessionOptions {
   private final boolean strict;
   private final boolean dryRun;
   private final int runnersUpLimit;
+  private final MatchingStrategy matching;
 
   private SessionOptions(final Builder builder) {
     this.limits = builder.limits;
@@ -61,6 +62,7 @@ public final class SessionOptions {
     this.strict = builder.strict;
     this.dryRun = builder.dryRun;
     this.runnersUpLimit = builder.runnersUpLimit;
+    this.matching = builder.matching;
   }
 
   /**
@@ -184,6 +186,15 @@ public final class SessionOptions {
   }
 
   /**
+   * Which matcher this session uses.
+   *
+   * @return the strategy; {@link MatchingStrategy#NETWORK} unless overridden
+   */
+  public MatchingStrategy matching() {
+    return matching;
+  }
+
+  /**
    * Whether the runners-up list should be populated at all.
    *
    * <p>Computing it means ranking the eligible activations rather than selecting the maximum, so it
@@ -207,6 +218,7 @@ public final class SessionOptions {
     private boolean strict = Boolean.getBoolean(STRICT_PROPERTY);
     private boolean dryRun;
     private int runnersUpLimit = DEFAULT_RUNNERS_UP_LIMIT;
+    private MatchingStrategy matching = MatchingStrategy.NETWORK;
 
     /** Creates a builder carrying the defaults. */
     private Builder() {
@@ -317,6 +329,17 @@ public final class SessionOptions {
      */
     public Builder runnersUpLimit(final int value) {
       this.runnersUpLimit = value;
+      return this;
+    }
+
+    /**
+     * Selects the matcher.
+     *
+     * @param value the strategy. {@link MatchingStrategy#NAIVE} is the oracle and is far slower
+     * @return this builder
+     */
+    public Builder matching(final MatchingStrategy value) {
+      this.matching = Objects.requireNonNull(value, "matching");
       return this;
     }
 

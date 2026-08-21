@@ -288,11 +288,9 @@ public final class DefaultWorkingMemory implements WorkingMemory {
   /**
    * Step 1 of §3.4.1: which of the type's tested paths differ between two payloads.
    *
-   * <p>This is {@code O(|tested-path set|)} traversals plus a structural comparison per path, and
-   * that set is the union across all rules for the type -- so it grows with the rule set rather
-   * than with the update. §3.4.2's second mitigation, a prefix trie that walks both payloads
-   * together and stops wherever the two nodes are equal, replaces this loop in Phase 1. This
-   * straightforward version is the oracle that trie is written against.
+   * <p>Delegated to the compiled tested-path artifact, which chooses how to answer it: a prefix
+   * trie proportional to the size of the change (§3.4.2), or the straightforward probe loop that
+   * remains the interface's default and the trie's oracle.
    *
    * @param type the fact type
    * @param oldPayload the payload as stored
@@ -301,13 +299,7 @@ public final class DefaultWorkingMemory implements WorkingMemory {
    */
   private Set<JsonPointer> changedTestedPaths(
       final String type, final JsonNode oldPayload, final JsonNode newPayload) {
-    final Set<JsonPointer> changed = new LinkedHashSet<>();
-    for (final JsonPointer path : testedPaths.forType(type)) {
-      if (!oldPayload.at(path).equals(newPayload.at(path))) {
-        changed.add(path);
-      }
-    }
-    return changed;
+    return testedPaths.changedPaths(type, oldPayload, newPayload);
   }
 
   /**

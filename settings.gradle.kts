@@ -16,4 +16,5 @@ rootProject.name = "rule-engine"
 // them (§9: Phase 5 for the DSL front-end, Phase 1 for the tracing listeners).
 include("rule-engine-core")
 include("rule-engine-compiler")
+include("rule-engine-observability")
 include("rule-engine-testkit")

@@ -7,26 +7,33 @@ high-concurrency evaluation the default rather than an afterthought.
 The design is specified in full in [`docs/rule-engine-spec.md`](docs/rule-engine-spec.md). This
 README covers what is built and how to run it.
 
-## Status: Phase 0
+## Status: Phase 1
 
-Phase 0 of the spec's roadmap (§9) is complete: the **naive matcher**, deliberately unoptimised.
-It has no network, no indexes and no incremental maintenance, and its cost is
-`O(rules × facts^arity)`.
+Phases 0 and 1 of the spec's roadmap (§9) are complete.
 
-That is the point. Phase 0 is the **correctness oracle** every later phase is differential-tested
-against, and the baseline that proves each optimisation actually helped. The spec's own reading
-instructions say to build it before reading the matching-algorithm section, and §11.5 makes the
-same argument from the other side: Phase 3's exit criterion is that two matching strategies produce
-identical firing sequences, and establishing that against a shipped, exercised implementation beats
-anticipating in a design document which mechanisms two hypothetical implementations would share.
+**Phase 0** is the **naive matcher**: no network, no indexes, no incremental maintenance, and a cost
+of `O(rules × facts^arity)`. It is deliberately unoptimised and it is still shipped, because it is
+the **correctness oracle** every later phase is differential-tested against. §11.5's exit criterion
+for Phase 3 — that two matching strategies produce identical firing sequences — is only checkable
+against an implementation that still exists and still runs. Select it with
+`SessionOptions.matching(MatchingStrategy.NAIVE)`; never in production.
+
+**Phase 1** is the **alpha network**: one shared node per *distinct* constraint (ten rules
+expressing two constraints compile to two nodes, evaluated once per fact), per-pattern memories
+holding exactly what matches, hash and sorted indexes on the paths joins probe, §3.4.2's prefix
+trie for the update diff, and the tracing and Flight Recorder listeners.
+
+The two matchers are held to agreement by a differential suite covering retraction, join-key churn,
+mutating right-hand sides and seeded random walks. The index is a *pure* optimisation: probe results
+are intersected with actual pattern membership, so a corrupt index is slow rather than wrong.
 
 **What works today:** single-fact and multi-fact (join) patterns, the full comparison semantics of
 §2.6.1, refraction, salience/recency conflict resolution, the gated retract-and-reassert `update`,
 RHS staging with the five actions, the firing loop with its work limits, dry runs, strict mode, and
 the determinism contract.
 
-**What does not, and where it arrives:** indexes and the alpha network (Phase 1), the TREAT join
-network and match explanations (Phase 2), streaming sessions and Rete joins (Phase 3), the
+**What does not, and where it arrives:** the TREAT join network and match explanations (Phase 2),
+streaming sessions and Rete joins (Phase 3), the concurrency helpers and hot reload (Phase 4), the
 JSON/YAML DSL and CEL (Phase 5). Negation, accumulation, truth maintenance and CEP are §1 non-goals
 with documented interim answers. Rules are written in Java until the DSL lands.
 
@@ -36,9 +43,10 @@ with documented interim answers. Rules are written in Java until the DSL lands.
 |---|---|
 | `rule-engine-core` | Fact model, working memory, matching primitives, agenda, refraction, sessions |
 | `rule-engine-compiler` | `RuleDefinition` → `CompiledRuleSet`: validation, accessor and pattern compilation, tested paths, version hash |
-| `rule-engine-testkit` | Fixtures, the firing-sequence oracle, the shuffle-determinism harness, JMH baselines |
+| `rule-engine-observability` | `TracingListener`, `JfrListener` |
+| `rule-engine-testkit` | Fixtures, the firing-sequence oracle, the shuffle-determinism and matcher-equivalence harnesses, JMH benchmarks |
 
-`-dsl`, `-schema`, `-cel` and `-observability` (§8) arrive with the phases that need them.
+`-dsl`, `-schema` and `-cel` (§8) arrive with the phases that need them.
 
 ## Example
 
@@ -104,7 +112,7 @@ Requires a JDK 25 toolchain; Gradle resolves one via the foojay plugin if it is 
 ./gradlew build        # compile, test, and the strict-mode test run
 ./gradlew test         # the suite
 ./gradlew strictTest   # the same suite with -Drules.strict=true (spec §7.5)
-./gradlew jmh          # Phase 0 baselines; see docs/phase0-baselines.md
+./gradlew jmh          # benchmarks; see docs/benchmarks.md
 ./gradlew javadoc      # warnings fail the build; several contracts live only in Javadoc
 ./gradlew testCodeCoverageReport   # aggregated coverage across all three modules
 ```

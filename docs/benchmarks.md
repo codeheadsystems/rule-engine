@@ -1,6 +1,6 @@
-# Phase 0 baselines
+# Benchmarks
 
-Recorded so that Phase 1 and Phase 2 have something to be measured against. Spec §10 asks for JMH
+Recorded so that each phase has something to be measured against. Spec §10 asks for JMH
 microbenchmarks per primitive plus end-to-end throughput; §9 makes each later phase's exit criterion
 a comparison, and a comparison needs a number from before.
 
@@ -79,3 +79,53 @@ can't scale." A repeat of this benchmark that still shows 61× is a Phase 2 that
   correctness of the concurrency model is covered (`SmokeTest.acrossSessionConcurrency`), and
   session creation is inside the `oneShotSession` figure, but the scaling curve is Phase 4's
   deliverable and belongs with it.
+
+
+---
+
+# Phase 1: the network vs the oracle
+
+Same harness, same machine, with the end-to-end benchmark parameterised by matcher so the two are
+compared directly rather than across separate runs.
+
+```
+Benchmark                        (facts)  (matcher)     Score        Error  Units
+Phase0Benchmarks.oneShotSession       10    NETWORK    15 361 ±        686  ns/op
+Phase0Benchmarks.oneShotSession       10      NAIVE    21 378 ±        861  ns/op
+Phase0Benchmarks.oneShotSession      100    NETWORK   454 843 ±     61 989  ns/op
+Phase0Benchmarks.oneShotSession      100      NAIVE 1 232 042 ±  1 746 044  ns/op
+```
+
+**Read the last row with the error bar in view.** At a hundred facts the naive figure's error is
+larger than the figure. Three two-second iterations is not enough to pin a lumpy unit of work like
+"allocate a session, insert two hundred facts, fire to completion", and the honest statement is that
+the network is somewhere between somewhat and several times faster there — not "2.7× faster".
+Lengthen the iterations before quoting a number to anyone.
+
+What the numbers do support:
+
+**The shape of the curve improved, which is the point.** Ten times the facts costs the naive matcher
+about 58× the time and the network about 30×. Both are still super-linear, and they should be: the
+join is still enumerate-then-filter. Phase 1 only made the *candidate sets* smaller. §4.1's TREAT
+join is Phase 2, and flattening this curve properly is its job.
+
+**Inserts got more expensive, and that is the trade, not a regression.** The ownership-transfer
+insert went from ~49ns per fact in Phase 0 to ~95ns, because an insert now evaluates the type's
+distinct alpha tests and files the fact into every pattern memory it belongs to. That is the whole
+Rete/TREAT bargain stated in §3.1 — work moves from fire time to insert time — and it is worth
+watching in a workload that inserts far more than it fires.
+
+**The microbenchmarks did not move**, as expected: comparison evaluation and the refraction probe
+are below the network, and neither phase touched them.
+
+## What is still not measured
+
+- **Node sharing's effect on insert cost.** The benchmark's rule set has almost no duplicate
+  constraints, so it exercises none of the sharing that §6.5's sublinearity claim is about. A rule
+  set with fifty rules testing the same three constraints is the shape that would show it, and it
+  is the shape a real deployment has. `NetworkStructureTest` asserts the sharing structurally; no
+  benchmark yet asserts it is worth anything.
+- **The prefix trie.** §3.4.2's whole argument is that the diff should cost the size of the change
+  rather than the size of the rule set, and the benchmark rule set has six tested paths — far too
+  few for the difference to appear. Needs a wide rule set and a high update rate.
+- **Concurrent multi-session throughput**, still Phase 4's deliverable.

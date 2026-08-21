@@ -271,7 +271,12 @@ public class Phase0Benchmarks {
     @Param({"10", "100"})
     public int facts;
 
+    /** Which matcher to measure. NAIVE is the Phase 0 oracle; NETWORK is Phase 1. */
+    @Param({"NETWORK", "NAIVE"})
+    public String matcher;
+
     private CompiledRuleSet ruleSet;
+    private com.codeheadsystems.rules.session.SessionOptions options;
 
     /** Compiles a small but representative rule set: one alpha rule and one join rule. */
     @Setup(Level.Trial)
@@ -287,6 +292,18 @@ public class Phase0Benchmarks {
           .then(actions -> actions.emit("review", "id", Rules.ref("o.id")))
           .build();
       ruleSet = RuleCompiler.compile(List.of(alphaOnly, withJoin));
+      options = com.codeheadsystems.rules.session.SessionOptions.builder()
+          .matching(com.codeheadsystems.rules.session.MatchingStrategy.valueOf(matcher))
+          .build();
+    }
+
+    /**
+     * The session configuration under test.
+     *
+     * @return the options
+     */
+    public com.codeheadsystems.rules.session.SessionOptions options() {
+      return options;
     }
 
     /**
@@ -306,16 +323,17 @@ public class Phase0Benchmarks {
    * session-creation cost, which section 5.5 calls the concurrency throughput ceiling -- the
    * constant multiplying every task in the across-session model.
    *
-   * <p>The join rule makes this quadratic in {@code facts} by construction. That is not a flaw in
-   * the benchmark; it is the naive matcher's actual cost, and it is the number Phase 2's indexed
-   * join has to beat.
+   * <p>Parameterised by matcher so the phases are compared directly rather than across separate
+   * runs on possibly different hardware. NAIVE is the Phase 0 oracle -- rescan and re-test every
+   * fact of a type, every fire cycle. NETWORK is Phase 1: pattern memories hold only what matches,
+   * and equality joins probe an index.
    *
    * @param state the prepared rule set
    * @return the fire result
    */
   @Benchmark
   public FireResult oneShotSession(final Matching state) {
-    try (RuleSession session = state.ruleSet().newSession()) {
+    try (RuleSession session = state.ruleSet().newSession(state.options())) {
       for (int index = 0; index < state.facts; index++) {
         session.insert("Order", Facts.obj(
             "id", index, "total", 25_000, "status", "PENDING", "customerId", index));

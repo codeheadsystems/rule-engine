@@ -12,6 +12,8 @@ import com.codeheadsystems.rules.listener.SuppressReason;
 import com.codeheadsystems.rules.match.Activation;
 import com.codeheadsystems.rules.match.ActivationKey;
 import com.codeheadsystems.rules.naive.NaiveAgenda;
+import com.codeheadsystems.rules.network.NetworkAgenda;
+import com.codeheadsystems.rules.network.SessionMemories;
 import com.codeheadsystems.rules.rhs.RhsErrorHandler;
 import com.codeheadsystems.rules.rhs.RhsExecutor;
 import com.codeheadsystems.rules.rhs.RhsResult;
@@ -39,6 +41,7 @@ public final class DefaultRuleSession implements RuleSession {
   private final UUID sessionId = SessionIds.newSessionId();
   private final RefractionMemory refraction = new RefractionMemory();
   private final DefaultWorkingMemory workingMemory;
+  private final SessionMemories memories;
   private final Agenda agenda;
   private final EventSink events;
   private final RhsExecutor rhs;
@@ -58,8 +61,12 @@ public final class DefaultRuleSession implements RuleSession {
     this.options = options;
     this.workingMemory =
         new DefaultWorkingMemory(ruleSet.testedPaths(), new Observer(), options.strict());
-    this.agenda = new NaiveAgenda(ruleSet.rules(), workingMemory, refraction,
-        options.conflictResolution(), options.listeners(), options.strict());
+    this.memories = new SessionMemories(ruleSet.network());
+    this.agenda = options.matching() == MatchingStrategy.NAIVE
+        ? new NaiveAgenda(ruleSet.rules(), workingMemory, refraction,
+            options.conflictResolution(), options.listeners(), options.strict())
+        : new NetworkAgenda(ruleSet.rules(), ruleSet.network(), memories, workingMemory,
+            refraction, options.conflictResolution(), options.listeners(), options.strict());
     // A sink the caller did not supply is resolved HERE, and the default is stateless. Holding a
     // collecting sink in SessionOptions put one unsynchronised ArrayList behind every session built
     // from the same options -- the natural way to use them, and exactly the across-session
@@ -339,6 +346,7 @@ public final class DefaultRuleSession implements RuleSession {
 
     @Override
     public void factInserted(final Fact fact) {
+      ruleSet.network().insert(fact.type(), fact.handle().id(), fact.payload(), memories);
       agenda.markDirty(fact.type());
       for (final RuleEngineListener listener : options.listeners()) {
         listener.onInsert(fact);
@@ -347,6 +355,9 @@ public final class DefaultRuleSession implements RuleSession {
 
     @Override
     public void factRetracted(final Fact fact) {
+      // Against the payload the fact had when it was asserted, which is what `fact` carries here.
+      // Computing removal keys from anything else leaves orphaned index entries (§3.4.1 step 3).
+      ruleSet.network().retract(fact.type(), fact.handle().id(), fact.payload(), memories);
       agenda.markDirty(fact.type());
       for (final RuleEngineListener listener : options.listeners()) {
         listener.onRetract(fact);

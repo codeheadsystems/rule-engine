@@ -1,0 +1,155 @@
+package com.codeheadsystems.rules.testkit;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.codeheadsystems.rules.access.Paths;
+import com.codeheadsystems.rules.compiler.RuleCompiler;
+import com.codeheadsystems.rules.network.Network;
+import com.codeheadsystems.rules.network.PatternNode;
+import com.codeheadsystems.rules.network.SessionMemories;
+import com.codeheadsystems.rules.rule.RuleDefinition;
+import com.codeheadsystems.rules.session.CompiledRuleSet;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.util.List;
+import java.util.stream.IntStream;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Phase 1's exit criterion, asserted on the network directly rather than inferred from timing.
+ *
+ * <p>Spec section 9 requires that single-fact rules "match via index lookup, not full scan", and
+ * section 6.5 claims node sharing keeps the alpha network sublinear in rule count. Both are
+ * structural properties, so both are checked structurally. A timing test would prove neither and
+ * would be flaky besides.
+ *
+ * <p>The network and its memories are public API, so this exercises them without reaching past a
+ * session's deliberate refusal to expose its agenda (section 5.1).
+ */
+class NetworkStructureTest {
+
+  /** Ten rules, all testing the same two constraints, plus one that differs. */
+  private static List<RuleDefinition> sharedConstraints() {
+    return IntStream.range(0, 10)
+        .mapToObj(index -> Rules.rule("rule-" + index)
+            .when("o", "Order", pattern -> pattern.eq("status", "PENDING").gt("total", 10_000))
+            .then(actions -> actions.emit("hit-" + index, "id", Rules.ref("o.id")))
+            .build())
+        .toList();
+  }
+
+  @Test
+  @DisplayName("ten rules expressing two distinct constraints compile to two alpha nodes")
+  void nodeSharingIsRealSharing() {
+    // Twenty constraints across ten rules. If sharing deduplicated the node objects but still
+    // evaluated the predicate once per rule, this would be twenty -- that is sublinearity's shape
+    // without any of its benefit.
+    final CompiledRuleSet ruleSet = RuleCompiler.compile(sharedConstraints());
+
+    assertThat(ruleSet.network().alphaNodeCount())
+        .describedAs("ten rules x two constraints, deduplicated")
+        .isEqualTo(2);
+    assertThat(ruleSet.network().patternNodes())
+        .describedAs("pattern nodes are per pattern, not per distinct constraint set")
+        .hasSize(10);
+  }
+
+  @Test
+  @DisplayName("differing constraints are not merged")
+  void distinctConstraintsStayDistinct() {
+    final CompiledRuleSet ruleSet = RuleCompiler.compile(List.of(
+        Rules.rule("a").when("o", "Order", p -> p.eq("status", "PENDING"))
+            .then(t -> t.emit("a")).build(),
+        Rules.rule("b").when("o", "Order", p -> p.eq("status", "SHIPPED"))
+            .then(t -> t.emit("b")).build(),
+        Rules.rule("c").when("o", "Order", p -> p.eq("status", "PENDING"))
+            .then(t -> t.emit("c")).build()));
+
+    assertThat(ruleSet.network().alphaNodeCount()).isEqualTo(2);
+  }
+
+  @Test
+  @DisplayName("a pattern's memory holds only what matches, so the matcher never scans the type")
+  void memoryHoldsOnlyMatches() {
+    final CompiledRuleSet ruleSet = RuleCompiler.compile(List.of(
+        Rules.rule("rare")
+            .when("o", "Order", pattern -> pattern.eq("status", "PENDING"))
+            .then(actions -> actions.emit("hit", "id", Rules.ref("o.id")))
+            .build()));
+    final Network network = ruleSet.network();
+    final SessionMemories memories = new SessionMemories(network);
+    final PatternNode pattern = network.patternNodes().getFirst();
+
+    for (int order = 0; order < 1_000; order++) {
+      final ObjectNode payload = Facts.obj(
+          "id", order, "status", order % 250 == 0 ? "PENDING" : "SHIPPED");
+      network.insert("Order", order, payload, memories);
+    }
+
+    // Four of a thousand. The naive matcher would enumerate all thousand and re-test each, every
+    // fire cycle; this enumerates four.
+    assertThat(memories.of(pattern).size()).isEqualTo(4);
+    assertThat(memories.of(pattern).members()).containsExactly(0L, 250L, 500L, 750L);
+  }
+
+  @Test
+  @DisplayName("retract removes from the memory and from every index bucket")
+  void retractIsClean() {
+    final CompiledRuleSet ruleSet = RuleCompiler.compile(List.of(
+        Rules.rule("join")
+            .when("o", "Order", pattern -> pattern.eq("status", "PENDING"))
+            .when("c", "Customer", pattern -> pattern.ref("id", "o.customerId"))
+            .then(actions -> actions.emit("hit"))
+            .build()));
+    final Network network = ruleSet.network();
+    final SessionMemories memories = new SessionMemories(network);
+    final PatternNode customers = network.patternNodes().get(1);
+
+    final ObjectNode alice = Facts.obj("id", 7);
+    final ObjectNode bob = Facts.obj("id", 8);
+    network.insert("Customer", 1L, alice, memories);
+    network.insert("Customer", 2L, bob, memories);
+    assertThat(memories.of(customers).size()).isEqualTo(2);
+    assertThat(memories.of(customers).indexedKeyCount()).isEqualTo(2);
+
+    network.retract("Customer", 1L, alice, memories);
+
+    assertThat(memories.of(customers).size()).isEqualTo(1);
+    assertThat(memories.of(customers).indexedKeyCount())
+        .describedAs("an emptied bucket must be dropped, not left behind")
+        .isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("the index plan indexes the paths joins probe, and nothing else")
+  void indexPlanFollowsTheJoins() {
+    final CompiledRuleSet ruleSet = RuleCompiler.compile(List.of(
+        Rules.rule("join")
+            .when("o", "Order", pattern -> pattern.eq("status", "PENDING").gt("total", 10))
+            .when("c", "Customer", pattern -> pattern.ref("id", "o.customerId"))
+            .then(actions -> actions.emit("hit"))
+            .build()));
+    final Network network = ruleSet.network();
+
+    // The Order pattern filters on /status and /total but nothing joins against it, so indexing
+    // either would build a structure whose only bucket is the memory itself.
+    assertThat(network.patternNodes().getFirst().indexPlan().isEmpty()).isTrue();
+    // The Customer pattern is joined on /id, which is exactly what needs an index.
+    assertThat(network.patternNodes().get(1).indexPlan().hashed())
+        .containsExactly(Paths.compile("id"));
+  }
+
+  @Test
+  @DisplayName("a fact of a type no rule patterns is not stored at all")
+  void unpatternedTypesAreNotStored() {
+    final CompiledRuleSet ruleSet = RuleCompiler.compile(List.of(
+        Rules.rule("orders-only").when("o", "Order").then(t -> t.emit("hit")).build()));
+    final Network network = ruleSet.network();
+    final SessionMemories memories = new SessionMemories(network);
+
+    network.insert("Telemetry", 1L, Facts.obj("noise", true), memories);
+
+    assertThat(network.entryFor("Telemetry")).isNull();
+    assertThat(memories.of(network.patternNodes().getFirst()).size()).isZero();
+  }
+}

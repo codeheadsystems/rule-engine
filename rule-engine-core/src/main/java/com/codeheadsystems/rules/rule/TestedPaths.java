@@ -1,6 +1,8 @@
 package com.codeheadsystems.rules.rule;
 
 import com.fasterxml.jackson.core.JsonPointer;
+import com.fasterxml.jackson.databind.JsonNode;
+import java.util.LinkedHashSet;
 import java.util.Set;
 
 /**
@@ -40,6 +42,43 @@ public interface TestedPaths {
    * @return the paths, or an empty set if that rule does not pattern that type
    */
   Set<JsonPointer> forRule(String ruleId, String factType);
+
+  /**
+   * Which of a type's tested paths differ between two payloads -- step 1 of §3.4.1's update.
+   *
+   * <p><strong>This default implementation is the specification of the answer.</strong> It walks
+   * every tested path and compares the two subtrees, which is {@code O(tested paths)} traversals
+   * per update whether anything changed or not -- a 300-rule set touching 200 distinct paths on
+   * {@code Order} pays 200 traversals on every update, including ones that change nothing. It grows
+   * with the rule set rather than with the update, which is exactly the cost §3.4.2 sets out to
+   * remove.
+   *
+   * <p>An implementation is free to override it with something proportional to the size of the
+   * <em>change</em> -- §3.4.2 describes a prefix trie that walks both payloads together and stops
+   * wherever two nodes are equal. §3.4.2 also says how to build one safely: "write the probe loop
+   * first and use it as the oracle for the trie". This method is that probe loop, kept as the
+   * default precisely so an override always has something to be differentially tested against.
+   *
+   * <p>Getting it wrong is quiet. Under-reporting a changed path no longer costs a missed
+   * activation, because §3.4.1 step 6 re-asserts unconditionally -- but it costs a missed
+   * <em>refraction clear</em> in step 5, which surfaces much later as a rule that should have
+   * re-fired and did not.
+   *
+   * @param factType the fact's type
+   * @param oldPayload the payload as stored
+   * @param newPayload the replacement payload
+   * @return the tested paths whose values differ
+   */
+  default Set<JsonPointer> changedPaths(final String factType, final JsonNode oldPayload,
+      final JsonNode newPayload) {
+    final Set<JsonPointer> changed = new LinkedHashSet<>();
+    for (final JsonPointer path : forType(factType)) {
+      if (!oldPayload.at(path).equals(newPayload.at(path))) {
+        changed.add(path);
+      }
+    }
+    return changed;
+  }
 
   /**
    * The inverse index: which rules read a given path on a given type.

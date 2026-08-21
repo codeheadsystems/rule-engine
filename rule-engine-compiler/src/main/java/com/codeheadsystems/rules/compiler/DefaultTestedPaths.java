@@ -2,6 +2,7 @@ package com.codeheadsystems.rules.compiler;
 
 import com.codeheadsystems.rules.rule.TestedPaths;
 import com.fasterxml.jackson.core.JsonPointer;
+import com.fasterxml.jackson.databind.JsonNode;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
@@ -24,6 +25,7 @@ public final class DefaultTestedPaths implements TestedPaths {
   private final Map<String, Set<JsonPointer>> byType;
   private final Map<String, Map<String, Set<JsonPointer>>> byRuleAndType;
   private final Map<String, Map<JsonPointer, Set<String>>> inverse;
+  private final Map<String, PathTrie> triesByType;
 
   /**
    * Creates the artifact from already-collected data. Built by {@link RuleCompiler}.
@@ -38,6 +40,26 @@ public final class DefaultTestedPaths implements TestedPaths {
     this.byType = deepCopyTypes(byType);
     this.byRuleAndType = deepCopyRules(byRuleAndType);
     this.inverse = deepCopyInverse(inverse);
+    // Built once, here, and never per update -- §10's "TestedPaths, the type-to-rules index, and
+    // the prefix trie computed once at compile time".
+    final Map<String, PathTrie> tries = new LinkedHashMap<>();
+    this.byType.forEach((factType, paths) -> tries.put(factType, PathTrie.of(paths)));
+    this.triesByType = Map.copyOf(tries);
+  }
+
+  /**
+   * {@inheritDoc}
+   *
+   * <p>Answered by §3.4.2's prefix trie: both payloads are walked together once, descending only
+   * into subtrees the rule set actually reads and stopping wherever two nodes are equal. The
+   * interface's default -- comparing every tested path individually -- remains the definition of
+   * the answer and the oracle this is tested against.
+   */
+  @Override
+  public Set<JsonPointer> changedPaths(final String factType, final JsonNode oldPayload,
+      final JsonNode newPayload) {
+    final PathTrie trie = triesByType.get(factType);
+    return trie == null ? Set.of() : trie.changed(oldPayload, newPayload);
   }
 
   /**
