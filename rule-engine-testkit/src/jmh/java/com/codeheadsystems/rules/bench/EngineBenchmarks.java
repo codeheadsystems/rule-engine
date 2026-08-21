@@ -29,22 +29,24 @@ import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.infra.Blackhole;
 
 /**
- * The Phase 0 baselines that spec section 10 asks for.
+ * The primitives and end-to-end throughput §10 asks for, on both matchers.
  *
- * <p>These exist to be <em>recorded</em>, not admired. Phase 1's entire claim is "faster than
- * this": single-fact rules match by index lookup rather than by scan, and an update to an untested
- * field is a measured no-op. Neither claim is falsifiable without a number from the naive engine
- * that preceded it, and running the benchmark after the optimisation is how a project ends up with
- * an optimisation nobody can prove helped.
+ * <p>These exist to be <em>recorded</em>, not admired. Every phase after Phase 0 makes a claim of
+ * the form "faster than what came before", and none of those claims is falsifiable without a number
+ * from the engine that preceded it. Running a benchmark only after the optimisation is how a
+ * project ends up with an optimisation nobody can prove helped.
  *
- * <p>Three of the four are microbenchmarks of the primitives section 10 names; the fourth is
- * end-to-end throughput, which is what actually moves.
+ * <p>That is why the naive matcher is still shipped and still benchmarked here. §9 makes it the
+ * correctness oracle every later phase is differential-tested against; this class uses it as the performance one, by running the identical
+ * workload through both strategies under a {@code matcher} parameter. The interesting number is
+ * never a single figure -- it is the ratio between the two columns, and how that ratio moves as the
+ * fact count grows.
  *
- * <p>Run with {@code ./gradlew :rule-engine-testkit:jmh}.
+ * <p>Run with {@code ./gradlew :rule-engine-testkit:jmh}; see {@code docs/benchmarks.md}.
  */
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
-public class Phase0Benchmarks {
+public class EngineBenchmarks {
 
   /**
    * Comparison-operator evaluation: the innermost operation of every alpha test.

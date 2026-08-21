@@ -1,5 +1,6 @@
 plugins {
     id("buildlogic.java-library-conventions")
+    id("buildlogic.jmh-conventions")
 }
 
 description = "Rule engine CEL: the §6.4 expression escape hatch, backed by dev.cel"
@@ -26,4 +27,12 @@ dependencies {
     testImplementation(project(":rule-engine-observability"))
     testImplementation(libs.bundles.test)
     testRuntimeOnly(libs.junit.platform.launcher)
+
+    /*
+     * §6.4 makes a specific, quantified claim about what this module costs -- "an unindexed CEL
+     * condition against 100 000 facts is 100 000 evaluations per fire cycle" -- and a claim that
+     * specific deserves a measurement rather than a reader's trust.
+     */
+    jmhImplementation(project(":rule-engine-compiler"))
+    jmhImplementation(project(":rule-engine-testkit"))
 }

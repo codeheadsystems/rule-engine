@@ -1,6 +1,6 @@
 plugins {
     id("buildlogic.java-library-conventions")
-    alias(libs.plugins.jmh)
+    id("buildlogic.jmh-conventions")
 }
 
 /*
@@ -32,28 +32,4 @@ dependencies {
 
     testImplementation(libs.bundles.test)
     testRuntimeOnly(libs.junit.platform.launcher)
-}
-
-/*
- * The JMH plugin compiles generated benchmark harness code, which is not ours to keep warning-free.
- * -Werror stays on for the sources we write; it comes off for the ones the annotation processor
- * writes, because failing the build on a warning in generated code is a fight with no winner.
- */
-tasks.named<JavaCompile>("compileJmhJava") {
-    options.compilerArgs.removeAll(listOf("-Werror"))
-}
-
-jmh {
-    /*
-     * Sized so that `./gradlew :rule-engine-testkit:jmh` finishes in a couple of minutes and
-     * therefore actually gets run. These are Phase 0 baselines: what they have to support is
-     * "Phase 1 made this faster", which is an order-of-magnitude question, not a 2% one. Lengthen
-     * the iterations when a change turns out to hinge on a small difference.
-     */
-    warmupIterations = 3
-    iterations = 3
-    timeOnIteration = "2s"
-    warmup = "2s"
-    fork = 1
-    resultFormat = "TEXT"
 }
