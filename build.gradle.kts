@@ -27,6 +27,7 @@ dependencies {
     jacocoAggregation(project(":rule-engine-core"))
     jacocoAggregation(project(":rule-engine-compiler"))
     jacocoAggregation(project(":rule-engine-dsl"))
+    jacocoAggregation(project(":rule-engine-schema"))
     jacocoAggregation(project(":rule-engine-observability"))
     jacocoAggregation(project(":rule-engine-testkit"))
 }

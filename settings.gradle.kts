@@ -20,5 +20,8 @@ include("rule-engine-compiler")
 // §8: ONE dsl module, not one per serialization. The entire difference between JSON and YAML
 // is which Jackson factory reads the text into the identical target type (§6.1).
 include("rule-engine-dsl")
+// §8: the optional SchemaRegistry of §2.3. Beside -dsl because they share the JSON
+// Schema tooling -- one gate points at rule files, the other at fact payloads.
+include("rule-engine-schema")
 include("rule-engine-observability")
 include("rule-engine-testkit")

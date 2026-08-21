@@ -474,7 +474,7 @@ System.out.println(report.describe());
 |---|---|
 | `ruleSetVersion` | The content hash, so a report can be matched to its rule set in a log |
 | `errors` | Always empty — compilation throws if a rule set has errors |
-| `warnings` | Things that compiled but are worth a look; currently `shallow-tested-path` |
+| `warnings` | Things that compiled but are worth a look — see the table below |
 | `unindexed` | Every constraint no index can serve, with a reason |
 | `celCosts` | Empty until the CEL module lands |
 | `sharing` | Rule, alpha-node and pattern counts, and the sharing ratio |
@@ -501,6 +501,62 @@ CompilerOptions options = CompilerOptions.builder()
 ```
 
 Types your own rules derive through `insertFact` count as reachable.
+
+### Warnings
+
+| Code | Means | Needs a schema |
+|---|---|---|
+| `shallow-tested-path` | This rule tests a path that contains a deeper path another constraint tests, so every update to the type compares the whole subtree (§3.4.2) | no |
+| `impossible-range` | Bounds on one field that cannot all hold — `{ from: 500, to: 100 }`, the equivalent `{ gt: 500, lt: 100 }` split across two operators, or equal bounds with either end exclusive | no |
+| `ne-on-optional-path` | An `ne` or `notIn` against a field the schema says is optional, unguarded by `hasField: true` — see [the trap](dsl-guide.md#ne-is-true-for-a-missing-field) | **yes** |
+| `vacuous-anti-match` | An `ne` or `notIn` whose literal is of a type the field can never hold. §2.6.1 makes that **true**, so the constraint filters nothing | **yes** |
+
+## Fact schemas (optional)
+
+Registering a JSON Schema per fact type is opt-in and changes two things.
+
+**At compile time**, a literal the field could never hold becomes an error instead of a rule that
+ships and silently never matches:
+
+```java
+FactSchemas schemas = JsonSchemaFactSchemas.builder()
+    .register("Order", orderSchema)     // any Jackson JsonNode holding a JSON Schema document
+    .build();
+
+CompiledRuleSet rules = RuleFiles.compile(sources,
+    CompilerOptions.builder().factSchemas(schemas).build());
+```
+
+With `Order.total` declared `"type": "number"`, `total: { gt: "expensive" }` now fails to compile.
+This is the strongest single reason to register schemas on the fact types that matter.
+
+**At insert time**, a malformed payload is rejected at the boundary with a `SchemaViolationException`
+rather than entering working memory and quietly matching nothing. Updates are validated too.
+
+The registry is frozen into the compiled rule set and shared by every session, so it is immutable by
+contract — build it, hand it to the compiler, and recompile to change it. That is the same operation
+as changing rules.
+
+**What it checks, and what it deliberately does not.** The error fires only where §2.6.1 proves the
+comparison is *false* — `eq`, the four ordered operators, `matches` against a non-string, and an
+`in` list where **every** element is incompatible. It does not fire on `ne` or `notIn`: those are
+`!eq` and `!in`, so §2.6.1 makes a wrong-typed literal come out **true**, and the rule matches
+everything rather than nothing. That is still a bug, and it comes back as a `vacuous-anti-match`
+warning.
+
+Two further silences. Presence tests (`hasField`, `isNull`) are never type-checked, because their
+literal is a polarity rather than a value of the field's type. And an explicit `null` is accepted
+against any declared type, because §2.6.1 makes `eq: null` a meaningful test.
+
+Note that the check is about §2.6.1's **compatibility classes** — `{number}`, `{string}`,
+`{boolean}`, `{array}`, `{object}` — not about JSON Schema's types. A field declared `integer`
+compared against `99.5` is fine: a value of `100` satisfies it.
+
+**One limit worth knowing.** Compile-time introspection reads `properties`, `required` and `type`
+directly. It does not resolve `$ref`, and does not reconcile `allOf`/`anyOf`/`oneOf` — a schema node
+carrying any of those is reported as unknown, and everything beneath it goes unchecked. Validation
+has no such limit; it handles the full specification. The asymmetry is deliberate: an unmade check
+costs you what you had before registering a schema, where a guessed one would reject a correct rule.
 
 ### The rule-set version is sensitive to the order you write things in
 

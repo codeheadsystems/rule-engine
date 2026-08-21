@@ -1,6 +1,7 @@
 package com.codeheadsystems.rules.report;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 
 /**
@@ -40,6 +41,15 @@ public record CompilerReport(
   /** The warning code for a tested path that contains another (§3.4.2). */
   public static final String SHALLOW_TESTED_PATH = "shallow-tested-path";
 
+  /** The warning code for a range whose bounds exclude every possible value. */
+  public static final String IMPOSSIBLE_RANGE = "impossible-range";
+
+  /** The warning code for §2.6.1's {@code NE}-on-an-optional-path trap. */
+  public static final String NE_ON_OPTIONAL_PATH = "ne-on-optional-path";
+
+  /** The warning code for an anti-match a schema proves is always true, and so constrains nothing. */
+  public static final String VACUOUS_ANTI_MATCH = "vacuous-anti-match";
+
   /**
    * Canonical constructor. Defensively copies every list.
    *
@@ -72,7 +82,7 @@ public record CompilerReport(
         .append("  ").append(sharing.ruleCount()).append(" rules, ")
         .append(sharing.distinctAlphaNodes()).append(" distinct alpha nodes from ")
         .append(sharing.alphaTestOccurrences()).append(" tests (sharing ")
-        .append(String.format(java.util.Locale.ROOT, "%.2f", sharing.alphaSharingRatio()))
+        .append(String.format(Locale.ROOT, "%.2f", sharing.alphaSharingRatio()))
         .append("x), ").append(sharing.patternNodes()).append(" patterns, ")
         .append(sharing.joinEdges()).append(" join edges");
     unindexed.forEach(constraint -> text.append(System.lineSeparator())

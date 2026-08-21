@@ -2,6 +2,7 @@ package com.codeheadsystems.rules.session;
 
 import com.codeheadsystems.rules.network.Network;
 import com.codeheadsystems.rules.report.CompilerReport;
+import com.codeheadsystems.rules.schema.FactSchemas;
 import com.codeheadsystems.rules.rule.CompiledRule;
 import com.codeheadsystems.rules.rule.TestedPaths;
 import java.util.List;
@@ -22,6 +23,7 @@ public final class DefaultCompiledRuleSet implements CompiledRuleSet {
   private final TestedPaths testedPaths;
   private final String version;
   private final CompilerReport report;
+  private final FactSchemas factSchemas;
 
   /**
    * Creates a compiled rule set. Produced by the compiler; not usually constructed by hand.
@@ -31,14 +33,17 @@ public final class DefaultCompiledRuleSet implements CompiledRuleSet {
    * @param testedPaths which payload paths the rule set reads
    * @param version a content hash of the source rules plus the compiler version (§5.6)
    * @param report what the compiler noticed while building it (§7.4)
+   * @param factSchemas the optional fact-payload schemas it was compiled against (§2.3)
    */
   public DefaultCompiledRuleSet(final List<CompiledRule> rules, final Network network,
-      final TestedPaths testedPaths, final String version, final CompilerReport report) {
+      final TestedPaths testedPaths, final String version, final CompilerReport report,
+      final FactSchemas factSchemas) {
     this.rules = List.copyOf(rules);
     this.network = Objects.requireNonNull(network, "network");
     this.testedPaths = Objects.requireNonNull(testedPaths, "testedPaths");
     this.version = Objects.requireNonNull(version, "version");
     this.report = Objects.requireNonNull(report, "report");
+    this.factSchemas = Objects.requireNonNull(factSchemas, "factSchemas");
   }
 
   @Override
@@ -74,5 +79,10 @@ public final class DefaultCompiledRuleSet implements CompiledRuleSet {
   @Override
   public CompilerReport report() {
     return report;
+  }
+
+  @Override
+  public FactSchemas factSchemas() {
+    return factSchemas;
   }
 }

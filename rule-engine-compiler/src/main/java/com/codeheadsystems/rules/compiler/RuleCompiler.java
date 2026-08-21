@@ -18,6 +18,7 @@ import com.codeheadsystems.rules.rule.InsertFact;
 import com.codeheadsystems.rules.rule.JoinConstraint;
 import com.codeheadsystems.rules.rule.JoinTest;
 import com.codeheadsystems.rules.rule.Literal;
+import com.codeheadsystems.rules.rule.Operator;
 import com.codeheadsystems.rules.rule.PatternDefinition;
 import com.codeheadsystems.rules.rule.Quantifier;
 import com.codeheadsystems.rules.rule.RangeConstraint;
@@ -27,6 +28,7 @@ import com.codeheadsystems.rules.rule.RetractFact;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.rule.SetField;
 import com.codeheadsystems.rules.rule.ValueExpr;
+import com.codeheadsystems.rules.schema.SchemaType;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
 import com.codeheadsystems.rules.session.DefaultCompiledRuleSet;
 import com.fasterxml.jackson.core.JsonPointer;
@@ -41,6 +43,7 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -139,7 +142,8 @@ public final class RuleCompiler {
         version,
         // §6.5's pipeline emits the report last, on the shared graph: sharing changes which nodes
         // exist, so anything counted before it counts nodes that are about to be merged away.
-        ReportBuilder.build(compiled, network, version, options));
+        ReportBuilder.build(compiled, network, version, options),
+        options.factSchemas());
   }
 
   /**
@@ -259,6 +263,13 @@ public final class RuleCompiler {
     record(rule.id(), pattern.factType(), path);
     final JsonPointerAccessor accessor = new JsonPointerAccessor(path);
 
+    // The four ordering operators are not checked here: the switch below hands them to
+    // compileRange, which checks each bound in its own right. Checking in both places reported
+    // every such constraint twice, with byte-identical text.
+    if (!isOrdering(constraint.op())) {
+      checkLiteralType(where, pattern.factType(), constraint.field(), constraint.op(),
+          constraint.literal());
+    }
     return switch (constraint.op()) {
       case MATCHES -> compileRegex(where, constraint, accessor);
       case IN, NOT_IN -> {
@@ -329,6 +340,12 @@ public final class RuleCompiler {
     }
     final JsonPointer path = compiled.get();
     record(rule.id(), pattern.factType(), path);
+    // Both bounds are literals of the field's own type, so both get §6.5's check. The operator
+    // reported is the one the bound expresses, so the message names what the author wrote.
+    constraint.lower().ifPresent(bound -> checkLiteralType(where, pattern.factType(),
+        constraint.field(), constraint.lowerInclusive() ? Operator.GTE : Operator.GT, bound));
+    constraint.upper().ifPresent(bound -> checkLiteralType(where, pattern.factType(),
+        constraint.field(), constraint.upperInclusive() ? Operator.LTE : Operator.LT, bound));
     boolean valid = true;
     for (final Optional<JsonNode> maybeBound : List.of(constraint.lower(), constraint.upper())) {
       if (maybeBound.isPresent()) {
@@ -510,6 +527,114 @@ public final class RuleCompiler {
         .computeIfAbsent(factType, ignored -> new LinkedHashSet<>()).add(path);
     inverse.computeIfAbsent(factType, ignored -> new LinkedHashMap<>())
         .computeIfAbsent(path, ignored -> new LinkedHashSet<>()).add(ruleId);
+  }
+
+  /**
+   * Rejects a comparison a registered schema proves can never be true (§6.5, §2.3, §2.6.1).
+   *
+   * <p>§2.6.1 sanctions exactly this: "cross-type comparison is {@code false} at runtime, but a
+   * compile error wherever a schema can prove it." The proof obligation is the whole of the design
+   * here, and it is narrower than "the literal is not of the declared type".
+   *
+   * <p><strong>Only where wrong type means false.</strong> §2.6.1's {@code present, wrong type} row
+   * gives {@code NE} and {@code NOT_IN} the value <strong>true</strong>, because they are
+   * {@code !EQ} and {@code !IN}. A wrong-typed literal there does not make the rule unmatchable --
+   * it makes the constraint vacuously satisfied, which is a different mistake, reported as a
+   * warning by {@code ReportBuilder} rather than failing the build. Erroring on it would reject a
+   * rule that matches everything, with a message saying it matches nothing.
+   *
+   * <p><strong>Class, not JSON Schema type.</strong> See {@link SchemaType#comparableWith}: a field
+   * declared {@code integer} compared against {@code 99.5} is a legitimate comparison that
+   * {@code 100} satisfies.
+   *
+   * <p><strong>{@code IN} needs every element to fail.</strong> §2.6.1 defines it as {@code EQ}
+   * against each element, so one incompatible entry in {@code ["OPEN", 1]} is dead weight, not a
+   * defect -- the compatible entries still match.
+   *
+   * @param where the diagnostic prefix identifying the constraint
+   * @param factType the type the pattern matches
+   * @param field the dotted field path
+   * @param operator the comparison
+   * @param literal the literal, or an array of them for {@code IN}
+   */
+  private void checkLiteralType(final String where, final String factType, final String field,
+      final Operator operator, final JsonNode literal) {
+    final Optional<SchemaType> declared = options.factSchemas().typeOf(factType, field);
+    if (declared.isEmpty()) {
+      return;
+    }
+    final SchemaType type = declared.get();
+    switch (operator) {
+      case EQ, GT, GTE, LT, LTE -> {
+        if (!type.comparableWith(literal)) {
+          reportIncomparable(where, factType, field, type, operator.name(), literal);
+        }
+      }
+      case MATCHES -> {
+        if (type != SchemaType.STRING) {
+          diagnostics.add(where + ": " + factType + "." + field + " is declared "
+              + type.name().toLowerCase(Locale.ROOT)
+              + ", and matches compares a string against a pattern. This rule would compile and"
+              + " never match (§2.6.1)");
+        }
+      }
+      case IN -> {
+        if (literal.isArray() && !literal.isEmpty() && !anyComparable(type, literal)) {
+          reportIncomparable(where, factType, field, type, "IN", literal);
+        }
+      }
+      /*
+       * NE and NOT_IN are !EQ and !IN, so §2.6.1 makes them TRUE against a wrong-typed value.
+       * HAS_FIELD and IS_NULL carry a boolean polarity rather than a value of the field's type.
+       * None of the four can be proved unmatchable by a type, which is all this check may act on.
+       */
+      case NE, NOT_IN, HAS_FIELD, IS_NULL -> { }
+    }
+  }
+
+  /**
+   * Whether any candidate in an {@code IN} list could compare equal.
+   *
+   * @param type the declared type
+   * @param candidates the array literal
+   * @return true when at least one element shares the field's compatibility class
+   */
+  private static boolean anyComparable(final SchemaType type, final JsonNode candidates) {
+    for (final JsonNode candidate : candidates) {
+      if (type.comparableWith(candidate)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Records a comparison the schema proves can never be true.
+   *
+   * @param where the diagnostic prefix
+   * @param factType the fact type
+   * @param field the field path
+   * @param type the declared type
+   * @param operator the operator, as the author would recognise it
+   * @param literal the offending literal
+   */
+  private void reportIncomparable(final String where, final String factType, final String field,
+      final SchemaType type, final String operator, final JsonNode literal) {
+    diagnostics.add(where + ": " + factType + "." + field + " is declared "
+        + type.name().toLowerCase(Locale.ROOT) + ", which §2.6.1 compares only within "
+        + type.compatibilityClass() + ", so it can never " + operator.toLowerCase(Locale.ROOT)
+        + " " + literal + ". This rule would compile and never match (§2.3)");
+  }
+
+  /**
+   * Whether an operator is one of the four §2.6.1 orders.
+   *
+   * @param operator the operator
+   * @return true for {@code GT}, {@code GTE}, {@code LT} and {@code LTE}
+   */
+  private static boolean isOrdering(final Operator operator) {
+    return operator == Operator.GT || operator == Operator.GTE
+        || operator == Operator.LT || operator == Operator.LTE;
   }
 
   /**

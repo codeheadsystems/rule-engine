@@ -54,6 +54,7 @@ end-to-end. That is why coverage is aggregated at the root — a per-module repo
 | `rule-engine-core` | Fact model, working memory, both matchers, agenda, refraction, RHS execution, sessions |
 | `rule-engine-compiler` | `RuleDefinition` → `CompiledRuleSet`: validation, accessor/pattern compilation, `TestedPaths`, network build, version hash, `CompilerReport` |
 | `rule-engine-dsl` | JSON/YAML rule files → `RuleDefinition`; the `rules.v1` schema; located diagnostics |
+| `rule-engine-schema` | The optional `FactSchemas` of §2.3, backed by networknt JSON Schema |
 | `rule-engine-observability` | `TracingListener`, `JfrListener`, `MatchExplainer` |
 | `rule-engine-testkit` | `Rules` builder, `Engine`/`FiringSequence`, `MatcherEquivalence`, `ShuffleHarness`, JMH benchmarks — **main** source set, not test: consumers use these |
 
@@ -62,8 +63,9 @@ jackson (the fact model is JSON-native) and re2j (rule-authored `matches` must n
 catastrophically); both are `api` because they appear in public signatures. Adding a `-core`
 dependency is a design decision, not a convenience.
 
-`-dsl` adds jackson-dataformat-yaml and networknt json-schema-validator, both `implementation` and
-confined to that module. networknt is pinned to the **2.x** line on purpose: 3.x moved to Jackson 3
+`-dsl` adds jackson-dataformat-yaml and networknt json-schema-validator; `-schema` adds networknt
+too. Both are `implementation` and neither reaches `-core`, which is the point of the SPI split
+below. networknt is pinned to the **2.x** line on purpose: 3.x moved to Jackson 3
 (`tools.jackson.*`), a different tree model from the `com.fasterxml` `JsonNode` this engine is built
 on. Following it there is gated on the whole project moving to Jackson 3.
 
@@ -142,6 +144,19 @@ rule file and the same rule built with `Rules` must produce an identical rule-se
 an identical firing sequence. The hash half is the strong one — it caught both defects this module
 surfaced (`RangeConstraint`'s un-normalised inclusivity, and the testkit builder emitting
 `FieldConstraint(GT)` where §6.2.1 says `RangeConstraint`).
+
+### Optional modules plug in through a `-core` SPI
+
+`-schema` (and `-cel`, when it lands) follow the pattern `TestedPaths`, `HostFunction` and
+`EventSink` already use: **`-core` declares an interface, an optional module implements it, and it
+is wired in through `CompilerOptions` and frozen into the `CompiledRuleSet`.** `-core` gains no
+dependency either time.
+
+`FactSchemas` (§2.3) is a **documented deviation** from the spec's sketch, which returns networknt's
+`JsonSchema` and would put that library on every consumer's classpath. It answers in this engine's
+own vocabulary instead, and answers `UNKNOWN`/empty wherever schema introspection stops being simple
+(`$ref`, `allOf`, `oneOf`) — an unmade check costs what you had before registering a schema, where a
+guessed one would reject a correct rule. Validation has no such limit.
 
 ### Update, refraction, RHS
 

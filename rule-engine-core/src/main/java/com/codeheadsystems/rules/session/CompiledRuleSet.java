@@ -1,6 +1,7 @@
 package com.codeheadsystems.rules.session;
 
 import com.codeheadsystems.rules.report.CompilerReport;
+import com.codeheadsystems.rules.schema.FactSchemas;
 import com.codeheadsystems.rules.rule.CompiledRule;
 import com.codeheadsystems.rules.rule.TestedPaths;
 import java.util.List;
@@ -83,4 +84,16 @@ public interface CompiledRuleSet {
    * @return the report, never null
    */
   CompilerReport report();
+
+  /**
+   * The fact-payload schemas this rule set was compiled against (spec §2.3).
+   *
+   * <p>Frozen in at compile time like everything else here, and for a sharper reason than most:
+   * §2.3 requires it, because this object is read by every running session and a registry that
+   * could be added to after the fact would be an unsynchronised write racing thousands of readers.
+   * Changing schemas means recompiling, which is the same operation as changing rules.
+   *
+   * @return the schemas, or {@link FactSchemas#none()} when the caller registered none
+   */
+  FactSchemas factSchemas();
 }

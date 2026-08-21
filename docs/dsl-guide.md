@@ -59,6 +59,10 @@ rules:
 
 The same applies to `notIn`, for the same reason.
 
+If you register a schema (see [the reference](dsl-reference.md#fact-schemas-optional)), the compiler
+will find these for you: an `ne` against a field the schema calls optional, with no `hasField: true`
+guarding it, comes back as an `ne-on-optional-path` warning naming the fix.
+
 ### Flatten collections at ingestion
 
 **You cannot match inside an array.** There is no wildcard: `items.*.qty` does not exist and will
@@ -302,6 +306,10 @@ assertThat(report.unindexed())
 
 `RuleFiles.compile` throwing is your syntax check, and it reports every problem in every file at
 once with a line number.
+
+Add `.factSchemas(...)` to those options and the compiler gets sharper still: a literal that the
+field's declared type could never hold stops being a rule that silently never matches and becomes an
+error, and the `ne` trap above turns into a warning that names itself.
 
 The report is the part worth wiring into a build. Assert that no join fell to a residual condition
 and you will notice the day somebody writes a `ne` join that quietly turns a hash probe into a

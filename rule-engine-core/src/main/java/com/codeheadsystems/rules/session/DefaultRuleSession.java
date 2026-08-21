@@ -60,7 +60,8 @@ public final class DefaultRuleSession implements RuleSession {
     this.ruleSet = ruleSet;
     this.options = options;
     this.workingMemory =
-        new DefaultWorkingMemory(ruleSet.testedPaths(), new Observer(), options.strict());
+        new DefaultWorkingMemory(ruleSet.testedPaths(), ruleSet.factSchemas(),
+            new Observer(), options.strict());
     this.memories = new SessionMemories(ruleSet.network());
     this.agenda = options.matching() == MatchingStrategy.NAIVE
         ? new NaiveAgenda(ruleSet.rules(), workingMemory, refraction,

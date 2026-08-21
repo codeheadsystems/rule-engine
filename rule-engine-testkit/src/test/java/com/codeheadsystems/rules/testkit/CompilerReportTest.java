@@ -8,9 +8,13 @@ import com.codeheadsystems.rules.report.CompilerReport;
 import com.codeheadsystems.rules.report.Diagnostic;
 import com.codeheadsystems.rules.report.UnindexedConstraint;
 import com.codeheadsystems.rules.rule.Operator;
+import com.codeheadsystems.rules.rule.RangeConstraint;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
+import com.fasterxml.jackson.databind.node.IntNode;
+import com.fasterxml.jackson.databind.node.TextNode;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -259,6 +263,93 @@ class CompilerReportTest {
     }
 
     @Test
+    @DisplayName("flags a range whose lower bound sits above its upper")
+    void invertedRange() {
+      final CompilerReport report = reportOf(Rules.rule("inverted")
+          .when("o", "Order", pattern -> pattern.between("total", 500, 100))
+          .then(actions -> actions.emit("e")).build());
+
+      assertThat(report.warnings()).singleElement().satisfies(warning -> {
+        assertThat(warning.code()).isEqualTo(CompilerReport.IMPOSSIBLE_RANGE);
+        assertThat(warning.ruleId()).isEqualTo("inverted");
+        assertThat(warning.fieldPath()).contains("total");
+        assertThat(warning.message()).contains("500").contains("100");
+      });
+    }
+
+    @Test
+    @DisplayName("flags equal bounds when either end is exclusive")
+    void degenerateRange() {
+      final CompilerReport report = reportOf(Rules.rule("degenerate")
+          .when("o", "Order", pattern -> pattern.constraint(new RangeConstraint("total",
+              Optional.of(IntNode.valueOf(100)), true,
+              Optional.of(IntNode.valueOf(100)), false)))
+          .then(actions -> actions.emit("e")).build());
+
+      assertThat(report.warnings()).singleElement()
+          .extracting(Diagnostic::code).isEqualTo(CompilerReport.IMPOSSIBLE_RANGE);
+    }
+
+    @Test
+    @DisplayName("accepts equal bounds when both ends are inclusive, which matches exactly one value")
+    void closedPointRange() {
+      final CompilerReport report = reportOf(Rules.rule("point")
+          .when("o", "Order", pattern -> pattern.between("total", 100, 100))
+          .then(actions -> actions.emit("e")).build());
+
+      assertThat(report.warnings()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("flags the split form too, which §6.2.1 documents as equivalent")
+    void splitImpossibleRange() {
+      // `{ gt: 500, lt: 100 }` compiles to two one-sided ranges that are individually fine and
+      // jointly unsatisfiable. Constraints in a pattern are AND-ed, so this matches nothing.
+      final CompilerReport report = reportOf(Rules.rule("split")
+          .when("o", "Order", pattern -> pattern.gt("total", 500).lt("total", 100))
+          .then(actions -> actions.emit("e")).build());
+
+      assertThat(report.warnings()).singleElement()
+          .extracting(Diagnostic::code).isEqualTo(CompilerReport.IMPOSSIBLE_RANGE);
+    }
+
+    @Test
+    @DisplayName("says nothing about a satisfiable split range")
+    void satisfiableSplitRange() {
+      assertThat(reportOf(Rules.rule("fine")
+          .when("o", "Order", pattern -> pattern.gt("total", 100).lt("total", 500))
+          .then(actions -> actions.emit("e")).build()).warnings()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("does not cross fields, since a bound on one says nothing about another")
+    void doesNotCrossFields() {
+      assertThat(reportOf(Rules.rule("two-fields")
+          .when("o", "Order", pattern -> pattern.gt("total", 500).lt("quantity", 100))
+          .then(actions -> actions.emit("e")).build()).warnings()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("says nothing about a one-sided range, which bounds nothing to contradict")
+    void oneSidedRange() {
+      assertThat(reportOf(Rules.rule("one-sided")
+          .when("o", "Order", pattern -> pattern.gt("total", 10_000))
+          .then(actions -> actions.emit("e")).build()).warnings()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("says nothing when the bounds cannot be ordered, which is a different problem")
+    void incomparableBounds() {
+      final CompilerReport report = reportOf(Rules.rule("incomparable")
+          .when("o", "Order", pattern -> pattern.constraint(new RangeConstraint("total",
+              Optional.of(TextNode.valueOf("abc")), true,
+              Optional.of(IntNode.valueOf(100)), true)))
+          .then(actions -> actions.emit("e")).build());
+
+      assertThat(report.warnings()).isEmpty();
+    }
+
+    @Test
     @DisplayName("stays quiet when no path contains another")
     void noWarningWhenPathsAreDisjoint() {
       assertThat(reportOf(Rules.rule("scalars")
@@ -325,6 +416,21 @@ class CompilerReportTest {
   @Nested
   @DisplayName("rendering")
   class Rendering {
+
+    @Test
+    @DisplayName("groups warnings by rule, the order an author reads their file in")
+    void warningsGroupedByRule() {
+      final CompilerReport report = reportOf(
+          Rules.rule("first")
+              .when("o", "Order", pattern -> pattern.between("total", 500, 100))
+              .then(actions -> actions.emit("a")).build(),
+          Rules.rule("second")
+              .when("o", "Order", pattern -> pattern.between("total", 900, 800))
+              .then(actions -> actions.emit("b")).build());
+
+      assertThat(report.warnings()).extracting(Diagnostic::ruleId)
+          .containsExactly("first", "second");
+    }
 
     @Test
     @DisplayName("summarises the rule set for a build log")

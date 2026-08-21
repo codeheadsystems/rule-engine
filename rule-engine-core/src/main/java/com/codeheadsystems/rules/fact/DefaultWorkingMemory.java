@@ -1,6 +1,8 @@
 package com.codeheadsystems.rules.fact;
 
 import com.codeheadsystems.rules.rule.TestedPaths;
+import com.codeheadsystems.rules.schema.FactSchemas;
+import com.codeheadsystems.rules.schema.SchemaViolationException;
 import com.fasterxml.jackson.core.JsonPointer;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.ArrayList;
@@ -32,6 +34,7 @@ import java.util.stream.Stream;
 public final class DefaultWorkingMemory implements WorkingMemory {
 
   private final TestedPaths testedPaths;
+  private final FactSchemas schemas;
   private final WorkingMemoryObserver observer;
   private final boolean strict;
 
@@ -49,13 +52,17 @@ public final class DefaultWorkingMemory implements WorkingMemory {
    * Creates a working memory.
    *
    * @param testedPaths the compiled tested-path artifact, which the update diff walks (§3.4.1)
+   * @param schemas the optional fact-payload schemas (§2.3); {@link FactSchemas#none()} to validate
+   *     nothing, which is the default and needs no setup
    * @param observer the session's hook for everything keyed on a handle
    * @param strict whether strict-mode contract checks are enabled (§7.5). Never enable this in
    *     production: the checks here are O(payload) per operation
    */
-  public DefaultWorkingMemory(final TestedPaths testedPaths, final WorkingMemoryObserver observer,
+  public DefaultWorkingMemory(final TestedPaths testedPaths, final FactSchemas schemas,
+      final WorkingMemoryObserver observer,
       final boolean strict) {
     this.testedPaths = Objects.requireNonNull(testedPaths, "testedPaths");
+    this.schemas = Objects.requireNonNull(schemas, "schemas");
     this.observer = Objects.requireNonNull(observer, "observer");
     this.strict = strict;
   }
@@ -69,6 +76,7 @@ public final class DefaultWorkingMemory implements WorkingMemory {
   public FactHandle insertOwned(final String type, final JsonNode payload) {
     Objects.requireNonNull(type, "type");
     Objects.requireNonNull(payload, "payload");
+    validate(type, payload);
     final FactHandle handle = new FactHandle(nextHandleId++);
     final Fact fact = new Fact(handle, type, payload, ++recencyCounter);
     byHandle.put(handle.id(), fact);
@@ -93,9 +101,19 @@ public final class DefaultWorkingMemory implements WorkingMemory {
   public void insertReserved(final FactHandle handle, final String type, final JsonNode payload) {
     Objects.requireNonNull(type, "type");
     Objects.requireNonNull(payload, "payload");
+    /*
+     * The reservation is consumed BEFORE validation, and the order is load-bearing. RhsExecutor
+     * reserves a handle at stage time and explains at length why one must never escape unreleased:
+     * "a rule that stages an insert and then fails to stage a later action would leak one handle id
+     * per firing -- and under a skip-and-continue error policy that repeats for every match,
+     * forever." A schema rejection is a new way for this call to throw, so it has to consume the
+     * reservation on the way out too. It also keeps a data error from masking the invariant check
+     * below, which is about the engine rather than about the fact.
+     */
     if (!reserved.remove(handle.id())) {
       throw new IllegalArgumentException("handle " + handle.id() + " was not reserved");
     }
+    validate(type, payload);
     final Fact fact = new Fact(handle, type, payload, ++recencyCounter);
     byHandle.put(handle.id(), fact);
     byType.computeIfAbsent(type, ignored -> new LinkedHashSet<>()).add(handle.id());
@@ -122,6 +140,7 @@ public final class DefaultWorkingMemory implements WorkingMemory {
   public void updateOwned(final FactHandle handle, final JsonNode newPayload) {
     Objects.requireNonNull(newPayload, "newPayload");
     final Fact before = require(handle);
+    validate(before.type(), newPayload);
 
     // Step 1, with §3.4.2's fast-path guard first: one structural walk that short-circuits on the
     // first difference. Producers re-sending unchanged records are extremely common in streaming
@@ -283,6 +302,29 @@ public final class DefaultWorkingMemory implements WorkingMemory {
       throw new NoSuchElementException("no fact for handle " + handle.id());
     }
     return fact;
+  }
+
+  /**
+   * Rejects a payload its registered schema does not accept (§2.3).
+   *
+   * <p>Runs before the fact enters working memory, which is the whole point: §2.3 wants a malformed
+   * fact to fail loudly at the boundary rather than to sit in memory quietly not matching every
+   * rule that expects a field it lacks.
+   *
+   * <p>Not gated on strict mode, unlike the aliasing check below. Strict mode is for contracts the
+   * spec states but cannot enforce, run in test and forbidden in production (§7.5). This is a
+   * feature a caller opted into by registering a schema, and switching it off in production would
+   * remove the protection exactly where the malformed data actually arrives.
+   *
+   * @param type the fact type
+   * @param payload the payload about to be stored
+   * @throws SchemaViolationException if a registered schema rejects it
+   */
+  private void validate(final String type, final JsonNode payload) {
+    final List<String> violations = schemas.violations(type, payload);
+    if (!violations.isEmpty()) {
+      throw new SchemaViolationException(type, violations);
+    }
   }
 
   /**

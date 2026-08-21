@@ -1,5 +1,6 @@
 package com.codeheadsystems.rules.compiler;
 
+import com.codeheadsystems.rules.schema.FactSchemas;
 import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.Optional;
@@ -18,12 +19,14 @@ public final class CompilerOptions {
   private final boolean checkFunctionNames;
   private final Set<String> declaredFactTypes;
   private final boolean checkFactTypes;
+  private final FactSchemas factSchemas;
 
   private CompilerOptions(final Builder builder) {
     this.declaredFunctions = Set.copyOf(builder.declaredFunctions);
     this.checkFunctionNames = builder.checkFunctionNames;
     this.declaredFactTypes = Set.copyOf(builder.declaredFactTypes);
     this.checkFactTypes = builder.checkFactTypes;
+    this.factSchemas = builder.factSchemas;
   }
 
   /**
@@ -62,6 +65,15 @@ public final class CompilerOptions {
     return checkFactTypes ? Optional.of(declaredFactTypes) : Optional.empty();
   }
 
+  /**
+   * The fact-payload schemas to compile against (§2.3).
+   *
+   * @return the schemas, or {@link FactSchemas#none()} when the caller registered none
+   */
+  public FactSchemas factSchemas() {
+    return factSchemas;
+  }
+
   /** Builds {@link CompilerOptions}. */
   public static final class Builder {
 
@@ -69,6 +81,7 @@ public final class CompilerOptions {
     private boolean checkFunctionNames;
     private final Set<String> declaredFactTypes = new LinkedHashSet<>();
     private boolean checkFactTypes;
+    private FactSchemas factSchemas = FactSchemas.none();
 
     /** Creates a builder carrying the defaults. */
     private Builder() {
@@ -114,6 +127,26 @@ public final class CompilerOptions {
     public Builder declaredFactTypes(final Set<String> types) {
       this.declaredFactTypes.addAll(Objects.requireNonNull(types, "types"));
       this.checkFactTypes = true;
+      return this;
+    }
+
+    /**
+     * Registers fact-payload schemas, turning on §2.3's checks at both ends.
+     *
+     * <p>At compile time this makes a type-incompatible literal an error --
+     * {@code { gt: "expensive" }} against a numeric field is a rule that could never match, and
+     * §2.3 calls catching it "the single strongest argument for registering schemas on your
+     * important fact types". At run time the same registry is frozen into the compiled rule set and
+     * rejects a malformed payload at {@code insert} before it reaches the network.
+     *
+     * <p>The registry must be immutable and thread-safe; it is shared by every session the rule set
+     * produces. See {@link FactSchemas} for why that is not negotiable.
+     *
+     * @param schemas the schemas
+     * @return this builder
+     */
+    public Builder factSchemas(final FactSchemas schemas) {
+      this.factSchemas = Objects.requireNonNull(schemas, "schemas");
       return this;
     }
 

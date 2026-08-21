@@ -59,11 +59,11 @@ are §1 non-goals with documented interim answers.
 | `rule-engine-core` | Fact model, working memory, matching primitives, agenda, refraction, sessions |
 | `rule-engine-compiler` | `RuleDefinition` → `CompiledRuleSet`: validation, accessor and pattern compilation, tested paths, version hash, `CompilerReport` |
 | `rule-engine-dsl` | JSON *and* YAML rule files → `RuleDefinition`, plus the `rules.v1` rule-file schema |
+| `rule-engine-schema` | The optional `FactSchemas` of §2.3, backed by JSON Schema |
 | `rule-engine-observability` | `TracingListener`, `JfrListener`, `MatchExplainer` |
 | `rule-engine-testkit` | Fixtures, the firing-sequence oracle, the shuffle-determinism and matcher-equivalence harnesses, JMH benchmarks |
 
-`-schema` and `-cel` (§8) arrive with the optional halves of Phase 5: the `SchemaRegistry` of §2.3
-and the CEL escape hatch of §6.4.
+`-cel` (§8) arrives with the last optional half of Phase 5: the CEL escape hatch of §6.4.
 
 ## Example
 
@@ -175,6 +175,12 @@ CompilerReport report = rules.report();
 //   2 rules, 3 distinct alpha nodes from 4 tests (sharing 1.33x), 2 patterns, 1 join edges
 //   unindexed: fraud-check: o.region (NOT_IN)
 ```
+
+Registering fact schemas (`CompilerOptions.factSchemas`) sharpens it further: a literal the field's
+declared type could never hold becomes a compile error rather than a rule that silently never
+matches, a malformed payload is rejected at `insert` rather than quietly matching nothing, and
+§2.6.1's `ne`-on-an-optional-path trap becomes a named warning. All opt-in; the engine needs no
+schemas at all.
 
 Read `unindexed` by *reason*, not by count. A `RESIDUAL_JOIN_CONDITION` is a join that gave up the
 index and is re-evaluated every fire cycle; an `NE` on a single-fact constraint runs once per insert

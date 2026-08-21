@@ -16,14 +16,21 @@ import com.codeheadsystems.rules.rule.JoinConstraint;
 import com.codeheadsystems.rules.rule.Operator;
 import com.codeheadsystems.rules.rule.PatternDefinition;
 import com.codeheadsystems.rules.rule.RangeConstraint;
+import com.codeheadsystems.rules.schema.FactSchemas;
+import com.codeheadsystems.rules.schema.Presence;
+import com.codeheadsystems.rules.schema.SchemaType;
+import com.codeheadsystems.rules.value.Canonical;
 import com.fasterxml.jackson.core.JsonPointer;
+import com.fasterxml.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 
 /**
@@ -53,7 +60,7 @@ final class ReportBuilder {
     return new CompilerReport(
         version,
         List.of(),
-        warnings(rules),
+        warnings(rules, options.factSchemas()),
         unindexed(rules),
         List.<CelCost>of(),
         sharing(rules, network),
@@ -133,23 +140,37 @@ final class ReportBuilder {
   }
 
   /**
-   * Finds tested paths that contain other tested paths of the same type (§3.4.2, §7.4).
+   * Everything §7.4 calls a warning: compiled, and worth a second look.
    *
-   * <p>§7.4 calls this "a performance smell with a usually-easy fix". A rule constraining
-   * {@code /customer} when another constrains {@code /customer/id} compares the whole subtree on
-   * every update to the type, where the deeper path compares one scalar. Detectable without any
-   * data, because containment is a property of the paths alone.
+   * <p>Four kinds, gathered here so that a build has one list to surface:
+   *
+   * <ul>
+   *   <li>a range whose own bounds exclude every value;
+   *   <li>an anti-match a schema proves is always true, and therefore filters nothing;
+   *   <li>§2.6.1's {@code NE}-on-an-optional-path trap;
+   *   <li>a tested path that contains a deeper tested path of the same type -- §7.4 calls this "a
+   *       performance smell with a usually-easy fix", because a rule constraining {@code /customer}
+   *       compares that whole subtree on every update to the type, where the deeper path compares
+   *       one scalar. Detectable without any data, since containment is a property of the paths.
+   * </ul>
+   *
+   * <p>The last three need a registered schema for part or all of their work and stay silent
+   * without one; the first needs none.
    *
    * @param rules the compiled rules
-   * @return one warning per rule holding such a path
+   * @param schemas what is known about the payloads
+   * @return every warning, in rule and declaration order within each kind
    */
-  private static List<Diagnostic> warnings(final List<CompiledRule> rules) {
+  private static List<Diagnostic> warnings(final List<CompiledRule> rules,
+      final FactSchemas schemas) {
     final Map<String, Set<JsonPointer>> byType = new LinkedHashMap<>();
     for (final CompiledRule rule : rules) {
       rule.testedPaths().forEach((type, paths) ->
           byType.computeIfAbsent(type, ignored -> new LinkedHashSet<>()).addAll(paths));
     }
-    final List<Diagnostic> warnings = new ArrayList<>();
+    final List<Diagnostic> warnings = new ArrayList<>(impossibleRanges(rules));
+    warnings.addAll(antiMatchesOnOptionalPaths(rules, schemas));
+    warnings.addAll(vacuousAntiMatches(rules, schemas));
     for (final CompiledRule rule : rules) {
       /*
        * Sorted, because CompiledRule.testedPaths() freezes its sets with Set.copyOf, whose
@@ -173,7 +194,251 @@ final class ReportBuilder {
                       + " deeper path costs one scalar compare",
                   Optional.of(path.toString())))));
     }
+    /*
+     * Sorted by the rule they belong to. An author reads their file top to bottom, and the four
+     * checks above each sweep every rule in turn -- unsorted, one rule's problems arrive in four
+     * separate places in the list. A stable sort, so each check's own declaration order survives
+     * inside a rule, and compilation order is what orders the groups.
+     */
+    final Map<String, Integer> ruleOrder = new LinkedHashMap<>();
+    rules.forEach(rule -> ruleOrder.put(rule.id(), ruleOrder.size()));
+    warnings.sort(Comparator.comparingInt(warning -> ruleOrder.get(warning.ruleId())));
     return warnings;
+  }
+
+  /**
+   * Finds anti-matches a schema proves are always true (§2.6.1, §7.4 warnings).
+   *
+   * <p>The mirror of the compiler's cross-type <em>error</em>, and it exists because §2.6.1 makes
+   * the two cases opposite rather than alike. Against a wrong-typed literal, {@code EQ} is false --
+   * so the rule can never match, and the compiler rejects it. But {@code NE} is {@code !EQ} and so
+   * comes out <strong>true</strong>: {@code status: { ne: 5 }} on a string field does not fail, it
+   * stops constraining anything, and the rule quietly matches every fact it was meant to filter.
+   *
+   * <p>That is the "matches more than its author wrote" failure this codebase treats as the worst
+   * kind, so it is worth reporting -- as a warning, because unlike the {@code EQ} case the rule
+   * still does something, and a build should not fail on a constraint that is merely useless.
+   *
+   * @param rules the compiled rules
+   * @param schemas what is known about the payloads
+   * @return one warning per vacuous anti-match
+   */
+  private static List<Diagnostic> vacuousAntiMatches(final List<CompiledRule> rules,
+      final FactSchemas schemas) {
+    final List<Diagnostic> warnings = new ArrayList<>();
+    for (final CompiledRule rule : rules) {
+      for (final PatternDefinition pattern : rule.source().when()) {
+        for (final Constraint constraint : pattern.constraints()) {
+          if (!(constraint instanceof FieldConstraint field)
+              || (field.op() != Operator.NE && field.op() != Operator.NOT_IN)) {
+            continue;
+          }
+          schemas.typeOf(pattern.factType(), field.field())
+              .filter(type -> vacuous(type, field))
+              .ifPresent(type -> warnings.add(new Diagnostic(rule.id(),
+                  CompilerReport.VACUOUS_ANTI_MATCH,
+                  pattern.alias() + "." + field.field() + " is declared "
+                      + type.name().toLowerCase(Locale.ROOT) + ", and "
+                      + field.op().name().toLowerCase(Locale.ROOT)
+                      + " is the negation of equality -- so §2.6.1 makes this constraint always"
+                      + " true, and it filters nothing. Did you mean a literal of type "
+                      + type.compatibilityClass() + "?",
+                  Optional.of(field.field()))));
+        }
+      }
+    }
+    return warnings;
+  }
+
+  /**
+   * Whether an anti-match can never be false.
+   *
+   * @param type the declared type
+   * @param field the constraint
+   * @return true when no candidate shares the field's compatibility class
+   */
+  private static boolean vacuous(final SchemaType type, final FieldConstraint field) {
+    if (field.op() == Operator.NOT_IN) {
+      if (!field.literal().isArray() || field.literal().isEmpty()) {
+        return false;
+      }
+      for (final JsonNode candidate : field.literal()) {
+        if (type.comparableWith(candidate)) {
+          return false;
+        }
+      }
+      return true;
+    }
+    return !type.comparableWith(field.literal());
+  }
+
+  /**
+   * Finds §2.6.1's {@code NE}-on-an-optional-path trap (§7.4 warnings).
+   *
+   * <p>The trap: {@code ne} is defined as {@code !eq}, so {@code status: { ne: "CLOSED" }} is
+   * <strong>true for a fact with no status at all</strong>. §2.6.1 accepts that deliberately rather
+   * than moving to three-valued logic, and every document in this repository warns about it -- but
+   * a warning in prose only helps the author who already suspected. This one names the rule.
+   *
+   * <p><strong>It needs a schema, and stays silent without one.</strong> "Optional" is a claim about
+   * the data, not about the rule, so only a registered schema can make it. Warning whenever a path
+   * is not known to be required would fire on every {@code ne} in every rule set with no schema,
+   * which is how a warning channel stops being read at all -- and §7.4's warnings are meant to be
+   * surfaced in CI.
+   *
+   * <p>A pattern that also constrains the same path with {@code hasField: true} is doing exactly
+   * what the fix asks for, so it is not warned about.
+   *
+   * @param rules the compiled rules
+   * @param schemas what is known about the payloads
+   * @return one warning per unguarded anti-match on an optional path
+   */
+  private static List<Diagnostic> antiMatchesOnOptionalPaths(final List<CompiledRule> rules,
+      final FactSchemas schemas) {
+    final List<Diagnostic> warnings = new ArrayList<>();
+    for (final CompiledRule rule : rules) {
+      for (final PatternDefinition pattern : rule.source().when()) {
+        for (final Constraint constraint : pattern.constraints()) {
+          if (!(constraint instanceof FieldConstraint field)
+              || (field.op() != Operator.NE && field.op() != Operator.NOT_IN)
+              || schemas.presence(pattern.factType(), field.field()) != Presence.OPTIONAL
+              || guardedByPresenceTest(pattern, field.field())
+              // A vacuous anti-match already matches everything, absent field or not, and that
+              // warning says so more usefully. Two reports of one mistake on one line is noise.
+              || schemas.typeOf(pattern.factType(), field.field())
+                  .filter(type -> vacuous(type, field)).isPresent()) {
+            continue;
+          }
+          warnings.add(new Diagnostic(rule.id(), CompilerReport.NE_ON_OPTIONAL_PATH,
+              pattern.alias() + "." + field.field() + " is optional on "
+                  + pattern.factType() + ", and " + field.op().name().toLowerCase(Locale.ROOT)
+                  + " is defined as the negation of equality -- so this matches a fact with no "
+                  + field.field() + " at all (§2.6.1). Pair it with hasField: true if you meant"
+                  + " \"present, and not that\"",
+              Optional.of(field.field())));
+        }
+      }
+    }
+    return warnings;
+  }
+
+  /**
+   * Whether a pattern already requires the field to be present.
+   *
+   * @param pattern the pattern
+   * @param field the dotted field path
+   * @return true when a {@code hasField: true} on that path guards the anti-match
+   */
+  private static boolean guardedByPresenceTest(final PatternDefinition pattern,
+      final String field) {
+    return pattern.constraints().stream()
+        .anyMatch(other -> other instanceof FieldConstraint guard
+            && guard.op() == Operator.HAS_FIELD
+            && guard.field().equals(field)
+            && guard.literal().booleanValue());
+  }
+
+  /**
+   * Finds ranges whose own bounds exclude every value (§7.4 warnings).
+   *
+   * <p>{@code { between: { from: 500, to: 100 } }} compiles, matches nothing, and says nothing --
+   * which is the same category as a rule on a fact type nobody inserts, and belongs in the same
+   * channel. A warning rather than an error, deliberately: the compiler's errors are for rules it
+   * cannot build, and it can build this one perfectly well.
+   *
+   * <p>Only comparable bounds are checked. §2.6.1 orders numbers and strings and nothing else, so
+   * {@link Canonical#compare} returning empty means "these two cannot be ordered", which is a
+   * different problem and not this one's to report. A range with only one bound has nothing to
+   * contradict -- and note that a {@code $ref} bound never reaches here as a bound at all, since
+   * {@code OperatorMaps.between} routes a referencing bound into its own join constraint and leaves
+   * that end of the range empty.
+   *
+   * @param rules the compiled rules
+   * @return one warning per impossible range, in rule and declaration order
+   */
+  private static List<Diagnostic> impossibleRanges(final List<CompiledRule> rules) {
+    final List<Diagnostic> warnings = new ArrayList<>();
+    for (final CompiledRule rule : rules) {
+      for (final PatternDefinition pattern : rule.source().when()) {
+        /*
+         * Grouped by field rather than checked one constraint at a time, because the same mistake
+         * has two spellings and only one of them is a single constraint. §6.2.1 documents both
+         * `{ between: { from: 500, to: 100 } }` and `{ gt: 500, lt: 100 }`, and the second compiles
+         * into two one-sided ranges that are individually satisfiable and jointly impossible.
+         * Constraints in a pattern are AND-ed, so any lower bound above any upper bound on the same
+         * field settles it.
+         */
+        final Map<String, List<RangeConstraint>> byField = new LinkedHashMap<>();
+        for (final Constraint constraint : pattern.constraints()) {
+          if (constraint instanceof RangeConstraint range) {
+            byField.computeIfAbsent(range.field(), ignored -> new ArrayList<>()).add(range);
+          }
+        }
+        byField.forEach((field, ranges) -> impossibleAcross(ranges).ifPresent(why ->
+            warnings.add(new Diagnostic(rule.id(), CompilerReport.IMPOSSIBLE_RANGE,
+                "these bounds on " + pattern.alias() + "." + field
+                    + " can never all hold: " + why,
+                Optional.of(field)))));
+      }
+    }
+    return warnings;
+  }
+
+  /**
+   * Why the conjunction of one field's ranges excludes everything, if it does.
+   *
+   * @param ranges every range constraint on one field of one pattern
+   * @return the explanation of the first contradiction found, or empty when they can all hold
+   */
+  private static Optional<String> impossibleAcross(final List<RangeConstraint> ranges) {
+    for (final RangeConstraint lower : ranges) {
+      if (lower.lower().isEmpty()) {
+        continue;
+      }
+      for (final RangeConstraint upper : ranges) {
+        if (upper.upper().isEmpty()) {
+          continue;
+        }
+        final Optional<String> why = contradicts(
+            lower.lower().get(), lower.lowerInclusive(),
+            upper.upper().get(), upper.upperInclusive());
+        if (why.isPresent()) {
+          return why;
+        }
+      }
+    }
+    return Optional.empty();
+  }
+
+  /**
+   * Whether one lower bound and one upper bound leave no value between them.
+   *
+   * <p>Only comparable bounds are judged. §2.6.1 orders numbers and strings and nothing else, so
+   * {@link Canonical#compare} returning empty means "these two cannot be ordered", which is a
+   * different problem and not this one's to report. A {@code $ref} bound never reaches here at all:
+   * {@code OperatorMaps.between} routes a referencing bound into its own join constraint and leaves
+   * that end of the range empty.
+   *
+   * @param lower the lower bound
+   * @param lowerInclusive whether the lower bound itself matches
+   * @param upper the upper bound
+   * @param upperInclusive whether the upper bound itself matches
+   * @return the explanation, or empty when some value satisfies both
+   */
+  private static Optional<String> contradicts(final JsonNode lower, final boolean lowerInclusive,
+      final JsonNode upper, final boolean upperInclusive) {
+    final OptionalInt sign = Canonical.compare(lower, upper);
+    if (sign.isEmpty()) {
+      return Optional.empty();
+    }
+    if (sign.getAsInt() > 0) {
+      return Optional.of("the lower bound " + lower + " is above the upper bound " + upper);
+    }
+    if (sign.getAsInt() == 0 && !(lowerInclusive && upperInclusive)) {
+      return Optional.of(
+          "the bounds are both " + lower + " and at least one of them is exclusive");
+    }
+    return Optional.empty();
   }
 
   /**

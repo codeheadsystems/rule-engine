@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.codeheadsystems.rules.access.Paths;
 import com.codeheadsystems.rules.rule.TestedPaths;
+import com.codeheadsystems.rules.schema.FactSchemas;
+import com.codeheadsystems.rules.schema.SchemaViolationException;
 import com.fasterxml.jackson.core.JsonPointer;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
@@ -52,7 +54,7 @@ class DefaultWorkingMemoryTest {
 
   private final Recorder recorder = new Recorder();
   private final DefaultWorkingMemory memory =
-      new DefaultWorkingMemory(PATHS, recorder, false);
+      new DefaultWorkingMemory(PATHS, FactSchemas.none(), recorder, false);
 
   private static ObjectNode order(final String status, final int total) {
     return JsonNodeFactory.instance.objectNode().put("status", status).put("total", total);
@@ -306,7 +308,7 @@ class DefaultWorkingMemoryTest {
   class Strict {
 
     private final DefaultWorkingMemory strict =
-        new DefaultWorkingMemory(PATHS, new Recorder(), true);
+        new DefaultWorkingMemory(PATHS, FactSchemas.none(), new Recorder(), true);
 
     @Test
     @DisplayName("payload() hands out a copy, so a caller cannot mutate engine state")
@@ -325,11 +327,11 @@ class DefaultWorkingMemoryTest {
       // The get-mutate-update sequence is reachable entirely through supported API, and it breaks
       // the update algorithm in two places. Strict mode catches it in test rather than letting it
       // be discovered as a wrong decision in production.
-      final DefaultWorkingMemory lenient = new DefaultWorkingMemory(PATHS, new Recorder(), false);
+      final DefaultWorkingMemory lenient = new DefaultWorkingMemory(PATHS, FactSchemas.none(), new Recorder(), false);
       final FactHandle handle = lenient.insertOwned("Order", order("PENDING", 100));
       final JsonNode live = lenient.get(handle).orElseThrow().payload();
 
-      final DefaultWorkingMemory checked = new DefaultWorkingMemory(PATHS, new Recorder(), true);
+      final DefaultWorkingMemory checked = new DefaultWorkingMemory(PATHS, FactSchemas.none(), new Recorder(), true);
       final FactHandle checkedHandle = checked.insertOwned("Order", (ObjectNode) live);
 
       assertThatThrownBy(() -> checked.update(checkedHandle, live))
@@ -422,6 +424,59 @@ class DefaultWorkingMemoryTest {
     @Override
     public void updateSkipped(final Fact fact) {
       events.add("skipped");
+    }
+  }
+
+  @Nested
+  @DisplayName("a reserved handle whose payload is rejected")
+  class RejectedReservation {
+
+    /*
+     * RhsExecutor reserves a handle at stage time and explains why one must never escape
+     * unreleased: it would leak one id per firing, forever, under a skip-and-continue policy.
+     * Schema validation added a new way for insertReserved to throw, so the reservation has to be
+     * consumed on that path too -- which is only observable inside one working memory, since
+     * `reserved` is per-session state.
+     */
+
+    private final DefaultWorkingMemory memory = new DefaultWorkingMemory(
+        PATHS, rejectAll("Order"), new Recorder(), false);
+
+    @Test
+    @DisplayName("is consumed, not left reserved for a later insert to find")
+    void reservationConsumedOnRejection() {
+      final FactHandle handle = memory.reserveHandle();
+
+      assertThatThrownBy(() -> memory.insertReserved(handle, "Order", JsonNodeFactory.instance.objectNode()))
+          .isInstanceOf(SchemaViolationException.class);
+
+      assertThatThrownBy(() -> memory.insertReserved(handle, "Order", JsonNodeFactory.instance.objectNode()))
+          .as("the id is spent; validating before consuming it would leak one per firing")
+          .isInstanceOf(IllegalArgumentException.class)
+          .hasMessageContaining("was not reserved");
+    }
+
+    /** A registry that rejects every payload of one type, and knows nothing else. */
+    private FactSchemas rejectAll(final String factType) {
+      return new FactSchemas() {
+        @Override
+        public java.util.List<String> violations(final String type,
+            final com.fasterxml.jackson.databind.JsonNode payload) {
+          return factType.equals(type) ? java.util.List.of("rejected by the test") : List.of();
+        }
+
+        @Override
+        public java.util.Optional<com.codeheadsystems.rules.schema.SchemaType> typeOf(
+            final String type, final String dottedPath) {
+          return java.util.Optional.empty();
+        }
+
+        @Override
+        public com.codeheadsystems.rules.schema.Presence presence(final String type,
+            final String dottedPath) {
+          return com.codeheadsystems.rules.schema.Presence.UNKNOWN;
+        }
+      };
     }
   }
 }
