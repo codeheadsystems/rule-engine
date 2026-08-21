@@ -68,7 +68,7 @@ class SmokeTest {
         assertThat(event.context().ruleSetVersion()).isEqualTo(rules.version());
       });
 
-      assertThat(session.get(order).orElseThrow().payload().get("status").textValue())
+      assertThat(session.get(order).orElseThrow().payload().get("status").stringValue())
           .isEqualTo("REVIEW");
 
       // Firing again does nothing: refraction, and the rule no longer matches anyway.

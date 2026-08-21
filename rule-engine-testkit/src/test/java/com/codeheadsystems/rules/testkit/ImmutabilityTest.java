@@ -15,9 +15,9 @@ import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
 import com.codeheadsystems.rules.session.RuleSession;
 import com.codeheadsystems.rules.session.SessionOptions;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.JsonNodeFactory;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -134,7 +134,7 @@ class ImmutabilityTest {
 
       final FieldConstraint constraint = (FieldConstraint) rules.rules().getFirst()
           .source().when().getFirst().constraints().getFirst();
-      ((com.fasterxml.jackson.databind.node.ObjectNode) constraint.literal()).put("tier", "GOLD");
+      ((tools.jackson.databind.node.ObjectNode) constraint.literal()).put("tier", "GOLD");
 
       assertThatThrownBy(() -> rules.newSession(SessionOptions.builder().strict(true).build()))
           .isInstanceOf(IllegalStateException.class);

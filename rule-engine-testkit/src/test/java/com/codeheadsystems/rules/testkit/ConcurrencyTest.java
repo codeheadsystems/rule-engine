@@ -21,7 +21,7 @@ import com.codeheadsystems.rules.session.CompiledRuleSet;
 import com.codeheadsystems.rules.session.FireResult;
 import com.codeheadsystems.rules.session.RuleSession;
 import com.codeheadsystems.rules.session.SessionOptions;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -59,7 +59,7 @@ class ConcurrencyTest {
   }
 
   private static String versionTagOf(final FireResult result) {
-    return result.emitted().getFirst().payload().get("version").asText();
+    return result.emitted().getFirst().payload().get("version").asString();
   }
 
   @Nested
@@ -412,7 +412,7 @@ class ConcurrencyTest {
         final FactHandle handle = session.insert("Order", Facts.obj("id", 1, "total", 10));
         final ExportedFact exported = session.exportFacts().getFirst();
 
-        ((com.fasterxml.jackson.databind.node.ObjectNode) exported.payload()).put("total", 999);
+        ((tools.jackson.databind.node.ObjectNode) exported.payload()).put("total", 999);
 
         // The export is the input to a replay, and a caller holding it will reasonably treat it as
         // theirs. If it aliased working memory, editing it would mutate a live fact behind the

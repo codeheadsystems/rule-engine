@@ -129,7 +129,7 @@ class TerminationAndRefractionTest {
       assertThat(session.fireAllRules().firedCount()).isZero();
       // ... and the new value is nonetheless what the engine holds. The payload is always
       // replaced; only propagation is conditional.
-      assertThat(session.get(handle).orElseThrow().payload().get("customerEmail").textValue())
+      assertThat(session.get(handle).orElseThrow().payload().get("customerEmail").stringValue())
           .isEqualTo("new@example.com");
     }
   }

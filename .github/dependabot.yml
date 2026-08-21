@@ -1,0 +1,34 @@
+version: 2
+
+updates:
+  # The four actions in .github/workflows/gradle.yml. Pinned to major tags (@v4), so this mostly
+  # catches the move to v5 rather than churning on patches.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: thursday
+
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+      day: thursday
+    groups:
+      # Grouped because gradle/libs.versions.toml shares one `version.ref` across several artifacts
+      # in each of these families. Ungrouped, Dependabot opens a PR per artifact and every one of
+      # them edits the same line in [versions] -- so all but the first conflict, and merging them
+      # in the wrong order silently reverts a bump. Grouping is what makes a version catalog and
+      # Dependabot get along.
+      # tools.jackson*, not com.fasterxml.jackson*: Jackson 3 changed the group id, and a pattern
+      # left pointing at the old one would match nothing and silently stop grouping.
+      jackson:
+        patterns:
+          - tools.jackson*
+      jmh:
+        patterns:
+          - org.openjdk.jmh:*
+          - me.champeau.jmh*
+      junit:
+        patterns:
+          - org.junit*

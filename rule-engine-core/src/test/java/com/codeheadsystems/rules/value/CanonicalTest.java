@@ -2,9 +2,9 @@ package com.codeheadsystems.rules.value;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.JsonNodeFactory;
 import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test;
  *
  * <p>Both failures this guards against are silent. A scale-sensitive hash puts {@code 10000} and
  * {@code 10000.0} in different index buckets and the rule simply never matches; a mixed key type
- * puts {@code TextNode("A")} and {@code String("A")} in different buckets and a probe built one way
+ * puts {@code StringNode("A")} and {@code String("A")} in different buckets and a probe built one way
  * misses an entry stored the other. Neither throws.
  */
 class CanonicalTest {
@@ -65,12 +65,12 @@ class CanonicalTest {
   @Test
   @DisplayName("exactly one Java type per compatibility class, and never a JsonNode")
   void oneTypePerClass() {
-    assertThat(Canonical.hashKey(NODES.textNode("A"))).containsInstanceOf(String.class);
+    assertThat(Canonical.hashKey(NODES.stringNode("A"))).containsInstanceOf(String.class);
     assertThat(Canonical.hashKey(NODES.numberNode(1))).containsInstanceOf(BigDecimal.class);
     assertThat(Canonical.hashKey(NODES.numberNode(1.5d))).containsInstanceOf(BigDecimal.class);
     assertThat(Canonical.hashKey(NODES.booleanNode(true))).containsInstanceOf(Boolean.class);
 
-    assertThat(Canonical.hashKey(NODES.textNode("A")).orElseThrow())
+    assertThat(Canonical.hashKey(NODES.stringNode("A")).orElseThrow())
         .isNotInstanceOf(JsonNode.class)
         .isEqualTo("A");
   }
@@ -78,7 +78,7 @@ class CanonicalTest {
   @Test
   @DisplayName("absent, null and containers are not hash keys")
   void nonKeys() {
-    assertThat(Canonical.hashKey(com.fasterxml.jackson.databind.node.MissingNode.getInstance()))
+    assertThat(Canonical.hashKey(tools.jackson.databind.node.MissingNode.getInstance()))
         .isEmpty();
     assertThat(Canonical.hashKey(NODES.nullNode())).isEmpty();
     assertThat(Canonical.hashKey(NODES.objectNode())).isEmpty();
@@ -103,7 +103,7 @@ class CanonicalTest {
   @Test
   @DisplayName("comparison across compatibility classes is undefined, not arbitrary")
   void crossClassComparisonIsUndefined() {
-    assertThat(Canonical.compare(NODES.numberNode(1), NODES.textNode("1"))).isEmpty();
+    assertThat(Canonical.compare(NODES.numberNode(1), NODES.stringNode("1"))).isEmpty();
     assertThat(Canonical.compare(NODES.booleanNode(true), NODES.booleanNode(false))).isEmpty();
     assertThat(Canonical.compare(NODES.objectNode(), NODES.objectNode())).isEmpty();
     assertThat(Canonical.compare(NODES.nullNode(), NODES.numberNode(1))).isEmpty();

@@ -5,7 +5,7 @@ import com.codeheadsystems.rules.expr.ExpressionBindings;
 import com.codeheadsystems.rules.expr.ExpressionCompilationException;
 import com.codeheadsystems.rules.expr.ExpressionCompiler;
 import com.codeheadsystems.rules.expr.ExpressionEvaluationException;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import dev.cel.common.CelAbstractSyntaxTree;
 import dev.cel.common.CelOptions;
 import dev.cel.common.CelValidationException;

@@ -5,7 +5,7 @@ import com.codeheadsystems.rules.fact.Fact;
 import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.fact.WorkingMemory;
 import com.codeheadsystems.rules.match.ActivationKey;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;

@@ -11,7 +11,7 @@ import com.codeheadsystems.rules.rule.CompiledRule;
 import com.codeheadsystems.rules.rule.Constraint;
 import com.codeheadsystems.rules.rule.JoinTest;
 import com.codeheadsystems.rules.rule.Operator;
-import com.fasterxml.jackson.core.JsonPointer;
+import tools.jackson.core.JsonPointer;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;

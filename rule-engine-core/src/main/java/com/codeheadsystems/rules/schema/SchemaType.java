@@ -1,6 +1,6 @@
 package com.codeheadsystems.rules.schema;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 
 /**
  * A declared JSON type, in the vocabulary JSON Schema uses (spec §2.3).
@@ -56,7 +56,7 @@ public enum SchemaType {
       return true;
     }
     return switch (this) {
-      case STRING -> literal.isTextual();
+      case STRING -> literal.isString();
       case NUMBER, INTEGER -> literal.isNumber();
       case BOOLEAN -> literal.isBoolean();
       case OBJECT -> literal.isObject();

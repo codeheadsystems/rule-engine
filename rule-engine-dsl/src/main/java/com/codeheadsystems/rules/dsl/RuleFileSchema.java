@@ -1,6 +1,6 @@
 package com.codeheadsystems.rules.dsl;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import com.networknt.schema.Error;
 import com.networknt.schema.Schema;
 import com.networknt.schema.SchemaRegistry;
@@ -139,7 +139,7 @@ final class RuleFileSchema {
         : pointer.substring("/rules/".length(), slash);
     try {
       final JsonNode id = tree.path("rules").path(Integer.parseInt(index)).path("id");
-      return id.isTextual() ? id.textValue() : null;
+      return id.isString() ? id.stringValue() : null;
     } catch (final NumberFormatException notAnIndex) {
       return null;
     }

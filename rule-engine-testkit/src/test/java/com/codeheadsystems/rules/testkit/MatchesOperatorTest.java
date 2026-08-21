@@ -38,7 +38,7 @@ class MatchesOperatorTest {
         });
 
     assertThat(result.emitted())
-        .extracting(event -> event.payload().get("email").textValue())
+        .extracting(event -> event.payload().get("email").stringValue())
         .containsExactly("alice@example.com");
   }
 
@@ -133,7 +133,7 @@ class MatchesOperatorTest {
         });
 
     assertThat(result.emitted())
-        .extracting(event -> event.payload().get("email").textValue())
+        .extracting(event -> event.payload().get("email").stringValue())
         .containsExactly("a@example.com");
   }
 

@@ -1,9 +1,9 @@
 package com.codeheadsystems.rules.dsl;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.JsonNodeFactory;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.ObjectNode;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -91,13 +91,13 @@ final class References {
       return Optional.empty();
     }
     final JsonNode source = operand.get(EXPR);
-    if (!source.isTextual()) {
+    if (!source.isString()) {
       diagnostics.error(DslError.MALFORMED_OPERAND, pointer,
           "an $expr holds expression source as a string, got "
               + source.getNodeType().toString().toLowerCase(Locale.ROOT));
       return Optional.empty();
     }
-    return Optional.of(source.textValue());
+    return Optional.of(source.stringValue());
   }
 
   /**
@@ -117,13 +117,13 @@ final class References {
       return Optional.empty();
     }
     final JsonNode target = operand.get(REF);
-    if (!target.isTextual()) {
+    if (!target.isString()) {
       diagnostics.error(DslError.MALFORMED_REFERENCE, pointer,
           "a $ref names 'alias.field' as a string, got "
               + target.getNodeType().toString().toLowerCase(Locale.ROOT));
       return Optional.empty();
     }
-    final String text = target.textValue();
+    final String text = target.stringValue();
     final int dot = text.indexOf('.');
     if (dot < 1 || dot == text.length() - 1) {
       diagnostics.error(DslError.MALFORMED_REFERENCE, pointer,

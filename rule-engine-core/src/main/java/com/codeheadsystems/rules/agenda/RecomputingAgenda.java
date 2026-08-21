@@ -5,7 +5,7 @@ import com.codeheadsystems.rules.listener.RuleEngineListener;
 import com.codeheadsystems.rules.listener.SuppressReason;
 import com.codeheadsystems.rules.match.Activation;
 import com.codeheadsystems.rules.match.Tuple;
-import com.fasterxml.jackson.databind.node.MissingNode;
+import tools.jackson.databind.node.MissingNode;
 import com.codeheadsystems.rules.expr.ExpressionBindings;
 import com.codeheadsystems.rules.expr.ExpressionEvaluationException;
 import com.codeheadsystems.rules.rule.CompiledPattern;

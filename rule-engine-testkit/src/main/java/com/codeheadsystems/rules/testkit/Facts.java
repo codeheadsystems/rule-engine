@@ -1,10 +1,10 @@
 package com.codeheadsystems.rules.testkit;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.JsonNodeFactory;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * Builds fact payloads.
@@ -30,7 +30,7 @@ public final class Facts {
   public static ObjectNode json(final String json) {
     try {
       return (ObjectNode) MAPPER.readTree(json);
-    } catch (final JsonProcessingException | ClassCastException invalid) {
+    } catch (final JacksonException | ClassCastException invalid) {
       throw new IllegalArgumentException("not a JSON object: " + json, invalid);
     }
   }
@@ -78,11 +78,11 @@ public final class Facts {
    * @return the node
    * @throws IllegalArgumentException if the type is unsupported
    */
-  private static com.fasterxml.jackson.databind.JsonNode value(final Object raw) {
+  private static tools.jackson.databind.JsonNode value(final Object raw) {
     return switch (raw) {
       case null -> JsonNodeFactory.instance.nullNode();
-      case com.fasterxml.jackson.databind.JsonNode node -> node;
-      case String text -> JsonNodeFactory.instance.textNode(text);
+      case tools.jackson.databind.JsonNode node -> node;
+      case String text -> JsonNodeFactory.instance.stringNode(text);
       case Integer number -> JsonNodeFactory.instance.numberNode(number);
       case Long number -> JsonNodeFactory.instance.numberNode(number);
       case Double number -> JsonNodeFactory.instance.numberNode(number);

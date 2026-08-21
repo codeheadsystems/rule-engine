@@ -3,7 +3,7 @@ package com.codeheadsystems.rules.match;
 import com.codeheadsystems.rules.fact.Fact;
 import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.fact.WorkingMemory;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import java.util.Arrays;
 import java.util.List;
 import java.util.NoSuchElementException;

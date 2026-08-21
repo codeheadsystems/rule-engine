@@ -141,7 +141,7 @@ class RuleFileParseTest {
       assertThat(emit.action()).isEqualTo("emit");
       assertThat(emit.event()).isEqualTo("order.flagged");
       assertThat(emit.payload()).containsOnlyKeys("orderId", "reason");
-      assertThat(emit.payload().get("orderId").get("$ref").textValue()).isEqualTo("o.id");
+      assertThat(emit.payload().get("orderId").get("$ref").stringValue()).isEqualTo("o.id");
     }
   }
 

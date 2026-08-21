@@ -1,6 +1,6 @@
 package com.codeheadsystems.rules.value;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import java.math.BigDecimal;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -24,7 +24,7 @@ import java.util.OptionalInt;
  * <p>The second half of §2.6.2's rule matters as much as the scale rule: canonicalisation produces
  * <strong>one Java type per compatibility class</strong> -- {@code String}, {@code BigDecimal},
  * {@code Boolean}, never a {@code JsonNode}. An index keyed on {@code Object} will happily hold
- * both {@code TextNode("A")} and {@code String("A")}, which are not equal, and then a probe built
+ * both {@code StringNode("A")} and {@code String("A")}, which are not equal, and then a probe built
  * one way misses an entry stored the other.
  */
 public final class Canonical {
@@ -46,8 +46,8 @@ public final class Canonical {
     if (node == null || node.isMissingNode() || node.isNull()) {
       return Optional.empty();
     }
-    if (node.isTextual()) {
-      return Optional.of(node.textValue());
+    if (node.isString()) {
+      return Optional.of(node.stringValue());
     }
     if (node.isBoolean()) {
       return Optional.of(node.booleanValue());
@@ -88,8 +88,8 @@ public final class Canonical {
       }
       return OptionalInt.of(a.get().compareTo(b.get()));
     }
-    if (left.isTextual() && right.isTextual()) {
-      return OptionalInt.of(Integer.signum(left.textValue().compareTo(right.textValue())));
+    if (left.isString() && right.isString()) {
+      return OptionalInt.of(Integer.signum(left.stringValue().compareTo(right.stringValue())));
     }
     return OptionalInt.empty();
   }

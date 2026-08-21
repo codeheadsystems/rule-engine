@@ -254,8 +254,17 @@ class CompilerValidationTest {
   @Test
   @DisplayName("hasField and isNull cannot be join operators either")
   void singleFactTestsRejectedOnAJoin() {
-    // Both read their polarity from a boolean literal, which a $ref cannot supply. They do not
-    // throw; they evaluate nonsense quietly, which is worse.
+    /*
+     * Both read their polarity from a boolean literal, which a $ref cannot supply -- a join hands
+     * the OTHER FACT'S VALUE to Comparisons.test in the literal position, so the polarity would be
+     * whatever data happened to be in that field.
+     *
+     * Under Jackson 2 that evaluated nonsense quietly, which this comment used to say was worse
+     * than throwing. Jackson 3 changed the stakes rather than the verdict: asBoolean() now throws
+     * on a string or object node, so without this gate an ordinary string-valued field would raise
+     * an exception from inside the fire loop. The gate went from preventing a wrong answer to
+     * preventing a crash; see the comment on Comparisons.test's HAS_FIELD case.
+     */
     for (final Operator operator : List.of(Operator.HAS_FIELD, Operator.IS_NULL)) {
       final RuleDefinition rule = Rules.rule("bad-join-" + operator)
           .when("a", "A", pattern -> pattern.hasField("k", true))

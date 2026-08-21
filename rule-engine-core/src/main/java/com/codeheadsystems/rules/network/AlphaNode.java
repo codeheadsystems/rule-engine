@@ -1,7 +1,7 @@
 package com.codeheadsystems.rules.network;
 
 import com.codeheadsystems.rules.rule.AlphaTest;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import java.util.Objects;
 
 /**

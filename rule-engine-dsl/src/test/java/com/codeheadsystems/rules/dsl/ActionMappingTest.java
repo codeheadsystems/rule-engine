@@ -11,7 +11,7 @@ import com.codeheadsystems.rules.rule.Literal;
 import com.codeheadsystems.rules.rule.PayloadField;
 import com.codeheadsystems.rules.rule.RetractFact;
 import com.codeheadsystems.rules.rule.SetField;
-import com.fasterxml.jackson.core.JsonProcessingException;
+import tools.jackson.core.JacksonException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -34,7 +34,7 @@ class ActionMappingTest {
     final ThenNode node;
     try {
       node = RuleFormat.YAML.mapper().readValue(yaml, ThenNode.class);
-    } catch (final JsonProcessingException broken) {
+    } catch (final JacksonException broken) {
       throw new AssertionError("the test fixture is not valid YAML: " + yaml, broken);
     }
     return Actions.actionOf(node,
@@ -61,7 +61,7 @@ class ActionMappingTest {
       assertThat(action.field()).isEqualTo("status");
       assertThat(action.path().toString()).isEqualTo("/status");
       assertThat(action.value()).isInstanceOf(Literal.class);
-      assertThat(((Literal) action.value()).value().textValue()).isEqualTo("REVIEW");
+      assertThat(((Literal) action.value()).value().stringValue()).isEqualTo("REVIEW");
     }
 
     @Test

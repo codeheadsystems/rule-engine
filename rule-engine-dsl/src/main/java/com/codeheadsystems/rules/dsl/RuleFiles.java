@@ -9,7 +9,7 @@ import com.codeheadsystems.rules.rule.ExpressionConstraint;
 import com.codeheadsystems.rules.rule.PatternDefinition;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -255,7 +255,7 @@ public final class RuleFiles {
    */
   private static void record(final JsonNode value, final String pointer, final RuleNode rule,
       final RuleFileReader.Parsed parsed, final Assembly assembly) {
-    if (References.isExpression(value) && value.get(References.EXPR).isTextual()) {
+    if (References.isExpression(value) && value.get(References.EXPR).isString()) {
       /*
        * putIfAbsent, so the FIRST occurrence wins -- matching RuleCompiler, which dedups identical
        * expression text and therefore compiles and reports the first one. With aliases bound
@@ -264,7 +264,7 @@ public final class RuleFiles {
        * author at the working copy and told them it was broken.
        */
       assembly.byConstraint.putIfAbsent(
-          rule.id() + ": expression " + value.get(References.EXPR).textValue(),
+          rule.id() + ": expression " + value.get(References.EXPR).stringValue(),
           new Assembly.ConstraintSite(parsed.index().nearest(pointer), rule.id()));
     }
   }

@@ -279,8 +279,8 @@ public final class JoinPlan {
      * @param other the payload of the already-bound fact at the other end
      * @return whether the join holds
      */
-    public boolean holds(final com.fasterxml.jackson.databind.JsonNode candidate,
-        final com.fasterxml.jackson.databind.JsonNode other) {
+    public boolean holds(final tools.jackson.databind.JsonNode candidate,
+        final tools.jackson.databind.JsonNode other) {
       return bindingConstraintSide ? test.test(candidate, other) : test.test(other, candidate);
     }
 
@@ -289,7 +289,7 @@ public final class JoinPlan {
      *
      * @return the compiled path
      */
-    public com.fasterxml.jackson.core.JsonPointer probePath() {
+    public tools.jackson.core.JsonPointer probePath() {
       return bindingConstraintSide ? test.path() : test.otherAccessor().pointer();
     }
 
@@ -299,8 +299,8 @@ public final class JoinPlan {
      * @param other the payload of the fact at the other end
      * @return the value
      */
-    public com.fasterxml.jackson.databind.JsonNode probeValue(
-        final com.fasterxml.jackson.databind.JsonNode other) {
+    public tools.jackson.databind.JsonNode probeValue(
+        final tools.jackson.databind.JsonNode other) {
       return bindingConstraintSide
           ? test.otherAccessor().get(other)
           : test.accessor().get(other);

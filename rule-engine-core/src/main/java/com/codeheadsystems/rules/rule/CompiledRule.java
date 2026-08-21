@@ -1,7 +1,7 @@
 package com.codeheadsystems.rules.rule;
 
 import com.codeheadsystems.rules.expr.CompiledExpression;
-import com.fasterxml.jackson.core.JsonPointer;
+import tools.jackson.core.JsonPointer;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;

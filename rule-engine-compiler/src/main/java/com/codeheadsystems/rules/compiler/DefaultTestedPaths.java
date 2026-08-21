@@ -1,8 +1,8 @@
 package com.codeheadsystems.rules.compiler;
 
 import com.codeheadsystems.rules.rule.TestedPaths;
-import com.fasterxml.jackson.core.JsonPointer;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.JsonNode;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;

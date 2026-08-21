@@ -7,8 +7,8 @@ import com.codeheadsystems.rules.rule.FieldConstraint;
 import com.codeheadsystems.rules.rule.JoinConstraint;
 import com.codeheadsystems.rules.rule.Operator;
 import com.codeheadsystems.rules.rule.RangeConstraint;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
@@ -37,7 +37,7 @@ class OperatorMapTest {
     final JsonNode map;
     try {
       map = RuleFormat.YAML.mapper().readTree(operatorMapYaml);
-    } catch (final JsonProcessingException broken) {
+    } catch (final JacksonException broken) {
       throw new AssertionError("the test fixture is not valid YAML: " + operatorMapYaml, broken);
     }
     final Diagnostics diagnostics = new Diagnostics(
@@ -88,7 +88,7 @@ class OperatorMapTest {
 
       assertThat(constraint.field()).isEqualTo("total");
       assertThat(constraint.op()).isEqualTo(Operator.EQ);
-      assertThat(constraint.literal().textValue()).isEqualTo("PENDING");
+      assertThat(constraint.literal().stringValue()).isEqualTo("PENDING");
     }
 
     @Test
@@ -246,7 +246,7 @@ class OperatorMapTest {
       final FieldConstraint constraint = singleField("{ matches: \"^[a-z]+@example\\\\.com$\" }");
 
       assertThat(constraint.op()).isEqualTo(Operator.MATCHES);
-      assertThat(constraint.literal().textValue()).isEqualTo("^[a-z]+@example\\.com$");
+      assertThat(constraint.literal().stringValue()).isEqualTo("^[a-z]+@example\\.com$");
     }
 
     @Test
@@ -341,7 +341,7 @@ class OperatorMapTest {
 
       assertThat(constraint.op()).isEqualTo(Operator.EQ);
       assertThat(constraint.literal().isObject()).isTrue();
-      assertThat(constraint.literal().get("$ref").textValue()).isEqualTo("not-a-reference");
+      assertThat(constraint.literal().get("$ref").stringValue()).isEqualTo("not-a-reference");
     }
 
     @Test

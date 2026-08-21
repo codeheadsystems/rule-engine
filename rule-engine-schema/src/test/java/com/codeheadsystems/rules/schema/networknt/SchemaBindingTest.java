@@ -15,11 +15,11 @@ import com.codeheadsystems.rules.session.CompiledRuleSet;
 import com.codeheadsystems.rules.session.RuleSession;
 import com.codeheadsystems.rules.testkit.Facts;
 import com.codeheadsystems.rules.testkit.Rules;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.DoubleNode;
-import com.fasterxml.jackson.databind.node.TextNode;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.DoubleNode;
+import tools.jackson.databind.node.StringNode;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -39,7 +39,7 @@ class SchemaBindingTest {
   private static JsonNode json(final String text) {
     try {
       return JSON.readTree(text);
-    } catch (final JsonProcessingException broken) {
+    } catch (final JacksonException broken) {
       throw new AssertionError("the test fixture is not valid JSON: " + text, broken);
     }
   }
@@ -196,7 +196,7 @@ class SchemaBindingTest {
     void reportedOnce() {
       final RuleDefinition rule = Rules.rule("one-error")
           .when("o", "Order", pattern -> pattern.op("total", Operator.GT,
-              TextNode.valueOf("expensive")))
+              StringNode.valueOf("expensive")))
           .then(actions -> actions.emit("e")).build();
 
       assertThatThrownBy(() -> RuleCompiler.compile(List.of(rule), withSchemas()))

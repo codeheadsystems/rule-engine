@@ -1,7 +1,7 @@
 package com.codeheadsystems.rules.rule;
 
-import com.fasterxml.jackson.core.JsonPointer;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.JsonNode;
 import java.util.LinkedHashSet;
 import java.util.Set;
 

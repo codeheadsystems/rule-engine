@@ -1,8 +1,9 @@
 package com.codeheadsystems.rules.dsl;
 
-import com.fasterxml.jackson.core.JsonLocation;
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.core.JsonToken;
+import tools.jackson.core.TokenStreamLocation;
+import tools.jackson.core.JsonParser;
+import tools.jackson.core.ObjectReadContext;
+import tools.jackson.core.JsonToken;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
@@ -43,7 +44,7 @@ final class SourceIndex {
    */
   static SourceIndex of(final RuleSource source) {
     final Map<String, SourceLocation> found = new HashMap<>();
-    try (JsonParser parser = source.format().factory().createParser(source.text())) {
+    try (JsonParser parser = source.format().factory().createParser(ObjectReadContext.empty(), source.text())) {
       if (parser.nextToken() != null) {
         walk(parser, source.name(), "", found);
       }
@@ -92,7 +93,7 @@ final class SourceIndex {
    * @param location the parser's location, which may be null
    */
   private static void record(final Map<String, SourceLocation> found, final String pointer,
-      final String file, final JsonLocation location) {
+      final String file, final TokenStreamLocation location) {
     if (location != null) {
       found.putIfAbsent(pointer,
           new SourceLocation(file, location.getLineNr(), location.getColumnNr(), pointer));

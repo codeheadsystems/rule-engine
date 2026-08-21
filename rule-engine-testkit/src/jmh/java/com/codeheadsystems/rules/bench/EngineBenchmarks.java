@@ -11,9 +11,9 @@ import com.codeheadsystems.rules.session.RuleSession;
 import com.codeheadsystems.rules.testkit.Facts;
 import com.codeheadsystems.rules.testkit.Rules;
 import com.codeheadsystems.rules.value.Comparisons;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.JsonNodeFactory;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.ObjectNode;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.openjdk.jmh.annotations.Benchmark;
@@ -72,12 +72,12 @@ public class EngineBenchmarks {
     @Setup(Level.Trial)
     public void setUp() {
       op = Operator.valueOf(operator);
-      textValue = JsonNodeFactory.instance.textNode("PENDING");
+      textValue = JsonNodeFactory.instance.stringNode("PENDING");
       numberValue = JsonNodeFactory.instance.numberNode(25_000);
       literal = switch (op) {
         case IN -> Facts.array("HIGH", "MEDIUM", "PENDING");
         case GT -> JsonNodeFactory.instance.numberNode(10_000);
-        default -> JsonNodeFactory.instance.textNode("PENDING");
+        default -> JsonNodeFactory.instance.stringNode("PENDING");
       };
     }
 

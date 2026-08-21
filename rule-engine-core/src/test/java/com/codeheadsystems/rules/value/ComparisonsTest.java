@@ -4,9 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.codeheadsystems.rules.rule.Operator;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.JsonNodeFactory;
-import com.fasterxml.jackson.databind.node.MissingNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.MissingNode;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
@@ -31,12 +31,12 @@ class ComparisonsTest {
 
   private static final JsonNode ABSENT = MissingNode.getInstance();
   private static final JsonNode EXPLICIT_NULL = NODES.nullNode();
-  private static final JsonNode COMPARABLE = NODES.textNode("PENDING");
+  private static final JsonNode COMPARABLE = NODES.stringNode("PENDING");
   private static final JsonNode WRONG_TYPE = NODES.numberNode(42);
 
   private static final JsonNode NULL_LITERAL = NODES.nullNode();
-  private static final JsonNode TEXT_LITERAL = NODES.textNode("PENDING");
-  private static final JsonNode OTHER_TEXT_LITERAL = NODES.textNode("SHIPPED");
+  private static final JsonNode TEXT_LITERAL = NODES.stringNode("PENDING");
+  private static final JsonNode OTHER_TEXT_LITERAL = NODES.stringNode("SHIPPED");
   private static final JsonNode TRUE = NODES.booleanNode(true);
   private static final JsonNode FALSE = NODES.booleanNode(false);
 
@@ -133,8 +133,8 @@ class ComparisonsTest {
       // status: { ne: "CLOSED" } matches an Order with no status at all. The spec accepts this
       // deliberately rather than moving to three-valued logic, and tells authors to pair it with
       // hasField: true when they mean "present and not CLOSED".
-      assertThat(Comparisons.test(Operator.NE, ABSENT, NODES.textNode("CLOSED"))).isTrue();
-      assertThat(Comparisons.test(Operator.NOT_IN, ABSENT, arrayOf(NODES.textNode("CLOSED"))))
+      assertThat(Comparisons.test(Operator.NE, ABSENT, NODES.stringNode("CLOSED"))).isTrue();
+      assertThat(Comparisons.test(Operator.NOT_IN, ABSENT, arrayOf(NODES.stringNode("CLOSED"))))
           .isTrue();
 
       // And the companion that recovers the intended meaning.
@@ -215,10 +215,10 @@ class ComparisonsTest {
     @Test
     @DisplayName("ordering is defined within a class: strings order, booleans do not")
     void orderingIsWithinAClass() {
-      assertThat(Comparisons.test(Operator.GT, NODES.textNode("b"), NODES.textNode("a"))).isTrue();
-      assertThat(Comparisons.test(Operator.LT, NODES.textNode("a"), NODES.textNode("b"))).isTrue();
+      assertThat(Comparisons.test(Operator.GT, NODES.stringNode("b"), NODES.stringNode("a"))).isTrue();
+      assertThat(Comparisons.test(Operator.LT, NODES.stringNode("a"), NODES.stringNode("b"))).isTrue();
       assertThat(Comparisons.test(Operator.GT, TRUE, FALSE)).isFalse();
-      assertThat(Comparisons.test(Operator.GT, NODES.numberNode(1), NODES.textNode("a")))
+      assertThat(Comparisons.test(Operator.GT, NODES.numberNode(1), NODES.stringNode("a")))
           .isFalse();
     }
   }

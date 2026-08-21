@@ -5,7 +5,7 @@ import com.codeheadsystems.rules.rule.FieldConstraint;
 import com.codeheadsystems.rules.rule.JoinConstraint;
 import com.codeheadsystems.rules.rule.Operator;
 import com.codeheadsystems.rules.rule.RangeConstraint;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;

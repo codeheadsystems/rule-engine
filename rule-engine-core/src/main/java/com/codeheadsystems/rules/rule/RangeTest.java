@@ -2,7 +2,7 @@ package com.codeheadsystems.rules.rule;
 
 import com.codeheadsystems.rules.access.FieldAccessor;
 import com.codeheadsystems.rules.value.Comparisons;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import java.util.Objects;
 
 /**

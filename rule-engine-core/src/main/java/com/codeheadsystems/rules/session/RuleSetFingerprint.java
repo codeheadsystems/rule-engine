@@ -18,7 +18,7 @@ import com.codeheadsystems.rules.rule.RangeConstraint;
 import com.codeheadsystems.rules.rule.RetractFact;
 import com.codeheadsystems.rules.rule.SetField;
 import com.codeheadsystems.rules.rule.ValueExpr;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import java.util.List;
 
 /**

@@ -1,6 +1,6 @@
 package com.codeheadsystems.rules.rhs;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 
 /**
  * A host-supplied function a rule may call by name -- the closed action set's escape hatch

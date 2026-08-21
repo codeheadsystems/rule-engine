@@ -2,8 +2,8 @@ package com.codeheadsystems.rules.rule;
 
 import com.codeheadsystems.rules.access.JsonPointerAccessor;
 import com.codeheadsystems.rules.value.Comparisons;
-import com.fasterxml.jackson.core.JsonPointer;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.JsonNode;
 import java.util.Objects;
 
 /**

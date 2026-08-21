@@ -9,7 +9,7 @@ import com.codeheadsystems.rules.rule.Operator;
 import com.codeheadsystems.rules.rule.PatternDefinition;
 import com.codeheadsystems.rules.rule.RangeConstraint;
 import com.codeheadsystems.rules.rule.RuleDefinition;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import java.lang.reflect.RecordComponent;
 import java.util.ArrayList;
 import java.util.Collection;

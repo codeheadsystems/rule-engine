@@ -1,6 +1,6 @@
 package com.codeheadsystems.rules.dsl;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;

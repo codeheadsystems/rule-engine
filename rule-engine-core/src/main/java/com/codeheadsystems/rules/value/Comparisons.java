@@ -1,7 +1,7 @@
 package com.codeheadsystems.rules.value;
 
 import com.codeheadsystems.rules.rule.Operator;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import java.util.Optional;
 import java.util.OptionalInt;
 
@@ -47,6 +47,22 @@ public final class Comparisons {
       case LTE -> ordered(actual, literal, sign -> sign <= 0);
       case IN -> in(actual, literal);
       case NOT_IN -> !in(actual, literal);
+      /*
+       * asBoolean() THROWS on a string or object node under Jackson 3, where Jackson 2 coerced and
+       * returned false. Two independent compile-time gates keep a non-boolean from reaching here,
+       * and both got sharper in this migration rather than merely staying correct:
+       *
+       *   - RuleCompiler rejects a HAS_FIELD/IS_NULL literal that is not boolean (§6.2.1: they
+       *     carry a polarity, not a value of the field's type);
+       *   - RuleCompiler rejects HAS_FIELD/IS_NULL as JOIN operators outright, which matters more
+       *     than it looks. JoinTest.test passes the other fact's field VALUE as this `literal`
+       *     argument -- arbitrary runtime data, not a validated literal -- so without that gate
+       *     ordinary facts would reach asBoolean() and a string-valued field would throw from the
+       *     matching hot path.
+       *
+       * Under Jackson 2 a hole in either gate produced a quiet wrong answer; now it produces an
+       * exception mid-fire. Do not relax either without revisiting this line.
+       */
       case HAS_FIELD -> literal.asBoolean() == !actual.isMissingNode();
       case IS_NULL -> literal.asBoolean() == actual.isNull();
       case MATCHES -> throw new IllegalArgumentException(

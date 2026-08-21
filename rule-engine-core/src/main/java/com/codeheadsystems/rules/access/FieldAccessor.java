@@ -1,6 +1,6 @@
 package com.codeheadsystems.rules.access;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 
 /**
  * Reads one value out of a fact payload.
@@ -15,7 +15,7 @@ public interface FieldAccessor {
    * Reads the value this accessor addresses.
    *
    * @param payload the fact payload to read from; never {@code null}
-   * @return the value at this accessor's path, or {@link com.fasterxml.jackson.databind.node.MissingNode}
+   * @return the value at this accessor's path, or {@link tools.jackson.databind.node.MissingNode}
    *     when the path is not present. Never {@code null} -- §2.6.1 distinguishes an absent value
    *     from an explicit JSON null, and both are represented as nodes rather than as {@code null}
    */

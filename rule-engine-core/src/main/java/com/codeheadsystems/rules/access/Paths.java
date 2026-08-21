@@ -1,6 +1,6 @@
 package com.codeheadsystems.rules.access;
 
-import com.fasterxml.jackson.core.JsonPointer;
+import tools.jackson.core.JsonPointer;
 
 /**
  * Compiles the DSL's dotted field paths into RFC 6901 JSON Pointers (spec §2.6).

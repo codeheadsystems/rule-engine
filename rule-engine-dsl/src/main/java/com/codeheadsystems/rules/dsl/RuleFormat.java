@@ -1,9 +1,11 @@
 package com.codeheadsystems.rules.dsl;
 
-import com.fasterxml.jackson.core.JsonFactory;
-import com.fasterxml.jackson.core.StreamReadFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import tools.jackson.core.StreamReadFeature;
+import tools.jackson.core.TokenStreamFactory;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.cfg.MapperBuilder;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.dataformat.yaml.YAMLMapper;
 import java.util.Locale;
 import java.util.Optional;
 
@@ -53,8 +55,8 @@ public enum RuleFormat {
    *
    * @return the shared, thread-safe factory
    */
-  JsonFactory factory() {
-    return mapper().getFactory();
+  TokenStreamFactory factory() {
+    return mapper().tokenStreamFactory();
   }
 
   /**
@@ -78,11 +80,18 @@ public enum RuleFormat {
    * <p>The author who genuinely wants two operators on one field writes them in one map --
    * {@code status: { hasField: true, ne: "CLOSED" }} -- which is unambiguous and already supported.
    *
-   * @param mapper the mapper to configure
-   * @return the same mapper
+   * <p>Set on the builder rather than on the mapper: a Jackson 3 {@code ObjectMapper} is immutable
+   * once built, so configuration is a build-time decision. That is an improvement here -- under
+   * Jackson 2 this was a mutating {@code enable} call on a shared static, which was safe only
+   * because it ran inside the holder's initialiser.
+   *
+   * @param builder the mapper builder to configure
+   * @param <B> the concrete builder type
+   * @param <M> the concrete mapper type
+   * @return the same builder
    */
-  private static ObjectMapper strict(final ObjectMapper mapper) {
-    return mapper.enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION.mappedFeature());
+  private static <M extends ObjectMapper, B extends MapperBuilder<M, B>> B strict(final B builder) {
+    return builder.enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION);
   }
 
   /**
@@ -91,7 +100,7 @@ public enum RuleFormat {
    * <p>Both holders exist for the reason the YAML one does; see {@link Yaml}.
    */
   private static final class Json {
-    private static final ObjectMapper MAPPER = strict(new ObjectMapper());
+    private static final ObjectMapper MAPPER = strict(JsonMapper.builder()).build();
 
     private Json() {
       throw new UnsupportedOperationException("no instances");
@@ -110,7 +119,7 @@ public enum RuleFormat {
    * dependency costs exactly the feature it belongs to and nothing else.
    */
   private static final class Yaml {
-    private static final ObjectMapper MAPPER = strict(new ObjectMapper(new YAMLFactory()));
+    private static final ObjectMapper MAPPER = strict(YAMLMapper.builder()).build();
 
     private Yaml() {
       throw new UnsupportedOperationException("no instances");

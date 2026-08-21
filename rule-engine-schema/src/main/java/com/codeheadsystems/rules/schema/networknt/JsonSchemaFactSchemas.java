@@ -3,7 +3,7 @@ package com.codeheadsystems.rules.schema.networknt;
 import com.codeheadsystems.rules.schema.FactSchemas;
 import com.codeheadsystems.rules.schema.Presence;
 import com.codeheadsystems.rules.schema.SchemaType;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import com.networknt.schema.Error;
 import com.networknt.schema.Schema;
 import com.networknt.schema.SpecificationVersion;
@@ -73,8 +73,8 @@ public final class JsonSchemaFactSchemas implements FactSchemas {
   public Optional<SchemaType> typeOf(final String factType, final String dottedPath) {
     return describe(factType, dottedPath)
         .map(node -> node.path("type"))
-        .filter(JsonNode::isTextual)
-        .map(node -> SchemaType.forKeyword(node.textValue()));
+        .filter(JsonNode::isString)
+        .map(node -> SchemaType.forKeyword(node.stringValue()));
   }
 
   @Override
@@ -138,7 +138,7 @@ public final class JsonSchemaFactSchemas implements FactSchemas {
       return false;
     }
     for (final JsonNode name : required) {
-      if (name.isTextual() && name.textValue().equals(property)) {
+      if (name.isString() && name.stringValue().equals(property)) {
         return true;
       }
     }
@@ -158,7 +158,7 @@ public final class JsonSchemaFactSchemas implements FactSchemas {
    */
   private static boolean pinnedToObjects(final JsonNode node) {
     final JsonNode type = node.path("type");
-    return type.isTextual() && "object".equals(type.textValue());
+    return type.isString() && "object".equals(type.stringValue());
   }
 
   /**

@@ -66,7 +66,7 @@ class MatchExplainerTest {
           .hasValueSatisfying(failure -> {
             assertThat(failure.constraint().field()).isEqualTo("status");
             assertThat(failure.eliminated()).isEqualTo(3);
-            assertThat(failure.actualValue().textValue()).isEqualTo("SHIPPED");
+            assertThat(failure.actualValue().stringValue()).isEqualTo("SHIPPED");
           });
     }
   }

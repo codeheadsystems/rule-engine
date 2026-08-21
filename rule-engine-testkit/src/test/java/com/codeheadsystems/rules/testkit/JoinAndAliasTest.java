@@ -70,7 +70,7 @@ class JoinAndAliasTest {
         });
 
     assertThat(result.emitted()).singleElement()
-        .extracting(event -> event.payload().get("email").textValue())
+        .extracting(event -> event.payload().get("email").stringValue())
         .isEqualTo("new@example.com");
   }
 
@@ -137,7 +137,7 @@ class JoinAndAliasTest {
         });
 
     assertThat(result.emitted()).singleElement()
-        .extracting(event -> event.payload().get("sku").textValue())
+        .extracting(event -> event.payload().get("sku").stringValue())
         .isEqualTo("B");
   }
 
@@ -159,7 +159,7 @@ class JoinAndAliasTest {
         });
 
     assertThat(result.emitted()).singleElement()
-        .extracting(event -> event.payload().get("winner").textValue())
+        .extracting(event -> event.payload().get("winner").stringValue())
         .isEqualTo("globex");
   }
 }

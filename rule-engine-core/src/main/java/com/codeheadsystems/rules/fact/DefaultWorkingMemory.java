@@ -3,8 +3,8 @@ package com.codeheadsystems.rules.fact;
 import com.codeheadsystems.rules.rule.TestedPaths;
 import com.codeheadsystems.rules.schema.FactSchemas;
 import com.codeheadsystems.rules.schema.SchemaViolationException;
-import com.fasterxml.jackson.core.JsonPointer;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -427,7 +427,7 @@ public final class DefaultWorkingMemory implements WorkingMemory {
    * @param into the identity set to fill
    */
   private static void collectNodes(final JsonNode node, final Map<JsonNode, Boolean> into) {
-    if (!node.isContainerNode()) {
+    if (!node.isContainer()) {
       return;
     }
     if (into.put(node, Boolean.TRUE) != null) {

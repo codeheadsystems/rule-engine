@@ -10,7 +10,7 @@ import com.codeheadsystems.rules.network.SessionMemories;
 import com.codeheadsystems.rules.rule.Operator;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.node.ObjectNode;
 import java.util.List;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.DisplayName;

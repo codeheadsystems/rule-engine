@@ -1,8 +1,8 @@
 package com.codeheadsystems.rules.dsl;
 
-import com.fasterxml.jackson.core.JsonLocation;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.core.TokenStreamLocation;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
 import java.util.List;
 import java.util.Optional;
 
@@ -42,7 +42,7 @@ final class RuleFileReader {
     final JsonNode tree;
     try {
       tree = source.format().mapper().readTree(source.text());
-    } catch (final JsonProcessingException malformed) {
+    } catch (final JacksonException malformed) {
       sink.add(malformed(source, malformed, "this file is not well-formed "
           + source.format() + ": "));
       return Optional.empty();
@@ -78,12 +78,19 @@ final class RuleFileReader {
   private static boolean apiVersionIsKnown(final JsonNode tree, final SourceIndex index,
       final List<DslDiagnostic> sink) {
     final JsonNode declared = tree.path("apiVersion");
-    if (declared.isTextual() && RuleFileDocument.API_VERSION.equals(declared.textValue())) {
+    if (declared.isString() && RuleFileDocument.API_VERSION.equals(declared.stringValue())) {
       return true;
     }
+    /*
+     * toString(), not asString(). Jackson 3's asString() throws on an object or array node where
+     * Jackson 2's asText() returned an empty string -- and `declared` comes straight out of an
+     * untrusted rule file, so `apiVersion: {}` turned this diagnostic into a raw JsonNodeException
+     * escaping RuleFiles.compile. toString() renders every node kind, which is what a message
+     * quoting what it found actually wants: the author sees `'{"a":"b"}'` rather than `''`.
+     */
     final String found = declared.isMissingNode()
         ? "no 'apiVersion' key"
-        : "'" + declared.asText() + "'";
+        : "'" + declared.toString() + "'";
     sink.add(DslDiagnostic.at(DslError.UNKNOWN_API_VERSION,
         index.nearest(declared.isMissingNode() ? "" : "/apiVersion"), null,
         "this rule file declares " + found + "; this engine implements '"
@@ -105,7 +112,7 @@ final class RuleFileReader {
     try {
       return Optional.of(new Parsed(
           source, tree, source.format().mapper().treeToValue(tree, RuleFileDocument.class), index));
-    } catch (final JsonProcessingException unbindable) {
+    } catch (final JacksonException unbindable) {
       /*
        * Reachable in normal use only when the schema gate is off, since the schema rejects every
        * structural fault this can hit and rejects it with a message that names the key. Kept
@@ -120,15 +127,22 @@ final class RuleFileReader {
   /**
    * Turns a Jackson failure into a located diagnostic.
    *
+   * <p><strong>{@code JacksonException} is unchecked under Jackson 3</strong>, where its Jackson 2
+   * predecessor {@code JacksonException} was checked. Nothing here changed shape, but the
+   * compiler no longer insists: deleting either catch above would now build clean and turn a
+   * malformed rule file back into a raw stack trace in somebody's startup log, which is the exact
+   * outcome the second catch's comment argues against. The catches are load-bearing on their own
+   * merits now, not because javac says so.
+   *
    * @param source the file
    * @param failure what Jackson threw
    * @param preamble what to say before Jackson's own explanation
    * @return the diagnostic
    */
   private static DslDiagnostic malformed(final RuleSource source,
-      final JsonProcessingException failure, final String preamble) {
+      final JacksonException failure, final String preamble) {
     final String message = preamble + failure.getOriginalMessage();
-    final JsonLocation location = failure.getLocation();
+    final TokenStreamLocation location = failure.getLocation();
     if (location == null) {
       return DslDiagnostic.of(DslError.MALFORMED_DOCUMENT, source.name() + ": " + message);
     }

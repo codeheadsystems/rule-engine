@@ -2,6 +2,7 @@ package com.codeheadsystems.rules.dsl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
@@ -9,13 +10,15 @@ import com.codeheadsystems.rules.session.EmittedEvent;
 import com.codeheadsystems.rules.session.FireResult;
 import com.codeheadsystems.rules.session.RuleSession;
 import com.codeheadsystems.rules.session.TerminationReason;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * The DSL's front door, end to end (spec §9's Phase 5 exit criterion).
@@ -61,7 +64,7 @@ class RuleFilesTest {
   private static JsonNode json(final String text) {
     try {
       return JSON.readTree(text);
-    } catch (final JsonProcessingException broken) {
+    } catch (final JacksonException broken) {
       throw new AssertionError("the test fixture is not valid JSON: " + text, broken);
     }
   }
@@ -90,7 +93,7 @@ class RuleFilesTest {
       assertThat(result.emitted()).singleElement().satisfies(event -> {
         assertThat(event.eventType()).isEqualTo("order.flagged");
         assertThat(event.payload().get("orderId").intValue()).isEqualTo(1);
-        assertThat(event.payload().get("reason").textValue())
+        assertThat(event.payload().get("reason").stringValue())
             .isEqualTo("high value + risk tier");
       });
     }
@@ -141,7 +144,7 @@ class RuleFilesTest {
       try {
         return JSON.writeValueAsString(
             RuleFormat.YAML.mapper().readTree(ORDERS));
-      } catch (final JsonProcessingException impossible) {
+      } catch (final JacksonException impossible) {
         throw new AssertionError(impossible);
       }
     }
@@ -194,6 +197,36 @@ class RuleFilesTest {
   }
 
   @Nested
+  @DisplayName("a non-scalar apiVersion is a diagnostic, not a stack trace")
+  class ApiVersionShape {
+
+    /*
+     * Found while migrating to Jackson 3. Jackson 2's asText() returned "" for a container node;
+     * Jackson 3's asString() THROWS on one. The apiVersion check renders whatever it found into a
+     * diagnostic message, and apiVersion comes from an untrusted rule file -- so a file writing
+     * `apiVersion: {}` turned a located UNKNOWN_API_VERSION diagnostic into a raw JsonNodeException
+     * escaping RuleFiles.compile.
+     *
+     * That is the failure this whole module exists to prevent, and no test had the shape to catch
+     * it because every fixture writes a scalar. Parameterised over both container kinds and a
+     * number, so the next accessor swap has to survive all three.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"{}", "[]", "{ a: b }", "[1, 2]", "7", "true"})
+    @DisplayName("every non-string apiVersion reports UNKNOWN_API_VERSION")
+    void nonStringApiVersion(final String declared) {
+      final RuleFileException thrown = catchThrowableOfType(RuleFileException.class,
+          () -> RuleFiles.compile(RuleSource.yaml("v.yaml",
+              "apiVersion: " + declared + "\nrules: []\n")));
+
+      assertThat(thrown).isNotNull();
+      assertThat(thrown.diagnostics())
+          .extracting(DslDiagnostic::error)
+          .contains(DslError.UNKNOWN_API_VERSION);
+    }
+  }
+
+  @Nested
   @DisplayName("the rule-set version")
   class Versioning {
 
@@ -226,7 +259,7 @@ class RuleFilesTest {
       final String asJson;
       try {
         asJson = JSON.writeValueAsString(RuleFormat.YAML.mapper().readTree(ONE_ORDER));
-      } catch (final JsonProcessingException impossible) {
+      } catch (final JacksonException impossible) {
         throw new AssertionError(impossible);
       }
 

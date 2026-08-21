@@ -1,6 +1,6 @@
 package com.codeheadsystems.rules.session;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 
 /**
  * Where {@code emit} actions go (spec §4.6).

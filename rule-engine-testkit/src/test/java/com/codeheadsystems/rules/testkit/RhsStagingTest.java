@@ -50,8 +50,8 @@ class RhsStagingTest {
         session.fireAllRules();
 
         final Fact after = session.get(handle).orElseThrow();
-        assertThat(after.payload().get("status").textValue()).isEqualTo("REVIEW");
-        assertThat(after.payload().get("reviewedBy").textValue()).isEqualTo("risk-team");
+        assertThat(after.payload().get("status").stringValue()).isEqualTo("REVIEW");
+        assertThat(after.payload().get("reviewedBy").stringValue()).isEqualTo("risk-team");
         assertThat(after.payload().get("priority").intValue()).isEqualTo(1);
       }
     }
@@ -68,7 +68,7 @@ class RhsStagingTest {
       try (RuleSession session = Engine.compile(rule).newSession()) {
         final var handle = session.insert("Order", Facts.obj("status", "PENDING"));
         session.fireAllRules();
-        assertThat(session.get(handle).orElseThrow().payload().get("status").textValue())
+        assertThat(session.get(handle).orElseThrow().payload().get("status").stringValue())
             .isEqualTo("SECOND");
       }
     }
@@ -85,7 +85,7 @@ class RhsStagingTest {
         final var handle = session.insert("Order", Facts.obj("status", "PENDING"));
         session.fireAllRules();
         assertThat(session.get(handle).orElseThrow()
-            .payload().at("/audit/decidedBy").textValue()).isEqualTo("engine");
+            .payload().at("/audit/decidedBy").stringValue()).isEqualTo("engine");
       }
     }
 
@@ -133,7 +133,7 @@ class RhsStagingTest {
           session -> session.insert("Order", Facts.obj("status", "PENDING")));
 
       assertThat(result.emitted()).singleElement()
-          .extracting(event -> event.payload().get("status").textValue())
+          .extracting(event -> event.payload().get("status").stringValue())
           .isEqualTo("PENDING");
     }
 
@@ -154,7 +154,7 @@ class RhsStagingTest {
           session -> session.insert("Order", Facts.obj("id", 1, "total", 25000)));
 
       assertThat(result.emitted()).singleElement()
-          .extracting(event -> event.payload().get("severity").textValue())
+          .extracting(event -> event.payload().get("severity").stringValue())
           .isEqualTo("HIGH");
     }
 
@@ -252,7 +252,7 @@ class RhsStagingTest {
         // Nothing landed: not the field set that was staged before the failure, not the retract.
         final Fact after = session.get(handle).orElseThrow();
         assertThat(after.payload().has("touched")).isFalse();
-        assertThat(after.payload().get("status").textValue()).isEqualTo("PENDING");
+        assertThat(after.payload().get("status").stringValue()).isEqualTo("PENDING");
         assertThat(result.fired()).singleElement()
             .satisfies(record -> {
               assertThat(record.effects()).isEmpty();
@@ -293,7 +293,7 @@ class RhsStagingTest {
         final FireResult result = session.fireAllRules();
 
         // The working-memory effect landed and stays landed.
-        assertThat(session.get(handle).orElseThrow().payload().get("status").textValue())
+        assertThat(session.get(handle).orElseThrow().payload().get("status").stringValue())
             .isEqualTo("REVIEW");
         // Handlers ran in declaration order, and stopped at the failure.
         assertThat(called).containsExactly("first", "explodes");
@@ -419,7 +419,7 @@ class RhsStagingTest {
 
       final SessionOptions options = SessionOptions.builder()
           .function("mutate", args ->
-              ((com.fasterxml.jackson.databind.node.ObjectNode) args).put("id", 999))
+              ((tools.jackson.databind.node.ObjectNode) args).put("id", 999))
           .build();
 
       try (RuleSession session = Engine.compile(rule).newSession(options)) {
@@ -462,7 +462,7 @@ class RhsStagingTest {
         assertThat(result.emitted()).hasSize(1);
 
         // ... and nothing actually happened.
-        assertThat(session.get(handle).orElseThrow().payload().get("status").textValue())
+        assertThat(session.get(handle).orElseThrow().payload().get("status").stringValue())
             .isEqualTo("PENDING");
         assertThat(session.workingMemory().factsOfType("RiskSignal")).isEmpty();
         assertThat(called).isEmpty();

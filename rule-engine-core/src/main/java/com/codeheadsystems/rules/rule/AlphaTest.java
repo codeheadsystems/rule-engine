@@ -1,7 +1,7 @@
 package com.codeheadsystems.rules.rule;
 
 import com.codeheadsystems.rules.access.FieldAccessor;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 
 /**
  * One precompiled single-fact test (spec §3.2.1's {@code AlphaNode.test}, without the network).

@@ -11,8 +11,8 @@ import com.codeheadsystems.rules.rule.Operator;
 import com.codeheadsystems.rules.rule.RangeConstraint;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
-import com.fasterxml.jackson.databind.node.IntNode;
-import com.fasterxml.jackson.databind.node.TextNode;
+import tools.jackson.databind.node.IntNode;
+import tools.jackson.databind.node.StringNode;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -342,7 +342,7 @@ class CompilerReportTest {
     void incomparableBounds() {
       final CompilerReport report = reportOf(Rules.rule("incomparable")
           .when("o", "Order", pattern -> pattern.constraint(new RangeConstraint("total",
-              Optional.of(TextNode.valueOf("abc")), true,
+              Optional.of(StringNode.valueOf("abc")), true,
               Optional.of(IntNode.valueOf(100)), true)))
           .then(actions -> actions.emit("e")).build());
 

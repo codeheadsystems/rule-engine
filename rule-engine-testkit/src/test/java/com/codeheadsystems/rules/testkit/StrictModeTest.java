@@ -7,7 +7,7 @@ import com.codeheadsystems.rules.agenda.ConflictResolutionStrategy;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.RuleSession;
 import com.codeheadsystems.rules.session.SessionOptions;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -39,7 +39,7 @@ class StrictModeTest {
 
       ((ObjectNode) session.get(handle).orElseThrow().payload()).put("status", "MUTATED");
 
-      assertThat(session.get(handle).orElseThrow().payload().get("status").textValue())
+      assertThat(session.get(handle).orElseThrow().payload().get("status").stringValue())
           .isEqualTo("PENDING");
       assertThat(session.fireAllRules().firedCount()).isEqualTo(1);
     }

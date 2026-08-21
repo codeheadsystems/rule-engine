@@ -131,7 +131,7 @@ class CelDslTest {
         session.fireAllRules();
         assertThat(session.workingMemory().factsOfType("Order")
             .filter(fact -> fact.payload().get("id").intValue() == 1)
-            .findFirst().orElseThrow().payload().get("band").textValue())
+            .findFirst().orElseThrow().payload().get("band").stringValue())
             .isEqualTo("HIGH");
       }
     }

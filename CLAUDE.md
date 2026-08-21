@@ -66,9 +66,31 @@ dependency is a design decision, not a convenience.
 
 `-dsl` adds jackson-dataformat-yaml and networknt json-schema-validator; `-schema` adds networknt
 too. Both are `implementation` and neither reaches `-core`, which is the point of the SPI split
-below. networknt is pinned to the **2.x** line on purpose: 3.x moved to Jackson 3
-(`tools.jackson.*`), a different tree model from the `com.fasterxml` `JsonNode` this engine is built
-on. Following it there is gated on the whole project moving to Jackson 3.
+below.
+
+**This engine is on Jackson 3 (`tools.jackson.*`), not Jackson 2.** networknt tracks it on the 3.x
+line; the projects maintain 2.x and 3.x in parallel, so the pin follows our tree model rather than
+their support window. The move was made while the project was still unreleased and deliberately so:
+`JsonNode` appears in ~60 public signatures and `-core` declares jackson `api`, so after a first
+publish this would break every consumer at once with no gradual path.
+
+**The trap when touching Jackson code here.** Jackson 3 made the typed accessors *strict*.
+`stringValue()`, `intValue()`, `longValue()`, `doubleValue()`, `booleanValue()` and
+`decimalValue()` now **throw** on a type mismatch where Jackson 2's `textValue()`/`intValue()`
+returned `null`/`0`/`false`. Most of those kept their names, so the compiler says nothing — a
+missing type guard is a runtime throw on the matching path, not a wrong answer. Every call site in
+main source is guarded (`isString()`, `isNumber()`, or a compile-time rejection), and it must stay
+that way. Where Jackson 2's null-returning behaviour is what you want, the one-argument form
+(`stringValue(null)`) is the equivalent. `asString()` throws on objects and arrays too, where
+`asText()` returned `""` — that one bit `RuleFileReader`'s `apiVersion` diagnostic, on untrusted
+input; see `RuleFilesTest.ApiVersionShape`.
+
+**Rule-set version hashes did not move.** `RuleCompiler.version()` hashes a canonical string built
+from `rule.when()`/`rule.then()`, whose records render their `JsonNode`s via `toString()` — and
+Jackson 3's `toString()` is byte-identical to Jackson 2's for every node type this engine produces
+(objects, arrays, all scalars, and `BigDecimal` trailing zeros). Verified directly against both jars
+before the migration was committed, because §5.6's hot reload, refraction and `RuleSetFingerprint`
+all key on that identity.
 
 ## Architecture
 

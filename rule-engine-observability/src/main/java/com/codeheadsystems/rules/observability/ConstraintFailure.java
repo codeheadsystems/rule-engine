@@ -1,7 +1,7 @@
 package com.codeheadsystems.rules.observability;
 
 import com.codeheadsystems.rules.rule.Constraint;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import java.util.Objects;
 
 /**

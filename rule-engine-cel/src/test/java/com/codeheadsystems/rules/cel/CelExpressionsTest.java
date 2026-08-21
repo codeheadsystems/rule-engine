@@ -7,10 +7,10 @@ import com.codeheadsystems.rules.expr.CompiledExpression;
 import com.codeheadsystems.rules.expr.ExpressionBindings;
 import com.codeheadsystems.rules.expr.ExpressionCompilationException;
 import com.codeheadsystems.rules.expr.ExpressionEvaluationException;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.MissingNode;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.MissingNode;
 import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
@@ -32,7 +32,7 @@ class CelExpressionsTest {
   private static JsonNode json(final String text) {
     try {
       return JSON.readTree(text);
-    } catch (final JsonProcessingException broken) {
+    } catch (final JacksonException broken) {
       throw new AssertionError("the test fixture is not valid JSON: " + text, broken);
     }
   }
@@ -195,7 +195,7 @@ class CelExpressionsTest {
     @DisplayName("produce strings, booleans, lists and objects, not only numbers")
     void richResults() {
       assertThat(compiler.compileValue("'tier-' + c.tier", Set.of("c"))
-          .evaluate(bind(Map.of("c", json("{\"tier\": \"HIGH\"}")))).textValue())
+          .evaluate(bind(Map.of("c", json("{\"tier\": \"HIGH\"}")))).stringValue())
           .isEqualTo("tier-HIGH");
       assertThat(compiler.compileValue("o.total > 10", Set.of("o"))
           .evaluate(bind(Map.of("o", json("{\"total\": 50}")))).booleanValue()).isTrue();

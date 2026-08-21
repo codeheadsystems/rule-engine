@@ -1,7 +1,7 @@
 package com.codeheadsystems.rules.rule;
 
 import com.codeheadsystems.rules.access.Paths;
-import com.fasterxml.jackson.core.JsonPointer;
+import tools.jackson.core.JsonPointer;
 import java.util.Objects;
 
 /**

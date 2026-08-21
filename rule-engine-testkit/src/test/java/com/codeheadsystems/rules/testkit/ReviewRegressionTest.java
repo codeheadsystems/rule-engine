@@ -25,8 +25,8 @@ import com.codeheadsystems.rules.session.FireResult;
 import com.codeheadsystems.rules.session.RuleSession;
 import com.codeheadsystems.rules.session.SessionOptions;
 import com.codeheadsystems.rules.session.TerminationReason;
-import com.fasterxml.jackson.core.JsonPointer;
-import com.fasterxml.jackson.databind.node.ArrayNode;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.node.ArrayNode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -565,7 +565,7 @@ class ReviewRegressionTest {
 
         final var alert = session.workingMemory().factsOfType("Alert").toList();
         assertThat(alert).singleElement().satisfies(fact -> {
-          assertThat(fact.payload().get("level").textValue()).isEqualTo("HIGH");
+          assertThat(fact.payload().get("level").stringValue()).isEqualTo("HIGH");
           // Inserted once, at one recency. Committing this as insert-then-update would make the
           // fact briefly visible carrying LOW and bump its recency a second time, reordering
           // conflict resolution against every other fact for no reason an author could predict.
@@ -598,10 +598,10 @@ class ReviewRegressionTest {
         final FireResult result = session.fireAllRules();
 
         assertThat(result.emitted()).singleElement()
-            .extracting(event -> event.payload().get("level").textValue())
+            .extracting(event -> event.payload().get("level").stringValue())
             .isEqualTo("HIGH");
         assertThat(session.workingMemory().factsOfType("Alert")).singleElement()
-            .extracting(fact -> fact.payload().get("level").textValue())
+            .extracting(fact -> fact.payload().get("level").stringValue())
             .isEqualTo("HIGH");
 
         // One working-memory effect, because one thing landed: an insert. A FieldSet alongside it
@@ -627,7 +627,7 @@ class ReviewRegressionTest {
       assertThat(Engine.result(Engine.compile(rule), SessionOptions.defaults(),
           session -> session.insert("Order", Facts.obj("status", "PENDING")))
           .emitted()).singleElement()
-          .extracting(event -> event.payload().get("status").textValue())
+          .extracting(event -> event.payload().get("status").stringValue())
           .isEqualTo("PENDING");
     }
 

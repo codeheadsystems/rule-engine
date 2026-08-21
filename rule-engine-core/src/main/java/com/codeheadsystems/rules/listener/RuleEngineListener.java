@@ -6,8 +6,8 @@ import com.codeheadsystems.rules.match.ActivationKey;
 import com.codeheadsystems.rules.rule.ActionDefinition;
 import com.codeheadsystems.rules.session.EmitContext;
 import com.codeheadsystems.rules.session.FireRecord;
-import com.fasterxml.jackson.core.JsonPointer;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.JsonNode;
 import java.util.Set;
 
 /**

@@ -17,7 +17,7 @@ import com.codeheadsystems.rules.rule.RetractFact;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.rule.SetField;
 import com.codeheadsystems.rules.rule.ValueExpr;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;

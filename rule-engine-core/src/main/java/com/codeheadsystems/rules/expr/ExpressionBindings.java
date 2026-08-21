@@ -1,6 +1,6 @@
 package com.codeheadsystems.rules.expr;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 
 /**
  * What an expression can see: the facts bound to a rule's aliases (spec §6.4).

@@ -1,6 +1,6 @@
 package com.codeheadsystems.rules.schema;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import java.util.List;
 import java.util.Optional;
 

@@ -1,6 +1,6 @@
 package com.codeheadsystems.rules.fact;
 
-import com.fasterxml.jackson.core.JsonPointer;
+import tools.jackson.core.JsonPointer;
 import java.util.Set;
 
 /**

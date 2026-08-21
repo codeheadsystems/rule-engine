@@ -1,7 +1,7 @@
 package com.codeheadsystems.rules.rule;
 
 import com.codeheadsystems.rules.access.FieldAccessor;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import com.google.re2j.Pattern;
 import java.util.Objects;
 
@@ -50,6 +50,6 @@ public record RegexTest(FieldConstraint source, FieldAccessor accessor, Pattern 
   @Override
   public boolean test(final JsonNode payload) {
     final JsonNode value = accessor.get(payload);
-    return value.isTextual() && pattern.matcher(value.textValue()).find();
+    return value.isString() && pattern.matcher(value.stringValue()).find();
   }
 }

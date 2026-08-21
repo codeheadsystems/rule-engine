@@ -5,9 +5,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.codeheadsystems.rules.schema.Presence;
 import com.codeheadsystems.rules.schema.SchemaType;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -27,7 +27,7 @@ class JsonSchemaFactSchemasTest {
   private static JsonNode json(final String text) {
     try {
       return JSON.readTree(text);
-    } catch (final JsonProcessingException broken) {
+    } catch (final JacksonException broken) {
       throw new AssertionError("the test fixture is not valid JSON: " + text, broken);
     }
   }
@@ -353,7 +353,7 @@ class JsonSchemaFactSchemasTest {
       final JsonSchemaFactSchemas schemas =
           JsonSchemaFactSchemas.builder().register("T", document).build();
 
-      ((com.fasterxml.jackson.databind.node.ObjectNode) document.get("properties"))
+      ((tools.jackson.databind.node.ObjectNode) document.get("properties"))
           .set("b", json("{\"type\": \"integer\"}"));
 
       assertThat(schemas.typeOf("T", "b"))

@@ -1,8 +1,8 @@
 package com.codeheadsystems.rules.rhs;
 
-import com.fasterxml.jackson.core.JsonPointer;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * Writes a value into a mutable JSON tree at a precompiled path, creating intermediate objects.

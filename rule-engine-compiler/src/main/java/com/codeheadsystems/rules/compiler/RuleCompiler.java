@@ -36,8 +36,8 @@ import com.codeheadsystems.rules.rule.ValueExpr;
 import com.codeheadsystems.rules.schema.SchemaType;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
 import com.codeheadsystems.rules.session.DefaultCompiledRuleSet;
-import com.fasterxml.jackson.core.JsonPointer;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.JsonNode;
 import com.google.re2j.Pattern;
 import com.google.re2j.PatternSyntaxException;
 import java.nio.charset.StandardCharsets;
@@ -323,14 +323,14 @@ public final class RuleCompiler {
    */
   private Optional<AlphaTest> compileRegex(final String where, final FieldConstraint constraint,
       final JsonPointerAccessor accessor) {
-    if (!constraint.literal().isTextual()) {
+    if (!constraint.literal().isString()) {
       diagnostics.add(where + ": matches expects a string pattern, got "
           + constraint.literal().getNodeType());
       return Optional.empty();
     }
     try {
       return Optional.of(
-          new RegexTest(constraint, accessor, Pattern.compile(constraint.literal().textValue())));
+          new RegexTest(constraint, accessor, Pattern.compile(constraint.literal().stringValue())));
     } catch (final PatternSyntaxException invalid) {
       diagnostics.add(where + ": invalid regular expression -- " + invalid.getMessage()
           + ". Patterns are RE2 (spec section 2.6.3), which has no backreferences and no"
@@ -366,7 +366,7 @@ public final class RuleCompiler {
     for (final Optional<JsonNode> maybeBound : List.of(constraint.lower(), constraint.upper())) {
       if (maybeBound.isPresent()) {
         final JsonNode bound = maybeBound.get();
-        if (!bound.isNumber() && !bound.isTextual()) {
+        if (!bound.isNumber() && !bound.isString()) {
           diagnostics.add(where + ": range bounds must be numbers or strings, got "
               + bound.getNodeType() + ". Ordering is defined within a type-compatibility class"
               + " only (spec section 2.6.1)");

@@ -7,10 +7,10 @@ import com.codeheadsystems.rules.access.Paths;
 import com.codeheadsystems.rules.rule.TestedPaths;
 import com.codeheadsystems.rules.schema.FactSchemas;
 import com.codeheadsystems.rules.schema.SchemaViolationException;
-import com.fasterxml.jackson.core.JsonPointer;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.JsonNodeFactory;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.ObjectNode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -72,7 +72,7 @@ class DefaultWorkingMemoryTest {
 
       mine.put("status", "MUTATED BEHIND THE ENGINE'S BACK");
 
-      assertThat(memory.get(handle).orElseThrow().payload().get("status").textValue())
+      assertThat(memory.get(handle).orElseThrow().payload().get("status").stringValue())
           .isEqualTo("PENDING");
     }
 
@@ -93,7 +93,7 @@ class DefaultWorkingMemoryTest {
       memory.update(handle, replacement);
       replacement.put("status", "MUTATED");
 
-      assertThat(memory.get(handle).orElseThrow().payload().get("status").textValue())
+      assertThat(memory.get(handle).orElseThrow().payload().get("status").stringValue())
           .isEqualTo("SHIPPED");
     }
   }
@@ -121,7 +121,7 @@ class DefaultWorkingMemoryTest {
 
       // The payload is ALWAYS replaced; only propagation is conditional.
       final Fact after = memory.get(handle).orElseThrow();
-      assertThat(after.payload().get("customerEmail").textValue()).isEqualTo("new@example.com");
+      assertThat(after.payload().get("customerEmail").stringValue()).isEqualTo("new@example.com");
       assertThat(after.recency()).isEqualTo(recencyBefore);
     }
 
@@ -258,7 +258,7 @@ class DefaultWorkingMemoryTest {
 
       final List<String> seen = new ArrayList<>();
       memory.factsOfType("Order").forEach(fact -> {
-        seen.add(fact.payload().get("status").textValue());
+        seen.add(fact.payload().get("status").stringValue());
         // Exactly what an RHS does: insert a derived fact and retract a handled one while a
         // callFunction walks the same type.
         if (seen.size() == 1) {
@@ -317,7 +317,7 @@ class DefaultWorkingMemoryTest {
 
       ((ObjectNode) strict.get(handle).orElseThrow().payload()).put("status", "MUTATED");
 
-      assertThat(strict.get(handle).orElseThrow().payload().get("status").textValue())
+      assertThat(strict.get(handle).orElseThrow().payload().get("status").stringValue())
           .isEqualTo("PENDING");
     }
 
@@ -370,7 +370,7 @@ class DefaultWorkingMemoryTest {
       strict.update(handle, JsonNodeFactory.instance.objectNode()
           .put("id", 1).put("flag", true).putNull("closedAt").put("status", "SHIPPED"));
 
-      assertThat(strict.get(handle).orElseThrow().payload().get("status").textValue())
+      assertThat(strict.get(handle).orElseThrow().payload().get("status").stringValue())
           .isEqualTo("SHIPPED");
     }
 
@@ -379,7 +379,7 @@ class DefaultWorkingMemoryTest {
     void freshPayloadAccepted() {
       final FactHandle handle = strict.insert("Order", order("PENDING", 100));
       strict.update(handle, order("SHIPPED", 100));
-      assertThat(strict.get(handle).orElseThrow().payload().get("status").textValue())
+      assertThat(strict.get(handle).orElseThrow().payload().get("status").stringValue())
           .isEqualTo("SHIPPED");
     }
   }
@@ -399,9 +399,13 @@ class DefaultWorkingMemoryTest {
     @Override
     public void factRetracted(final Fact fact) {
       events.add("retracted");
-      payloadAtRetract = fact.payload().path("status").textValue();
+      // stringValue(null), not stringValue(). path() yields a MissingNode for an absent field, and
+      // Jackson 3's no-arg accessor THROWS on a non-string where Jackson 2's textValue() returned
+      // null. The one-arg form restores the old semantics, which is what this recorder wants: it is
+      // asking "what was the status, if there was one".
+      payloadAtRetract = fact.payload().path("status").stringValue(null);
       payloadInMemoryAtRetract = memory.get(fact.handle())
-          .map(current -> current.payload().path("status").textValue())
+          .map(current -> current.payload().path("status").stringValue(null))
           .orElse("(gone)");
     }
 
@@ -461,7 +465,7 @@ class DefaultWorkingMemoryTest {
       return new FactSchemas() {
         @Override
         public java.util.List<String> violations(final String type,
-            final com.fasterxml.jackson.databind.JsonNode payload) {
+            final tools.jackson.databind.JsonNode payload) {
           return factType.equals(type) ? java.util.List.of("rejected by the test") : List.of();
         }
 

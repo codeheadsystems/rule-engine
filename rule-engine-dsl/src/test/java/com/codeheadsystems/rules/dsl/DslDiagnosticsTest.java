@@ -100,10 +100,10 @@ class DslDiagnosticsTest {
               DslError.UNKNOWN_ACTION);
     }
 
-    private com.fasterxml.jackson.databind.JsonNode operatorMap(final String yaml) {
+    private tools.jackson.databind.JsonNode operatorMap(final String yaml) {
       try {
         return RuleFormat.YAML.mapper().readTree(yaml);
-      } catch (final com.fasterxml.jackson.core.JsonProcessingException broken) {
+      } catch (final tools.jackson.core.JacksonException broken) {
         throw new AssertionError(broken);
       }
     }

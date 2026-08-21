@@ -1,10 +1,10 @@
 package com.codeheadsystems.rules.cel;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.JsonNodeFactory;
 import com.codeheadsystems.rules.expr.ExpressionEvaluationException;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.node.ObjectNode;
 import com.google.common.primitives.UnsignedLong;
 import com.google.protobuf.NullValue;
 import java.math.BigDecimal;
@@ -58,8 +58,8 @@ final class JsonValues {
        */
       return NullValue.NULL_VALUE;
     }
-    if (node.isTextual()) {
-      return node.textValue();
+    if (node.isString()) {
+      return node.stringValue();
     }
     if (node.isBoolean()) {
       return node.booleanValue();
@@ -82,7 +82,7 @@ final class JsonValues {
       node.properties().forEach(field -> fields.put(field.getKey(), toCel(field.getValue())));
       return fields;
     }
-    return node.asText();
+    return node.asString();
   }
 
   /**
@@ -105,7 +105,7 @@ final class JsonValues {
       case dev.cel.common.values.NullValue ignored -> nodes.nullNode();
       case UnsignedLong unsigned -> nodes.numberNode(unsigned.bigIntegerValue());
       case JsonNode already -> already;
-      case String text -> nodes.textNode(text);
+      case String text -> nodes.stringNode(text);
       case Boolean flag -> nodes.booleanNode(flag);
       case Long number -> nodes.numberNode(number);
       case Integer number -> nodes.numberNode(number.longValue());

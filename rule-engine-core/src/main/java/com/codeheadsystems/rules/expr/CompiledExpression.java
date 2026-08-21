@@ -1,6 +1,6 @@
 package com.codeheadsystems.rules.expr;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 
 /**
  * One expression, compiled once and evaluated many times (spec §6.4).
