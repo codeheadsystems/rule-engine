@@ -1,0 +1,39 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The build targets a JDK 25 toolchain (spec section 5). Gradle itself runs on this JDK and
+      # resolves the toolchain from it.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # `build` runs both `test` and `strictTest`: section 7.5 asks for the full suite to run under
+      # strict mode in CI, and the strict-mode checks are exactly the ones that catch a contract
+      # violation the compiler cannot. Javadoc warnings fail the build too -- several of the
+      # engine's contracts are stated only there.
+      - name: Build, test, and check contracts under strict mode
+        run: ./gradlew build javadoc --no-daemon
+
+      - name: Publish test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: '**/build/reports/tests/'
+          if-no-files-found: ignore
