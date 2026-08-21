@@ -47,6 +47,20 @@ public record RangeConstraint(
     if (lower.isEmpty() && upper.isEmpty()) {
       throw new IllegalArgumentException("range constraint on '" + field + "' has no bounds");
     }
+    /*
+     * The inclusivity of a bound that is not there means nothing, and both readers -- Comparisons
+     * and PatternMemory's sorted probe -- test isPresent() before they look at the flag. Left
+     * un-normalised it is still part of this record's equality, and that leaks in two places that
+     * matter: NetworkBuilder shares alpha nodes by constraint equality, so one constraint written
+     * two ways would build two nodes; and the rule-set version hash of §5.6 is computed over these
+     * records, so semantically identical rule sets would carry different versions.
+     *
+     * §6.2.1 states the case that surfaced it -- "{ between: { from: 100 } } and { gte: 100 }
+     * compile to the identical RangeConstraint" -- which is true of behaviour either way and true
+     * of equality only after this.
+     */
+    lowerInclusive = lower.isPresent() && lowerInclusive;
+    upperInclusive = upper.isPresent() && upperInclusive;
   }
 
   /**

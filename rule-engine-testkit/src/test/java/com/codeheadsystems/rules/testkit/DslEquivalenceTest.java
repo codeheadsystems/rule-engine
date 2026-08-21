@@ -1,0 +1,351 @@
+package com.codeheadsystems.rules.testkit;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.codeheadsystems.rules.rule.RuleDefinition;
+import com.codeheadsystems.rules.session.RuleSession;
+import java.util.List;
+import java.util.function.Consumer;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+/**
+ * The DSL against the constraint AST, as {@link MatcherEquivalence} runs the network against the
+ * oracle.
+ *
+ * <p>Every case here writes one rule twice -- once as YAML, once against the AST -- and asserts the
+ * two are indistinguishable in structure and in behaviour. The AST form is the definition, because
+ * it is what every other test in this repository is written against and what the engine has been
+ * correct on since Phase 0.
+ *
+ * <p>The corpus is chosen to cover the shapes where the two forms could plausibly diverge rather
+ * than to re-walk §6.2.1's table, which {@code OperatorMapTest} does exhaustively one row at a
+ * time. What is interesting here is composition: joins, ordering, several constraints per pattern,
+ * and the literal forms whose canonicalisation is easy to get subtly wrong.
+ */
+class DslEquivalenceTest {
+
+  private static final Consumer<RuleSession> ORDERS = session -> {
+    session.insert("Customer", Facts.json("""
+        {"id": 7, "riskTier": "HIGH", "floor": 1000, "ceiling": 50000}"""));
+    session.insert("Customer", Facts.json("""
+        {"id": 8, "riskTier": "LOW", "floor": 0, "ceiling": 100}"""));
+    session.insert("Order", Facts.json("""
+        {"id": 1, "total": 25000, "status": "PENDING", "customerId": 7, "email": "a@example.com"}"""));
+    session.insert("Order", Facts.json("""
+        {"id": 2, "total": 50, "status": "PENDING", "customerId": 8, "email": "b@example.com"}"""));
+    session.insert("Order", Facts.json("""
+        {"id": 3, "total": 9000, "status": "CLOSED", "customerId": 7}"""));
+  };
+
+  /** Wraps rule bodies in a file header. */
+  private static String file(final String rules) {
+    return "apiVersion: rules.v1\nrules:\n" + rules;
+  }
+
+  @Nested
+  @DisplayName("a single-fact rule")
+  class SingleFact {
+
+    @Test
+    @DisplayName("with an equality and a range matches the hand-built form exactly")
+    void equalityAndRange() {
+      final FiringSequence fired = DslEquivalence.assertEquivalent(
+          file("""
+                - id: high-value
+                  when:
+                    - fact: Order
+                      as: o
+                      where:
+                        total:  { gt: 10000 }
+                        status: { eq: "PENDING" }
+                  then:
+                    - action: emit
+                      event: flagged
+                      payload: { orderId: { $ref: o.id } }
+              """),
+          List.of(Rules.rule("high-value")
+              .when("o", "Order", pattern -> pattern.gt("total", 10000).eq("status", "PENDING"))
+              .then(actions -> actions.emit("flagged", "orderId", Rules.ref("o.id")))
+              .build()),
+          ORDERS);
+
+      assertThat(fired.steps()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("with membership, presence and a regex matches too")
+    void membershipPresenceRegex() {
+      DslEquivalence.assertEquivalent(
+          file("""
+                - id: mixed
+                  when:
+                    - fact: Order
+                      as: o
+                      where:
+                        status: { in: ["PENDING", "REVIEW"] }
+                        # Two operators on one field go in ONE map. Writing 'email' twice is a
+                        # duplicate key, which the reader rejects rather than silently keeping the
+                        # last -- see RuleFormat.strict.
+                        email:  { hasField: true, matches: "^[a-z]@example\\\\.com$" }
+                  then:
+                    - action: emit
+                      event: matched
+              """),
+          List.of(Rules.rule("mixed")
+              .when("o", "Order", pattern -> pattern
+                  .in("status", "PENDING", "REVIEW")
+                  .hasField("email", true)
+                  .matches("email", "^[a-z]@example\\.com$"))
+              .then(actions -> actions.emit("matched"))
+              .build()),
+          ORDERS);
+    }
+
+    @Test
+    @DisplayName("with a two-sided between matches the builder's inclusive range")
+    void between() {
+      DslEquivalence.assertEquivalent(
+          file("""
+                - id: mid-value
+                  when:
+                    - fact: Order
+                      as: o
+                      where:
+                        total: { between: { from: 100, to: 30000 } }
+                  then:
+                    - action: emit
+                      event: mid
+              """),
+          List.of(Rules.rule("mid-value")
+              .when("o", "Order", pattern -> pattern.between("total", 100, 30000))
+              .then(actions -> actions.emit("mid"))
+              .build()),
+          ORDERS);
+    }
+  }
+
+  @Nested
+  @DisplayName("a join")
+  class Joins {
+
+    @Test
+    @DisplayName("on equality matches the hand-built $ref form")
+    void equalityJoin() {
+      final FiringSequence fired = DslEquivalence.assertEquivalent(
+          file("""
+                - id: high-value-order-review
+                  salience: 10
+                  noLoop: true
+                  when:
+                    - fact: Order
+                      as: o
+                      where:
+                        total:  { gt: 10000 }
+                        status: { eq: "PENDING" }
+                    - fact: Customer
+                      as: c
+                      where:
+                        id:       { eq: { $ref: o.customerId } }
+                        riskTier: { in: ["HIGH", "MEDIUM"] }
+                  then:
+                    - action: setField
+                      target: o
+                      field: status
+                      value: "REVIEW"
+                    - action: emit
+                      event: "order.flagged"
+                      payload:
+                        orderId: { $ref: o.id }
+                        reason: "high value + risk tier"
+              """),
+          List.of(Rules.rule("high-value-order-review")
+              .salience(10)
+              .noLoop()
+              .when("o", "Order", pattern -> pattern.gt("total", 10000).eq("status", "PENDING"))
+              .when("c", "Customer", pattern -> pattern
+                  .ref("id", "o.customerId").in("riskTier", "HIGH", "MEDIUM"))
+              .then(actions -> actions
+                  .setField("o", "status", "REVIEW")
+                  .emit("order.flagged",
+                      "orderId", Rules.ref("o.id"),
+                      "reason", "high value + risk tier"))
+              .build()),
+          ORDERS);
+
+      assertThat(fired.steps()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("on an ordered operator matches, since either end may be bound first")
+    void orderedJoin() {
+      DslEquivalence.assertEquivalent(
+          file("""
+                - id: over-ceiling
+                  when:
+                    - fact: Customer
+                      as: c
+                    - fact: Order
+                      as: o
+                      where:
+                        total: { gt: { $ref: c.ceiling } }
+                  then:
+                    - action: emit
+                      event: over
+                      payload: { orderId: { $ref: o.id } }
+              """),
+          List.of(Rules.rule("over-ceiling")
+              .when("c", "Customer")
+              .when("o", "Order", pattern -> pattern.ref("total", "c.ceiling",
+                  com.codeheadsystems.rules.rule.Operator.GT))
+              .then(actions -> actions.emit("over", "orderId", Rules.ref("o.id")))
+              .build()),
+          ORDERS);
+    }
+  }
+
+  @Nested
+  @DisplayName("the right-hand side")
+  class RightHandSide {
+
+    @Test
+    @DisplayName("insert, retract and a derived fact match the hand-built actions")
+    void everyVerb() {
+      DslEquivalence.assertEquivalent(
+          file("""
+                - id: derive
+                  when:
+                    - fact: Order
+                      as: o
+                      where:
+                        total: { gt: 10000 }
+                  then:
+                    - action: insertFact
+                      fact: RiskSignal
+                      as: sig
+                      payload:
+                        orderId:  { $ref: o.id }
+                        severity: "HIGH"
+                    - action: emit
+                      event: derived
+                      payload: { orderId: { $ref: o.id } }
+              """),
+          List.of(Rules.rule("derive")
+              .when("o", "Order", pattern -> pattern.gt("total", 10000))
+              .then(actions -> actions
+                  .insertFactAs("RiskSignal", "sig",
+                      "orderId", Rules.ref("o.id"),
+                      "severity", "HIGH")
+                  .emit("derived", "orderId", Rules.ref("o.id")))
+              .build()),
+          ORDERS);
+    }
+  }
+
+  @Nested
+  @DisplayName("several rules in one file")
+  class ManyRules {
+
+    @Test
+    @DisplayName("keep their declaration order, which conflict resolution must not depend on")
+    void severalRules() {
+      final FiringSequence fired = DslEquivalence.assertEquivalent(
+          file("""
+                - id: low-priority
+                  salience: 1
+                  when: [{ fact: Order, as: o, where: { status: { eq: "PENDING" } } }]
+                  then: [{ action: emit, event: low, payload: { id: { $ref: o.id } } }]
+                - id: high-priority
+                  salience: 100
+                  when: [{ fact: Order, as: o, where: { status: { eq: "PENDING" } } }]
+                  then: [{ action: emit, event: high, payload: { id: { $ref: o.id } } }]
+              """),
+          List.of(
+              Rules.rule("low-priority").salience(1)
+                  .when("o", "Order", pattern -> pattern.eq("status", "PENDING"))
+                  .then(actions -> actions.emit("low", "id", Rules.ref("o.id")))
+                  .build(),
+              Rules.rule("high-priority").salience(100)
+                  .when("o", "Order", pattern -> pattern.eq("status", "PENDING"))
+                  .then(actions -> actions.emit("high", "id", Rules.ref("o.id")))
+                  .build()),
+          ORDERS);
+
+      assertThat(fired.steps()).extracting(FiringSequence.Step::ruleId)
+          .startsWith("high-priority");
+    }
+  }
+
+  @Nested
+  @DisplayName("literal canonicalisation")
+  class Literals {
+
+    @Test
+    @DisplayName("a decimal from YAML matches the builder given the same JSON number type")
+    void numericLiteral() {
+      DslEquivalence.assertEquivalent(
+          file("""
+                - id: exact-total
+                  when: [{ fact: Order, as: o, where: { total: { eq: 25000.0 } } }]
+                  then: [{ action: emit, event: exact }]
+              """),
+          List.of(Rules.rule("exact-total")
+              .when("o", "Order", pattern -> pattern.eq("total", 25_000.0d))
+              .then(actions -> actions.emit("exact"))
+              .build()),
+          ORDERS);
+    }
+
+    @Test
+    @DisplayName("but two spellings of one number are NOT one constraint, which §2.6.2 arguably wants")
+    void numericNodeTypeIsNotCanonicalisedInConstraints() {
+      /*
+       * A known limitation, pinned rather than hidden. §2.6.2 canonicalises numerics for hashing,
+       * ordering and indexing -- and Comparisons does exactly that, so MATCHING is correct: a rule
+       * written `eq: 25000` matches a fact holding 25000.0. What is not canonicalised is the
+       * literal stored in the constraint, so the two spellings are unequal records and
+       * NetworkBuilder builds two alpha nodes where one would do.
+       *
+       * That is a sharing inefficiency, not a wrong answer, which is why it is recorded here rather
+       * than fixed under a DSL change: canonicalising FieldConstraint's literal would alter every
+       * existing rule set's §5.6 version and change what literal() hands back. It is also why
+       * DslEquivalence compares definitions and not only the version hash -- these two constraints
+       * digest identically, because canonicalise() renders with toString().
+       */
+      final var fromDsl = com.codeheadsystems.rules.dsl.RuleFiles.parse(
+          com.codeheadsystems.rules.dsl.RuleSource.yaml("n.yaml", file("""
+                - id: n
+                  when: [{ fact: Order, as: o, where: { total: { eq: 25000.0 } } }]
+                  then: [{ action: emit, event: e }]
+              """)));
+      final var fromJava = List.of(Rules.rule("n")
+          .when("o", "Order", pattern ->
+              pattern.eq("total", new java.math.BigDecimal("25000.0")))
+          .then(actions -> actions.emit("e"))
+          .build());
+
+      assertThat(fromDsl).isNotEqualTo(fromJava);
+      assertThat(com.codeheadsystems.rules.compiler.RuleCompiler.compile(fromDsl).version())
+          .as("the version hash cannot tell them apart, which is why it is the weaker check")
+          .isEqualTo(com.codeheadsystems.rules.compiler.RuleCompiler.compile(fromJava).version());
+    }
+
+    @Test
+    @DisplayName("an explicit null equals the builder's, which §2.6.1 keeps distinct from absent")
+    void explicitNull() {
+      final List<RuleDefinition> handBuilt = List.of(Rules.rule("closed-at-null")
+          .when("o", "Order", pattern -> pattern.isNull("closedAt", true))
+          .then(actions -> actions.emit("open"))
+          .build());
+
+      DslEquivalence.assertEquivalent(
+          file("""
+                - id: closed-at-null
+                  when: [{ fact: Order, as: o, where: { closedAt: { isNull: true } } }]
+                  then: [{ action: emit, event: open }]
+              """),
+          handBuilt, ORDERS);
+    }
+  }
+}

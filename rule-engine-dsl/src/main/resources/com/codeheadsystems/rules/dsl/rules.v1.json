@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codeheadsystems.com/rules/rules.v1.json",
+  "title": "Rule file (rules.v1)",
+  "description": "The rule-file schema of docs/rule-engine-spec.md section 6.2.3. This file states STRUCTURE only -- which keys exist, what type each holds, which keys a given action verb accepts. What an operand MEANS is the DSL compiler's job: $ref resolution, the $$ref escape, and the rejection of unrecognised $-prefixed keys all live in OperatorMaps, because section 6.2.3 requires those three judgements in one place.",
+  "type": "object",
+  "required": ["apiVersion", "rules"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "description": "Section 6.2.3: a file naming an unknown version is a compile error, not a best-effort parse.",
+      "const": "rules.v1"
+    },
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/rule" }
+    }
+  },
+  "$defs": {
+    "rule": {
+      "type": "object",
+      "required": ["id", "when", "then"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "salience": { "type": "integer" },
+        "noLoop": { "type": "boolean" },
+        "agendaGroup": { "type": "string", "minLength": 1 },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "when": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/pattern" } },
+        "then": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/action" } }
+      }
+    },
+
+    "pattern": {
+      "type": "object",
+      "required": ["fact", "as"],
+      "additionalProperties": false,
+      "properties": {
+        "fact": { "type": "string", "minLength": 1 },
+        "as": { "type": "string", "minLength": 1 },
+        "where": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/operatorMap" }
+        },
+        "condition": {
+          "description": "The CEL escape hatch of section 6.4. Accepted by this schema and rejected by the DSL compiler, so that the message names the feature and says where it arrives.",
+          "type": "string"
+        }
+      }
+    },
+
+    "operatorMap": {
+      "description": "Section 6.2.1's table. Several operators in one map are AND-ed, the same way several fields in one where block are.",
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "eq": true,
+        "ne": true,
+        "gt": { "$ref": "#/$defs/bound" },
+        "gte": { "$ref": "#/$defs/bound" },
+        "lt": { "$ref": "#/$defs/bound" },
+        "lte": { "$ref": "#/$defs/bound" },
+        "between": { "$ref": "#/$defs/between" },
+        "in": { "type": "array" },
+        "notIn": { "type": "array" },
+        "matches": { "type": "string" },
+        "hasField": { "type": "boolean" },
+        "isNull": { "type": "boolean" }
+      }
+    },
+
+    "bound": {
+      "description": "A comparable literal, or an object -- which is either a $ref join operand or, escaped as $$ref, a literal object. Section 2.6.1 orders numbers and strings only, so a boolean or an array here is a rule that can never match.",
+      "type": ["number", "string", "object"]
+    },
+
+    "between": {
+      "description": "Named bounds rather than positional, per section 2.5: a two-element array cannot express inclusivity without a convention that then has to be documented, validated and remembered. Both inclusivity flags default to true. Note what is deliberately NOT stated here: that a between needs at least one BOUND. This schema could say it, and would then catch { } while still missing { fromInclusive: true } -- so the DSL check has to exist regardless, and having both means the better message wins only half the time. OperatorMaps owns it, and raises empty-range for either shape.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "from": { "$ref": "#/$defs/bound" },
+        "to": { "$ref": "#/$defs/bound" },
+        "fromInclusive": { "type": "boolean" },
+        "toInclusive": { "type": "boolean" }
+      }
+    },
+
+    "action": {
+      "description": "Section 6.2.2's five verbs. Written as if/then per verb rather than a oneOf, because a oneOf failure reports only that nothing matched, and the author needs to know which key THIS verb was missing.",
+      "type": "object",
+      "required": ["action"],
+      "properties": {
+        "action": {
+          "enum": ["setField", "insertFact", "retractFact", "emit", "callFunction"]
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "action": { "const": "setField" } }, "required": ["action"] },
+          "then": {
+            "required": ["target", "field", "value"],
+            "additionalProperties": false,
+            "properties": {
+              "action": true,
+              "target": { "type": "string", "minLength": 1 },
+              "field": { "type": "string", "minLength": 1 },
+              "value": true
+            }
+          }
+        },
+        {
+          "if": { "properties": { "action": { "const": "insertFact" } }, "required": ["action"] },
+          "then": {
+            "required": ["fact", "payload"],
+            "additionalProperties": false,
+            "properties": {
+              "action": true,
+              "fact": { "type": "string", "minLength": 1 },
+              "as": { "type": "string", "minLength": 1 },
+              "payload": { "$ref": "#/$defs/payload" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "action": { "const": "retractFact" } }, "required": ["action"] },
+          "then": {
+            "required": ["target"],
+            "additionalProperties": false,
+            "properties": {
+              "action": true,
+              "target": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "action": { "const": "emit" } }, "required": ["action"] },
+          "then": {
+            "required": ["event"],
+            "additionalProperties": false,
+            "properties": {
+              "action": true,
+              "event": { "type": "string", "minLength": 1 },
+              "payload": { "$ref": "#/$defs/payload" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "action": { "const": "callFunction" } }, "required": ["action"] },
+          "then": {
+            "required": ["name"],
+            "additionalProperties": false,
+            "properties": {
+              "action": true,
+              "name": { "type": "string", "minLength": 1 },
+              "args": { "$ref": "#/$defs/payload" }
+            }
+          }
+        }
+      ]
+    },
+
+    "payload": {
+      "description": "Field name to value. A value is a literal or a fire-time { $ref: alias.field }; the DSL compiler tells them apart. Names may be dotted, and compile to nested paths the way a where-block field does.",
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

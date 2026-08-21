@@ -248,7 +248,18 @@ public final class Rules {
      * @return this builder
      */
     public PatternBuilder gt(final String field, final Object bound) {
-      return op(field, Operator.GT, bound);
+      return range(field, Operator.GT, bound);
+    }
+
+    /**
+     * Field is greater than or equal to a bound.
+     *
+     * @param field the dotted field path
+     * @param bound the bound
+     * @return this builder
+     */
+    public PatternBuilder gte(final String field, final Object bound) {
+      return range(field, Operator.GTE, bound);
     }
 
     /**
@@ -259,7 +270,44 @@ public final class Rules {
      * @return this builder
      */
     public PatternBuilder lt(final String field, final Object bound) {
-      return op(field, Operator.LT, bound);
+      return range(field, Operator.LT, bound);
+    }
+
+    /**
+     * Field is less than or equal to a bound.
+     *
+     * @param field the dotted field path
+     * @param bound the bound
+     * @return this builder
+     */
+    public PatternBuilder lte(final String field, final Object bound) {
+      return range(field, Operator.LTE, bound);
+    }
+
+    /**
+     * Adds a one-sided range.
+     *
+     * <p>A {@link RangeConstraint} rather than a {@link FieldConstraint} carrying the same
+     * operator, because §6.2.1's table compiles the DSL's {@code gt}/{@code gte}/{@code lt}/
+     * {@code lte} that way and {@link RangeConstraint} exists to "unify the one-sided forms".
+     * <p>The consequence is narrower than it first looks, and worth stating exactly. Node sharing
+     * is <em>not</em> affected: {@code RuleCompiler.compileField} already rewrites an ordered
+     * {@code FieldConstraint} into a {@code RangeConstraint} before building the {@code AlphaTest},
+     * so {@code NetworkBuilder} dedups on the same key whichever form was written, and both
+     * spellings really do collapse to one node.
+     *
+     * <p>What differs is §5.6's version hash, which is computed over the <em>source</em>
+     * {@code RuleDefinition} rather than the compiled form -- so the same rule authored in YAML and
+     * in Java carried two different rule-set versions. {@code DslEquivalenceTest} is what found it,
+     * and a hash that changes with the authoring front end makes hot reload swap on nothing.
+     *
+     * @param field the dotted field path
+     * @param op one of the four ordered operators
+     * @param bound the bound
+     * @return this builder
+     */
+    private PatternBuilder range(final String field, final Operator op, final Object bound) {
+      return constraint(RangeConstraint.of(field, op, node(bound)));
     }
 
     /**

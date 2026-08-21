@@ -7,10 +7,11 @@ high-concurrency evaluation the default rather than an afterthought.
 The design is specified in full in [`docs/rule-engine-spec.md`](docs/rule-engine-spec.md). This
 README covers what is built and how to run it.
 
-## Status: Phase 2 — this is v1
+## Status: Phase 2 is v1, and the DSL of Phase 5 has landed
 
 Phases 0, 1 and 2 of the spec's roadmap (§9) are complete. §9 marks the end of Phase 2 as v1: the
-complete engine for one-shot and batch sessions.
+complete engine for one-shot and batch sessions. Phase 5's rule-file front end is built on top of
+it, so rules are written in YAML or JSON rather than in Java.
 
 **Phase 0** is the **naive matcher**: no network, no indexes, no incremental maintenance, and a cost
 of `O(rules × facts^arity)`. It is deliberately unoptimised and it is still shipped, because it is
@@ -39,21 +40,30 @@ are intersected with actual pattern membership, so a corrupt index is slow rathe
 RHS staging with the five actions, the firing loop with its work limits, dry runs, strict mode, and
 the determinism contract.
 
+**Phase 5's DSL front end** has landed ahead of Phases 3 and 4, because nothing in it depends on
+them and everything about authoring rules does. Rule files are JSON or YAML, validated against a
+published `rules.v1` schema, and every diagnostic names a file, line and column — including the
+compiler's own, which are re-reported against the line that caused them. `CompilerReport` (§7.4)
+came with it: `CompiledRuleSet.report()` names every constraint no index can serve, how much node
+sharing actually happened, and which rules nothing can activate.
+
 **What does not, and where it arrives:** streaming sessions and Rete joins (Phase 3), the
-concurrency helpers and hot reload (Phase 4), the JSON/YAML DSL and CEL (Phase 5). Negation,
-accumulation, truth maintenance and CEP are §1 non-goals with documented interim answers. Rules are
-written in Java until the DSL lands.
+concurrency helpers and hot reload (Phase 4), and Phase 5's two optional halves — the CEL escape
+hatch of §6.4 and the `SchemaRegistry` of §2.3. Negation, accumulation, truth maintenance and CEP
+are §1 non-goals with documented interim answers.
 
 ## Modules
 
 | Module | Contents |
 |---|---|
 | `rule-engine-core` | Fact model, working memory, matching primitives, agenda, refraction, sessions |
-| `rule-engine-compiler` | `RuleDefinition` → `CompiledRuleSet`: validation, accessor and pattern compilation, tested paths, version hash |
+| `rule-engine-compiler` | `RuleDefinition` → `CompiledRuleSet`: validation, accessor and pattern compilation, tested paths, version hash, `CompilerReport` |
+| `rule-engine-dsl` | JSON *and* YAML rule files → `RuleDefinition`, plus the `rules.v1` rule-file schema |
 | `rule-engine-observability` | `TracingListener`, `JfrListener`, `MatchExplainer` |
 | `rule-engine-testkit` | Fixtures, the firing-sequence oracle, the shuffle-determinism and matcher-equivalence harnesses, JMH benchmarks |
 
-`-dsl`, `-schema` and `-cel` (§8) arrive with the phases that need them.
+`-schema` and `-cel` (§8) arrive with the optional halves of Phase 5: the `SchemaRegistry` of §2.3
+and the CEL escape hatch of §6.4.
 
 ## Example
 
@@ -90,6 +100,87 @@ This is `SmokeTest.readmeExample`. If the two disagree, the README is wrong.
 Emitted events come back as the *return value* of the fire call, because the default sink collects
 rather than performing I/O. That is what makes rules testable without mocking anything.
 
+## The same rule, as a rule file
+
+The Java builder above is the constraint AST written by hand. The DSL is how rules are meant to be
+authored — and the two are held to producing the same rule definitions, constraint for constraint,
+by `DslEquivalence`, the way the two matchers are held to identical firing sequences by
+`MatcherEquivalence`.
+
+```yaml
+apiVersion: rules.v1
+rules:
+  - id: high-value-order-review
+    salience: 10
+    noLoop: true
+    when:
+      - fact: Order
+        as: o
+        where:
+          total:  { gt: 10000 }
+          status: { eq: "PENDING" }
+      - fact: Customer
+        as: c
+        where:
+          id:       { eq: { $ref: o.customerId } }
+          riskTier: { in: ["HIGH", "MEDIUM"] }
+    then:
+      - action: setField
+        target: o
+        field: status
+        value: "REVIEW"
+      - action: emit
+        event: "order.flagged"
+        payload:
+          orderId: { $ref: o.id }
+          reason: "high value + risk tier"
+```
+
+```java
+// RuleSource.of(Path) reads the file, so it declares IOException; the text-taking
+// factories (RuleSource.yaml / RuleSource.json) do not.
+CompiledRuleSet rules = RuleFiles.compile(RuleSource.of(Path.of("orders.yaml")));
+```
+
+JSON and YAML are one language here: both parse into the same object model and compile to the same
+rule set, and the entire difference is which Jackson factory reads the text.
+
+A rule file is validated against a published `rules.v1` JSON Schema before anything is built, and
+**every diagnostic names a file, line and column** — including the compiler's own semantic ones,
+which are re-reported against the line that caused them:
+
+```
+rule file is not valid:
+  - orders.yaml:8:15: [unknown-dollar-key] '$reff' is not a key this DSL recognises, and §6.2.3
+    rejects unrecognised $-prefixed keys rather than passing them through. Write '$$reff' if you
+    meant a literal field named '$reff'
+```
+
+- **[`docs/dsl-guide.md`](docs/dsl-guide.md)** — start here if you are writing a rule. It opens with
+  the three behaviours that surprise people, because two of them shape how you model your data.
+- **[`docs/dsl-reference.md`](docs/dsl-reference.md)** — every operator, every action, every
+  diagnostic code.
+
+Every rule file printed in either document is a fixture in `DocExamplesTest`, on the same contract
+the Java example above has.
+
+## What the compiler knows
+
+`CompiledRuleSet.report()` is §7.4's answer to "no unknown unindexed access" — data, not a printed
+string, so a build can assert on it:
+
+```java
+CompilerReport report = rules.report();
+// rule set sha256:4073bf55c15edf78
+//   2 rules, 3 distinct alpha nodes from 4 tests (sharing 1.33x), 2 patterns, 1 join edges
+//   unindexed: fraud-check: o.region (NOT_IN)
+```
+
+Read `unindexed` by *reason*, not by count. A `RESIDUAL_JOIN_CONDITION` is a join that gave up the
+index and is re-evaluated every fire cycle; an `NE` on a single-fact constraint runs once per insert
+and never again. The report lists both because §7.4 asks for every unindexed constraint, and
+distinguishes them because treating them alike sends people to optimise the wrong one.
+
 ## Concurrency
 
 A `CompiledRuleSet` is immutable and freely shareable; a `RuleSession` holds only mutable state and
@@ -121,7 +212,7 @@ Requires a JDK 25 toolchain; Gradle resolves one via the foojay plugin if it is 
 ./gradlew strictTest   # the same suite with -Drules.strict=true (spec §7.5)
 ./gradlew jmh          # benchmarks; see docs/benchmarks.md
 ./gradlew javadoc      # warnings fail the build; several contracts live only in Javadoc
-./gradlew testCodeCoverageReport   # aggregated coverage across all three modules
+./gradlew testCodeCoverageReport   # aggregated coverage across every module
 ```
 
 Coverage is aggregated deliberately: most of `-core` is exercised by the end-to-end tests in

@@ -1,5 +1,6 @@
 package com.codeheadsystems.rules.session;
 
+import com.codeheadsystems.rules.report.CompilerReport;
 import com.codeheadsystems.rules.rule.CompiledRule;
 import com.codeheadsystems.rules.rule.TestedPaths;
 import java.util.List;
@@ -71,4 +72,15 @@ public interface CompiledRuleSet {
    * @return the version string
    */
   String version();
+
+  /**
+   * What the compiler noticed while building this rule set (spec §7.4).
+   *
+   * <p>Frozen in at compile time, like everything else here. §7.4's intent is that a build asserts
+   * on this rather than discovering the same facts under load: which constraints no index can
+   * serve, how much node sharing actually happened, which rules nothing can activate.
+   *
+   * @return the report, never null
+   */
+  CompilerReport report();
 }

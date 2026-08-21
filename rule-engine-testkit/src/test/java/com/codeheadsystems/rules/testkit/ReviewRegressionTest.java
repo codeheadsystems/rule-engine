@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.codeheadsystems.rules.compiler.RuleCompilationException;
 import com.codeheadsystems.rules.compiler.RuleCompiler;
 import com.codeheadsystems.rules.listener.RuleEngineListener;
 import com.codeheadsystems.rules.listener.SuppressReason;
@@ -718,6 +719,94 @@ class ReviewRegressionTest {
       assertThat(result.firedCount()).isEqualTo(1);
       assertThat(suppressed).singleElement()
           .extracting(ActivationKey::ruleId).isEqualTo("discount");
+    }
+  }
+
+  @Nested
+  @DisplayName("a field path the compiler cannot parse")
+  class MalformedFieldPath {
+
+    /*
+     * Found reviewing the Phase 5 DSL. compileField, compileRange and compileJoin all called
+     * Paths.compile without a guard, and Paths.compile throws IllegalArgumentException on an empty
+     * segment. So `a..b` -- a one-character typo -- escaped as a raw IllegalArgumentException
+     * instead of becoming a diagnostic.
+     *
+     * It matters most through the DSL, where it defeated both of that module's headline promises:
+     * every diagnostic names a file, line and column, and every problem is reported in one pass.
+     * The guard belongs in the compiler rather than in that front end because a rule built in Java
+     * reached the same throw -- these four tests build their rules with {@code Rules} and never
+     * touch a rule file.
+     *
+     * <p>That is true of CONSTRAINT paths, which is what these tests cover, and deliberately not of
+     * ACTION paths. {@code SetField.of}, {@code PayloadField.of} and {@code FieldRef.of} still throw
+     * {@link IllegalArgumentException} on a malformed path, from the builder, before the compiler
+     * runs at all. Left alone on purpose: those are static factories, and failing at the call site
+     * that got the argument wrong is what a Java caller wants -- the same contract
+     * {@code RangeConstraint}'s no-bounds check already keeps. The DSL never routes through them;
+     * {@code Actions} builds those records from an already-guarded pointer.
+     */
+
+    @Test
+    @DisplayName("is a diagnostic, not an IllegalArgumentException, on a single-fact constraint")
+    void alphaConstraint() {
+      final RuleDefinition rule = Rules.rule("bad-alpha")
+          .when("o", "Order", pattern -> pattern.eq("a..b", 1))
+          .then(actions -> actions.emit("e"))
+          .build();
+
+      assertThatThrownBy(() -> RuleCompiler.compile(List.of(rule)))
+          .isInstanceOf(RuleCompilationException.class)
+          .hasMessageContaining("empty path segment");
+    }
+
+    @Test
+    @DisplayName("is a diagnostic on a range constraint too")
+    void rangeConstraint() {
+      final RuleDefinition rule = Rules.rule("bad-range")
+          .when("o", "Order", pattern -> pattern.gt("a..b", 1))
+          .then(actions -> actions.emit("e"))
+          .build();
+
+      assertThatThrownBy(() -> RuleCompiler.compile(List.of(rule)))
+          .isInstanceOf(RuleCompilationException.class)
+          .hasMessageContaining("empty path segment");
+    }
+
+    @Test
+    @DisplayName("is a diagnostic on either side of a join")
+    void joinConstraint() {
+      final RuleDefinition nearSide = Rules.rule("bad-join-near")
+          .when("o", "Order")
+          .when("c", "Customer", pattern -> pattern.ref("a..b", "o.id"))
+          .then(actions -> actions.emit("e"))
+          .build();
+      final RuleDefinition farSide = Rules.rule("bad-join-far")
+          .when("o", "Order")
+          .when("c", "Customer", pattern -> pattern.ref("id", "o.a..b"))
+          .then(actions -> actions.emit("e"))
+          .build();
+
+      assertThatThrownBy(() -> RuleCompiler.compile(List.of(nearSide)))
+          .isInstanceOf(RuleCompilationException.class)
+          .hasMessageContaining("empty path segment");
+      assertThatThrownBy(() -> RuleCompiler.compile(List.of(farSide)))
+          .isInstanceOf(RuleCompilationException.class)
+          .hasMessageContaining("empty path segment");
+    }
+
+    @Test
+    @DisplayName("reports every bad path in one pass rather than dying on the first")
+    void everyBadPathReported() {
+      final RuleDefinition rule = Rules.rule("several-bad")
+          .when("o", "Order", pattern -> pattern.eq("a..b", 1).gt("c..d", 2))
+          .then(actions -> actions.emit("e"))
+          .build();
+
+      assertThatThrownBy(() -> RuleCompiler.compile(List.of(rule)))
+          .isInstanceOf(RuleCompilationException.class)
+          .satisfies(thrown -> assertThat(
+              ((RuleCompilationException) thrown).diagnostics()).hasSize(2));
     }
   }
 }

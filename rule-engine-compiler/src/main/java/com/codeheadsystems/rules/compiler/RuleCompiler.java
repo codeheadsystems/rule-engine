@@ -2,6 +2,7 @@ package com.codeheadsystems.rules.compiler;
 
 import com.codeheadsystems.rules.access.JsonPointerAccessor;
 import com.codeheadsystems.rules.access.Paths;
+import com.codeheadsystems.rules.network.Network;
 import com.codeheadsystems.rules.rule.ActionDefinition;
 import com.codeheadsystems.rules.rule.AlphaTest;
 import com.codeheadsystems.rules.rule.CallFunction;
@@ -129,11 +130,16 @@ public final class RuleCompiler {
     if (!diagnostics.isEmpty()) {
       throw new RuleCompilationException(diagnostics);
     }
+    final Network network = NetworkBuilder.build(compiled);
+    final String version = version(rules);
     return new DefaultCompiledRuleSet(
         compiled,
-        NetworkBuilder.build(compiled),
+        network,
         new DefaultTestedPaths(pathsByType, pathsByRule, inverse),
-        version(rules));
+        version,
+        // §6.5's pipeline emits the report last, on the shared graph: sharing changes which nodes
+        // exist, so anything counted before it counts nodes that are about to be merged away.
+        ReportBuilder.build(compiled, network, version, options));
   }
 
   /**
@@ -238,10 +244,20 @@ public final class RuleCompiler {
    */
   private Optional<AlphaTest> compileField(final RuleDefinition rule,
       final PatternDefinition pattern, final FieldConstraint constraint) {
-    final JsonPointer path = Paths.compile(constraint.field());
+    final String where = rule.id() + ": " + pattern.alias() + "." + constraint.field();
+    /*
+     * Returning here means a constraint with both a bad path and a bad literal reports only the
+     * path. That narrowing is deliberate: there is no accessor to validate a literal against until
+     * the path compiles, and a second diagnostic derived from a path that does not exist would be
+     * noise. Every OTHER constraint in the rule is still reported -- compilePattern keeps going.
+     */
+    final Optional<JsonPointer> compiled = compilePath(where, constraint.field());
+    if (compiled.isEmpty()) {
+      return Optional.empty();
+    }
+    final JsonPointer path = compiled.get();
     record(rule.id(), pattern.factType(), path);
     final JsonPointerAccessor accessor = new JsonPointerAccessor(path);
-    final String where = rule.id() + ": " + pattern.alias() + "." + constraint.field();
 
     return switch (constraint.op()) {
       case MATCHES -> compileRegex(where, constraint, accessor);
@@ -306,9 +322,13 @@ public final class RuleCompiler {
    */
   private Optional<AlphaTest> compileRange(final RuleDefinition rule,
       final PatternDefinition pattern, final RangeConstraint constraint) {
-    final JsonPointer path = Paths.compile(constraint.field());
-    record(rule.id(), pattern.factType(), path);
     final String where = rule.id() + ": " + pattern.alias() + "." + constraint.field();
+    final Optional<JsonPointer> compiled = compilePath(where, constraint.field());
+    if (compiled.isEmpty()) {
+      return Optional.empty();
+    }
+    final JsonPointer path = compiled.get();
+    record(rule.id(), pattern.factType(), path);
     boolean valid = true;
     for (final Optional<JsonNode> maybeBound : List.of(constraint.lower(), constraint.upper())) {
       if (maybeBound.isPresent()) {
@@ -373,8 +393,25 @@ public final class RuleCompiler {
           + " what keeps the join graph acyclic (spec section 6.5)");
       return Optional.empty();
     }
-    final JsonPointer path = Paths.compile(constraint.field());
-    final JsonPointer otherPath = Paths.compile(constraint.otherField());
+    /*
+     * Both sides are attempted before either is checked, so a join with a bad path at each end
+     * reports both.
+     *
+     * The far side keeps the NEAR side's prefix and names itself in the text. The prefix is not
+     * decoration: the DSL locates a compiler diagnostic by matching it against
+     * "<ruleId>: <alias>.<field>", and the only key it holds for this edge is the one the author
+     * wrote the $ref on. Re-prefixing with the far alias produced a better sentence attached to no
+     * line, which is the worse trade -- the $ref IS written on the near side's line.
+     */
+    final Optional<JsonPointer> compiled = compilePath(where, constraint.field());
+    final Optional<JsonPointer> compiledOther = compilePath(
+        where + ": $ref target '" + constraint.otherAlias() + "." + constraint.otherField() + "'",
+        constraint.otherField());
+    if (compiled.isEmpty() || compiledOther.isEmpty()) {
+      return Optional.empty();
+    }
+    final JsonPointer path = compiled.get();
+    final JsonPointer otherPath = compiledOther.get();
     // Both sides are read by the network, so both are tested paths, on their own types. Recording
     // only this side would make an update to the other side of a join look like a no-op.
     record(rule.id(), pattern.factType(), path);
@@ -473,6 +510,33 @@ public final class RuleCompiler {
         .computeIfAbsent(factType, ignored -> new LinkedHashSet<>()).add(path);
     inverse.computeIfAbsent(factType, ignored -> new LinkedHashMap<>())
         .computeIfAbsent(path, ignored -> new LinkedHashSet<>()).add(ruleId);
+  }
+
+  /**
+   * Compiles a dotted field path into a pointer, or records why it could not be.
+   *
+   * <p>{@code Paths.compile} throws on a malformed path -- an empty segment, as in {@code a..b} --
+   * and every caller here used to let that propagate. It is the one validation failure in this
+   * compiler that escaped as a raw {@link IllegalArgumentException} rather than joining the
+   * diagnostics, which broke two contracts at once: the caller sees an exception type the API does
+   * not document, and compilation dies on the first bad path instead of reporting every problem in
+   * the batch.
+   *
+   * <p>It surfaced through the Phase 5 DSL, where a mistyped {@code where} key defeated "every
+   * diagnostic names a file, line and column". The guard belongs here rather than in that front
+   * end, because a rule built in Java reached the same throw.
+   *
+   * @param where the diagnostic prefix identifying the constraint
+   * @param dotted the field path in DSL form
+   * @return the compiled pointer, or empty when the path was malformed
+   */
+  private Optional<JsonPointer> compilePath(final String where, final String dotted) {
+    try {
+      return Optional.of(Paths.compile(dotted));
+    } catch (final IllegalArgumentException malformed) {
+      diagnostics.add(where + ": " + malformed.getMessage());
+      return Optional.empty();
+    }
   }
 
   /**
