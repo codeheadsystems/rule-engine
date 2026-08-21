@@ -85,9 +85,17 @@ public interface TestedPaths {
    *
    * <p>This is the per-rule scoping refraction invalidation needs (§4.4).
    *
+   * <p><strong>The returned set is immutable on every path.</strong> An implementation lives inside
+   * a shared {@code CompiledRuleSet}, so a live set handed out here is mutable state behind every
+   * session -- and the damage is invisible, because this set decides which rules get un-refracted
+   * after an update (§3.4.1 step 5) rather than which facts match. Empty it and the affected rules
+   * simply stop re-firing, with no exception and no change to {@code version()}. Found in review of
+   * Phase 4 in {@code DefaultTestedPaths}, where the inverse index was the one of three copiers
+   * building its values shallowly.
+   *
    * @param factType the fact type
    * @param changed the path that changed
-   * @return the ids of the rules that read it, or an empty set
+   * @return the ids of the rules that read it, or an empty set; immutable either way
    */
   Set<String> rulesTesting(String factType, JsonPointer changed);
 }

@@ -27,7 +27,29 @@ import java.util.Optional;
  * <p>Bounded on purpose. An unbounded trace is a memory leak with a helpful name, and §4.4 already
  * counts the session's growth surfaces carefully enough not to want another.
  *
- * <p>Per session, like every listener, so nothing here synchronises.
+ * <p><strong>Safe for concurrent sessions, and it has to be.</strong> §7.1 says a listener is
+ * "registered per session via {@code SessionOptions}, so a listener is never shared mutable state
+ * across sessions and nothing on the path synchronizes", and that premise is wrong:
+ * {@code SessionOptions} is per <em>configuration</em>, and one instance is deliberately reused for
+ * many sessions -- {@code RuleBatches.run(rules, inputs, batch, options)} takes exactly one and
+ * builds N concurrent sessions from it. A caller wanting a trace out of a batch run has no other
+ * move, so this class locks rather than assuming isolation it does not have. Found in review of
+ * Phase 4; the spec sentence is the defect, and {@code docs/rule-engine-spec.md} §7.1 is annotated
+ * to say so.
+ *
+ * <p>The lock is uncontended in the single-session case and covers a deque push, which §7.1's own
+ * argument for {@code NoOpListener} already accepts is not on the hot path -- listener dispatch
+ * happens once per firing, not once per candidate.
+ *
+ * <p><strong>Safe to share is not the same as useful to share, and this class leads with the use
+ * case that suffers.</strong> One instance across concurrent sessions interleaves them into a single
+ * bounded buffer, and {@link FireRecord} carries no session id -- so {@link #describe()} renders an
+ * {@link com.codeheadsystems.rules.match.ActivationKey}, which is a rule id plus bound handle ids,
+ * and handle ids restart at zero in every session. Forty sessions each firing {@code tag} on handle
+ * 1 render as forty identical lines: indistinguishable from the runaway loop the first paragraph
+ * above says this class is for. <strong>Diagnosing a loop wants one listener per session</strong>,
+ * which means one {@code SessionOptions} per session. Sharing is for the case where an aggregate
+ * count or a failed action is what you are after.
  */
 public final class TracingListener implements RuleEngineListener {
 
@@ -35,6 +57,7 @@ public final class TracingListener implements RuleEngineListener {
   public static final int DEFAULT_CAPACITY = 64;
 
   private final Deque<FireRecord> recent = new ArrayDeque<>();
+  private final Object lock = new Object();
   private final int capacity;
 
   /** Creates a listener retaining {@value #DEFAULT_CAPACITY} firings. */
@@ -56,9 +79,11 @@ public final class TracingListener implements RuleEngineListener {
 
   @Override
   public void onAfterFire(final FireRecord record) {
-    recent.addLast(record);
-    if (recent.size() > capacity) {
-      recent.removeFirst();
+    synchronized (lock) {
+      recent.addLast(record);
+      if (recent.size() > capacity) {
+        recent.removeFirst();
+      }
     }
   }
 
@@ -68,7 +93,12 @@ public final class TracingListener implements RuleEngineListener {
    * @return an immutable snapshot
    */
   public List<FireRecord> recent() {
-    return List.copyOf(recent);
+    synchronized (lock) {
+      // Inside the lock: List.copyOf on a deque being resized by another session's firing can read
+      // a null slot and throw, which is how this defect showed up as an exception from inside
+      // fireAllRules() rather than as a merely inaccurate trace.
+      return List.copyOf(recent);
+    }
   }
 
   /**
@@ -77,7 +107,9 @@ public final class TracingListener implements RuleEngineListener {
    * @return the last record, or empty if nothing has fired
    */
   public Optional<FireRecord> last() {
-    return Optional.ofNullable(recent.peekLast());
+    synchronized (lock) {
+      return Optional.ofNullable(recent.peekLast());
+    }
   }
 
   /**
@@ -89,8 +121,13 @@ public final class TracingListener implements RuleEngineListener {
    * @return the last record carrying a failed action, if one is still retained
    */
   public Optional<FireRecord> lastFailure() {
+    // Over a snapshot, not the live deque. Three methods touch `recent` directly and all three hold
+    // the lock -- onAfterFire, recent() and last(). Everything else, including describe(), reads a
+    // snapshot instead, so a fourth reader added later needs no new locking as long as it does the
+    // same. describe() did iterate the live deque before Phase 4 and was a second instance of the
+    // same race inside this one class.
     FireRecord found = null;
-    for (final FireRecord record : recent) {
+    for (final FireRecord record : recent()) {
       if (record.failedAction().isPresent()) {
         found = record;
       }
@@ -107,11 +144,12 @@ public final class TracingListener implements RuleEngineListener {
    * @return the rendering
    */
   public String describe() {
-    if (recent.isEmpty()) {
+    final List<FireRecord> snapshot = recent();
+    if (snapshot.isEmpty()) {
       return "(nothing fired)";
     }
     final StringBuilder text = new StringBuilder();
-    for (final FireRecord record : recent) {
+    for (final FireRecord record : snapshot) {
       final ActivationKey key = record.key();
       text.append(key)
           .append(record.failedAction().map(action -> "  FAILED at " + action).orElse(""))

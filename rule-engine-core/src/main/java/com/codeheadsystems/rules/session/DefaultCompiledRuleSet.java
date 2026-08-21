@@ -24,6 +24,7 @@ public final class DefaultCompiledRuleSet implements CompiledRuleSet {
   private final String version;
   private final CompilerReport report;
   private final FactSchemas factSchemas;
+  private final long literalFingerprint;
 
   /**
    * Creates a compiled rule set. Produced by the compiler; not usually constructed by hand.
@@ -44,6 +45,8 @@ public final class DefaultCompiledRuleSet implements CompiledRuleSet {
     this.version = Objects.requireNonNull(version, "version");
     this.report = Objects.requireNonNull(report, "report");
     this.factSchemas = Objects.requireNonNull(factSchemas, "factSchemas");
+    // Taken here, which is compile time: the compiler is what constructs this.
+    this.literalFingerprint = RuleSetFingerprint.of(this.rules);
   }
 
   @Override
@@ -53,7 +56,41 @@ public final class DefaultCompiledRuleSet implements CompiledRuleSet {
 
   @Override
   public RuleSession newSession(final SessionOptions options) {
-    return new DefaultRuleSession(this, Objects.requireNonNull(options, "options"));
+    Objects.requireNonNull(options, "options");
+    if (options.strict()) {
+      verifyUnmutated();
+    }
+    return new DefaultRuleSession(this, options);
+  }
+
+  /**
+   * Strict-mode check that nobody has mutated a literal since compile (invariant 1, §5.5, §7.5).
+   *
+   * <p>Checked when a session is created rather than on every read. §7.5's table is checks "too
+   * expensive for production but that catch a contract violation deterministically in test", and
+   * the read path here is the matching hot path -- a defensive copy or a re-hash per fact per test
+   * would cost far more than the thing it guards against. Session creation is the right granularity
+   * instead: cheap, once per session, and in the batch model of §5.2 sessions are created
+   * constantly, so a mutation is caught by the next one to start.
+   *
+   * <p>What makes this worth detecting at all rather than documenting: a mutated literal changes
+   * which facts match, and {@link #version()} does not move -- so the rule set reports the same
+   * identity while behaving differently, and §5.6's "which rules produced this decision" answers
+   * wrongly for every decision after the mutation.
+   *
+   * @throws IllegalStateException if a literal has changed since this rule set was compiled
+   */
+  private void verifyUnmutated() {
+    final long now = RuleSetFingerprint.of(rules);
+    if (now != literalFingerprint) {
+      throw new IllegalStateException(
+          "a literal in rule set " + version + " has been mutated since it was compiled."
+              + " Nothing in a CompiledRuleSet may change after compile (spec invariant 1): it is"
+              + " read by every session with no synchronisation, and a changed literal changes"
+              + " which facts match while version() still reports the original rule set."
+              + " A constraint's literal() hands back the live node for speed; treat it as"
+              + " read-only, and build a new rule set to change a rule");
+    }
   }
 
   @Override

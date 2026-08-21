@@ -26,6 +26,25 @@ import java.util.Set;
  * recomputation and dropped at selection. A callback taking an activation would be unimplementable
  * in one shape and misleading in the other. Both shapes always have the key.
  *
+ * <p><strong>If one {@code SessionOptions} is used to create sessions on more than one thread, its
+ * listeners are shared and must tolerate concurrent invocation.</strong> The engine does not
+ * synchronize dispatch. Note what turns the obligation on: it is the caller's own decision to reuse
+ * an options object across threads, not anything the engine does -- a listener registered on options
+ * used for a single session, or for one session at a time, needs nothing.
+ *
+ * <p>§7.1 states the opposite as a design property -- "registered per session via
+ * {@code SessionOptions}, so a listener is never shared mutable state across sessions and nothing on
+ * the path synchronizes" -- and its premise does not hold: {@code SessionOptions} is per
+ * <em>configuration</em>, and {@code RuleBatches.run(rules, inputs, batch, options)} builds N
+ * concurrent sessions from one options object, which is the natural way to collect a trace across a
+ * batch run. The spec sentence is annotated as a defect rather than worked around silently; see the
+ * amendment at §7.1.
+ *
+ * <p>The obligation is cheap to meet, which is why the answer is a contract rather than a reshaped
+ * API: dispatch happens once per <em>firing</em>, not once per candidate, so a lock around whatever
+ * the listener collects is not on a hot path. {@code TracingListener} takes one unconditionally,
+ * because a library class cannot know how it will be used.
+ *
  * <p>Every method defaults to doing nothing. Dispatch must cost nothing when no listener is
  * registered: the session checks for an empty listener list at the call site rather than iterating
  * one no-op per event on the hot path.

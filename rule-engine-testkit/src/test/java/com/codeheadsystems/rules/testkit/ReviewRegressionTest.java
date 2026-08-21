@@ -14,6 +14,8 @@ import com.codeheadsystems.rules.rhs.StagedEffect;
 import com.codeheadsystems.rules.rule.Constraint;
 import com.codeheadsystems.rules.rule.FieldConstraint;
 import com.codeheadsystems.rules.rule.Operator;
+import com.codeheadsystems.rules.fact.FactHandle;
+import com.codeheadsystems.rules.listener.RuleEngineListener;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CollectingEventSink;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
@@ -23,6 +25,7 @@ import com.codeheadsystems.rules.session.FireResult;
 import com.codeheadsystems.rules.session.RuleSession;
 import com.codeheadsystems.rules.session.SessionOptions;
 import com.codeheadsystems.rules.session.TerminationReason;
+import com.fasterxml.jackson.core.JsonPointer;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import java.util.ArrayList;
 import java.util.List;
@@ -226,6 +229,57 @@ class ReviewRegressionTest {
   class Immutability {
 
     @Test
+    @DisplayName("the tested-path inverse index is not a live set the caller can clear")
+    void inverseIndexIsNotLive() {
+      /*
+       * DefaultTestedPaths.deepCopyInverse built its inner maps with Map.copyOf, which is shallow,
+       * so the VALUES stayed the compiler's live LinkedHashSets and rulesTesting() handed one
+       * straight back. Its two sibling copiers both used Set.copyOf; only the inverse index did not.
+       *
+       * Worse than the literal hole the Phase 4 fingerprint detects, and invisible to it. This set
+       * is what §3.4.1 step 5 reads to decide which rules get un-refracted after an update, so
+       * clearing it does not change matching -- it stops rules being un-refracted, and a rule that
+       * should re-fire after an update simply never fires again. No exception, version() unmoved,
+       * and RuleSetFingerprint walks constraints and action values, not this.
+       *
+       * CompiledRule's own compact constructor carries a comment about exactly this trap.
+       */
+      final CompiledRuleSet rules = RuleCompiler.compile(List.of(Rules.rule("watches-total")
+          .when("o", "Order", pattern -> pattern.gt("total", 100))
+          .then(actions -> actions.emit("hit"))
+          .build()));
+
+      final Set<String> testing =
+          rules.testedPaths().rulesTesting("Order", JsonPointer.compile("/total"));
+      assertThat(testing).containsExactly("watches-total");
+
+      assertThatThrownBy(testing::clear).isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    @DisplayName("an update still un-refracts, which is what the live set would have broken")
+    void updateStillUnrefracts() {
+      // The behaviour the above protects, asserted end to end so the guard is not the only thing
+      // standing between a shallow copy and a silently dead rule.
+      final CompiledRuleSet rules = RuleCompiler.compile(List.of(Rules.rule("watches-total")
+          .noLoop()
+          .when("o", "Order", pattern -> pattern.gt("total", 100))
+          .then(actions -> actions.emit("hit", "total", Rules.ref("o.total")))
+          .build()));
+
+      try (RuleSession session = rules.newSession()) {
+        final FactHandle handle = session.insert("Order", Facts.obj("total", 500));
+        assertThat(session.fireAllRules().firedCount()).isEqualTo(1);
+
+        session.update(handle, Facts.obj("total", 900));
+
+        // Refraction was cleared for this rule because /total is a path it tests, so it fires again
+        // on the new value. With a cleared inverse index this would be 0, forever.
+        assertThat(session.fireAllRules().firedCount()).isEqualTo(1);
+      }
+    }
+
+    @Test
     @DisplayName("mutating a literal after compilation changes nothing")
     void constraintLiteralsAreCopied() {
       // Before the fix this was a write, with no synchronisation, to state that every session
@@ -307,6 +361,53 @@ class ReviewRegressionTest {
   @Nested
   @DisplayName("session options carry no shared mutable state")
   class SharedState {
+
+    @Test
+    @DisplayName("a listener held in options really is shared by every session built from them")
+    void listenersAreSharedAcrossSessions() {
+      /*
+       * §7.1 line 1435 licenses every listener in this engine to be unsynchronised: "Registered per
+       * session via SessionOptions, so a listener is never shared mutable state across sessions and
+       * nothing on the path synchronizes."
+       *
+       * The premise is false, and this pins the falseness rather than the symptom. SessionOptions is
+       * per *configuration*: one instance is built once and used for many sessions -- which is
+       * precisely what RuleBatches.run(rules, inputs, batch, options) does, N times concurrently.
+       * The sink defect in this same class was the identical mistake and was fixed by resolving the
+       * sink per session; that move is not available for listeners, because they are the caller's
+       * objects and the caller expects to read them afterwards.
+       */
+      final CountingListener listener = new CountingListener();
+      final SessionOptions options = SessionOptions.builder().listener(listener).build();
+      final CompiledRuleSet rules = RuleCompiler.compile(List.of(Rules.rule("fires")
+          .when("o", "Order", pattern -> pattern.gt("total", 0))
+          .then(actions -> actions.emit("hit"))
+          .build()));
+
+      try (RuleSession first = rules.newSession(options);
+          RuleSession second = rules.newSession(options)) {
+        first.insert("Order", Facts.obj("total", 1));
+        second.insert("Order", Facts.obj("total", 1));
+        first.fireAllRules();
+        second.fireAllRules();
+      }
+
+      // Two sessions, one listener object, both sets of firings landing in it. Not a bug in itself
+      // -- it is what a caller collecting a trace wants -- but it is the fact that makes an
+      // unsynchronised listener a data race the moment those sessions run concurrently.
+      assertThat(listener.count).isEqualTo(2);
+    }
+
+    /** Counts firings, to show one listener instance serving two sessions. */
+    private static final class CountingListener implements RuleEngineListener {
+
+      private int count;
+
+      @Override
+      public void onAfterFire(final FireRecord record) {
+        count++;
+      }
+    }
 
     @Test
     @DisplayName("options hold no sink instance, which is the property that was broken")

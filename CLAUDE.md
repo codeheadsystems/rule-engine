@@ -11,9 +11,9 @@ governs it — the answer to "why is it written this way" is almost always there
 alternatives that were rejected. If the code and the spec disagree, one of them is a defect; decide
 which and say so, do not silently pick.
 
-`README.md` documents what is built — Phases 0–2 (= v1) plus Phase 5's DSL front end — and what is
-not: streaming sessions and Rete joins (Phase 3), concurrency helpers and hot reload (Phase 4), and
-Phase 5's two optional halves, the CEL escape hatch (§6.4) and `SchemaRegistry` (§2.3). §9 holds the
+`README.md` documents what is built — Phases 0–2 (= v1), Phase 4's concurrency layer and Phase 5's
+DSL front end, including Phase 5's two optional halves, the CEL escape hatch (§6.4) and `FactSchemas`
+(§2.3) — and what is not: streaming sessions and Rete joins (Phase 3). §9 holds the
 roadmap and each phase's exit criteria.
 
 `docs/dsl-reference.md` and `docs/dsl-guide.md` document the rule-file DSL. Every rule file printed
@@ -115,7 +115,15 @@ Use it for new matching behaviour; `ShuffleHarness` covers §7.3's determinism c
   rather than return zero candidates.
 - **Determinism.** Same rule set, same facts, same insertion order → same firing sequence, on every
   host and run. The threat that actually bites is hash iteration order reaching the agenda; prefer
-  `LinkedHashMap`/`LinkedHashSet`/sorted structures on any path to the agenda.
+  `LinkedHashMap`/`LinkedHashSet`/sorted structures on any path to the agenda. This is also what
+  makes `exportFacts()`/`SessionDrain.replay` order by handle id rather than however a map iterates.
+- **Nothing in a `CompiledRuleSet` mutates after compile** (§5.5, invariant 1). Every scaling claim
+  rests on it, and it is *not* free: `FieldConstraint`, `RangeConstraint` and `Literal` deep-copy
+  their `JsonNode` on the way in but hand back the live node, so a caller reaching a literal through
+  `CompiledRule.source()` can mutate a node every session reads. Copying on the way out is not
+  available — the matching path calls `literal()` per fact per test. `RuleSetFingerprint` hashes
+  every mutable value at compile time and `newSession(strict)` re-verifies, so violators fail in
+  test; outside strict mode it stays a caller-facing contract. See `ImmutabilityTest`.
 
 ### The DSL front end
 
@@ -186,8 +194,27 @@ discoverable. Under the default `RETHROW` policy the record only reaches a regis
 
 `-Drules.strict=true` (or `SessionOptions.strict(true)`) turns on checks too expensive for
 production that fail deterministically in test: payload copies on the way out, rejection of an
-`update` that aliases the stored payload, and an assertion that conflict resolution is a total order
-consistent with equality. §7.5 requires the full suite under it in CI and forbids it in production.
+`update` that aliases the stored payload, an assertion that conflict resolution is a total order
+consistent with equality, and a re-check of the compiled rule set's literal fingerprint at session
+creation. §7.5 requires the full suite under it in CI and forbids it in production.
+
+### Concurrency and hot reload (`-core`, `concurrent/`)
+
+In `-core` rather than its own module because §8 says so directly: a few hundred lines with no
+dependencies beyond the JDK, where a module boundary buys nothing and makes "how do I run this
+concurrently" an extra artifact to discover.
+
+- **`RuleBatches`** — one virtual thread and one session per batch. Returns a `BatchOutcome` per
+  batch carrying *either* a result or a failure, because §5.2 refuses to decide for you what a
+  partial batch result means. Sessions are created inside the task and closed in try-with-resources;
+  one escaping to the caller would break the single-writer model.
+- **`RuleSetHolder`** — §5.6's hot reload. One volatile field, no locks. Two contracts worth knowing
+  before changing it: `publish` takes a *compiled* rule set so a bad rule file cannot take the engine
+  out of service, and a swap affects new sessions only.
+- **`SessionDrain`** — drain-and-restart for a session already running when the rules changed. Two
+  things it must keep doing: replay in handle-id order (§7.3's guarantee is stated in terms of
+  insertion order) and skip `Origin.DERIVED` facts (the new session re-derives them; replaying would
+  double-count). Refraction state is deliberately *not* carried over — the handles are new.
 
 ## Semantics that surprise people (all deliberate)
 

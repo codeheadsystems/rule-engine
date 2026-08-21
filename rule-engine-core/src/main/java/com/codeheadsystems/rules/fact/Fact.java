@@ -23,6 +23,7 @@ public final class Fact {
   private final String type;
   private final JsonNode payload;
   private final long recency;
+  private final Origin origin;
 
   /**
    * Creates a fact. Working memory owns this; callers reach facts through
@@ -33,13 +34,15 @@ public final class Fact {
    * @param payload the payload. Engine-owned from this point (§2.2): the caller must not retain a
    *     reference and must not mutate it
    * @param recency the ordering counter at which this snapshot was taken
+   * @param origin whether the caller or a firing rule inserted this
    */
   public Fact(final FactHandle handle, final String type, final JsonNode payload,
-      final long recency) {
+      final long recency, final Origin origin) {
     this.handle = Objects.requireNonNull(handle, "handle");
     this.type = Objects.requireNonNull(type, "type");
     this.payload = Objects.requireNonNull(payload, "payload");
     this.recency = recency;
+    this.origin = Objects.requireNonNull(origin, "origin");
   }
 
   /**
@@ -86,6 +89,19 @@ public final class Fact {
    */
   public JsonNode payload() {
     return payload;
+  }
+
+  /**
+   * Where this fact came from (§5.6).
+   *
+   * <p>Set once at insert and carried through every update, because an update does not change who
+   * owns the fact -- a caller updating a fact a rule derived does not make it the caller's, and the
+   * replay contract cares about who <em>inserted</em> it.
+   *
+   * @return the origin; never {@code null}
+   */
+  public Origin origin() {
+    return origin;
   }
 
   /**

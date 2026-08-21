@@ -4,7 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
+import com.codeheadsystems.rules.compiler.RuleCompiler;
+import com.codeheadsystems.rules.concurrent.BatchOutcome;
+import com.codeheadsystems.rules.concurrent.RuleBatches;
 import com.codeheadsystems.rules.rule.RuleDefinition;
+import com.codeheadsystems.rules.session.CompiledRuleSet;
 import com.codeheadsystems.rules.session.FireOptions;
 import com.codeheadsystems.rules.session.RuleEngineLimitExceeded;
 import com.codeheadsystems.rules.session.RuleSession;
@@ -12,6 +16,8 @@ import com.codeheadsystems.rules.session.SessionOptions;
 import com.codeheadsystems.rules.testkit.Engine;
 import com.codeheadsystems.rules.testkit.Facts;
 import com.codeheadsystems.rules.testkit.Rules;
+import java.util.List;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -162,5 +168,57 @@ class TracingListenerTest {
     assertThatThrownBy(() -> new TracingListener(0))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("must be positive");
+  }
+
+  @Test
+  @DisplayName("one listener across concurrent sessions loses nothing and throws nothing")
+  void survivesConcurrentSessionsFromOneOptionsObject() {
+    /*
+     * Found in review of Phase 4, and it is a defect in §7.1 rather than in this class as written.
+     * Line 1435 says "Registered per session via SessionOptions, so a listener is never shared
+     * mutable state across sessions and nothing on the path synchronizes" -- and licenses every
+     * listener here to be unsynchronised on that basis.
+     *
+     * The premise is false. SessionOptions is per *configuration*: one instance, many sessions.
+     * Phase 4 is what turns that from latent into the documented main path, because
+     * RuleBatches.run(rules, inputs, batch, options) takes exactly one SessionOptions and builds N
+     * concurrent sessions from it, and a caller who wants a trace out of a batch run has no other
+     * move. The symptom was lost records, or an exception thrown from inside fireAllRules() and
+     * surfacing as a BatchOutcome.failure() that looks like the caller's own rule threw.
+     *
+     * Capacity is above the firing count on purpose, so "records lost" and "records evicted" cannot
+     * be confused.
+     */
+    /*
+     * Sized for contention, not for readability. 200 sessions doing one firing each would spend
+     * almost all their time in session setup and matching, leaving a sliver of a window where two
+     * threads are inside addLast together -- so an unsynchronised version would fail this only
+     * sometimes, and a test that detects a race one run in five is a test that reports the race is
+     * gone four times in five. 50 sessions of 200 firings each puts two orders of magnitude more
+     * traffic through the deque at about the same wall-clock cost.
+     */
+    final int sessions = 50;
+    final int perSession = 200;
+    final TracingListener trace = new TracingListener(sessions * perSession);
+    final SessionOptions options = SessionOptions.builder().listener(trace).build();
+    final CompiledRuleSet rules = RuleCompiler.compile(List.of(Rules.rule("fires")
+        .when("o", "Order", pattern -> pattern.gt("total", 0))
+        .then(actions -> actions.emit("hit"))
+        .build()));
+
+    final List<BatchOutcome<Integer>> outcomes = RuleBatches.run(rules,
+        IntStream.range(0, sessions).boxed().toList(),
+        (session, input) -> {
+          for (int order = 0; order < perSession; order++) {
+            session.insert("Order", Facts.obj("id", order, "total", 1));
+          }
+          return session.fireAllRules().firedCount();
+        }, options);
+
+    assertThat(outcomes).hasSize(sessions).allMatch(BatchOutcome::succeeded);
+    // Capacity is exactly the expected total, so nothing is evicted and a short count is a lost
+    // record rather than an eviction. A racing ArrayDeque loses records; it can also throw from
+    // List.copyOf mid-resize, which allMatch(succeeded) above is what catches.
+    assertThat(trace.recent()).hasSize(sessions * perSession);
   }
 }

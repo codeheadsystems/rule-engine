@@ -203,44 +203,6 @@ the network arm this noisy, the honest statement is the growth exponent, not the
 - **The prefix trie.** Six tested paths is far too few for the difference to appear.
 - **Concurrent multi-session throughput**, still Phase 4's deliverable.
 
-## A note on this file's own history
-
-Three versions of the join benchmark: the first measured right-hand sides, the second measured
-inserts, the third measures the join. Both earlier ones produced a plausible number and a plausible
-story. Neither was measuring what its heading said. If you add a benchmark here, say what is inside
-the measured region and what is outside it, and check that the thing you are claiming credit for is
-actually the majority of what is on the clock.
-
-Then it happened three more times, which is why this section is no longer a footnote about one
-benchmark. Its first version called `update` rather than `updateOwned`, so it measured §2.2's
-payload deep copy: cost grew 3.6x with payload size and read *identically* on both matchers, which
-cannot happen if a tested-path diff is on the clock. Its second version fixed that but sized the
-payload from the `testedPaths` parameter, so the wide arm changed two variables at once and the 6x
-growth it reported could not be attributed to either. Only the third version varies one thing.
-
-And `ExpressionBenchmarks` shipped the worst one. Its first version loaded the facts *inside* the
-measured region, so `session.insert` was 96-98% of the cheaper arm and the headline was
-`(insert + expression) / (insert + almost nothing)`. Every conclusion drawn from it was an artifact
-of that shared term: the "flat 4x ratio" was arithmetically guaranteed rather than observed, the
-"per-candidate cost of an operator map" compared against an arm with **zero** candidates, and the
-number moved when `insert` was swapped for `insertOwned` — a knob with nothing to do with either
-constraint form. Hoisting the load into setup changed the finding from "about 4x" to "hundreds of
-microseconds against an unmeasurable floor", which is a different claim entirely.
-
-`UpdateBenchmarks` also carried a `matcher` parameter that selected nothing, because the observer
-maintains the network whatever the strategy and the benchmark never fires. Two identical columns were
-written up as a finding about memory-maintenance cost.
-
-The pattern across all six is the same and it is not subtle: **every wrong version produced a number
-and a story that hung together.** Nothing in the output said "this is measuring something else"; each
-was caught by reading the code against the claim, or by a reviewer decomposing the measured region.
-Three defences have actually worked here — naming what is inside the measured region and what is
-outside it, checking that a parameter changes exactly one thing, and checking that a parameter
-changes *anything*.
-
-
----
-
 # The gated update, and Phase 5
 
 | | |
@@ -394,7 +356,185 @@ Carried forward, plus what Phase 5 added:
   indexed probing rather than the per-fire reordering.
 - **Fact-payload schema validation.** §2.3 makes it opt-in and says nothing about its cost, so an
   author choosing whether to register a schema has no figure to weigh.
-- **Concurrent multi-session throughput**, still Phase 4's deliverable — and its exit criterion.
+- **How the concurrency curve moves once §5.3's within-session parallelism exists.** The section
+  below measures the across-session model only, which is the only one v1 has.
+
+
+---
+
+# Phase 4: does it scale across cores?
+
+| | |
+|---|---|
+| Date | 2026-08-21 |
+| Engine | Phases 0-2, 4 and 5 complete; `NETWORK` matcher |
+| Machine | AMD Ryzen 7 7840U — **8 physical cores, 16 logical (SMT)**, `powersave` governor, IDE and Gradle daemons resident |
+| JDK | 25 (OpenJDK, Linux x86-64) |
+| JMH | 1.36, `AverageTime`, **3 forks**, 3 warmup + 5 measurement iterations at 2s (15 samples per row) |
+
+Regenerate exactly:
+
+```
+./gradlew :rule-engine-testkit:jmhJar
+java -jar rule-engine-testkit/build/libs/*-jmh.jar ConcurrencyBenchmarks -wi 3 -i 5 -r 2s -w 2s
+```
+
+**Three forks, not the suite's one, and the class now carries `@Fork(3)` so this is a setting rather
+than a request.** JMH's ± is the spread across iterations *within* one fork, and every parameter
+combination here is its own fork, so at one fork the error bars say nothing about how much of a gap
+between two columns is JIT and layout luck. That is not hypothetical — see the calibration below,
+which is what caught it.
+
+## The calibration row, which is the first thing to read
+
+At `threads=1` the `sharing` parameter is a **null experiment**: one thread means one thread-local
+rule set, so PRIVATE and SHARED are the same configuration running twice. Whatever separation that
+row shows is the floor below which no difference anywhere else in the table means anything.
+
+| forks | SHARED @1 | PRIVATE @1 | apparent difference |
+|---|---|---|---|
+| 1 | 36.385 ± 0.257 | 37.773 ± 0.659 | 3.8%, error bars **not** overlapping |
+| 3 | 37.063 ± 0.435 | 37.118 ± 0.590 | 0.15%, overlapping |
+
+The single-fork run reported a 3.8% difference, with non-overlapping error bars, between a
+configuration and itself. An earlier draft of this section read a 6% gap elsewhere in that same table
+as a cache-footprint finding. It was inter-fork noise. That claim is retracted, not softened, and
+this row exists so the next one gets caught the same way.
+
+## What is inside the measured region
+
+Written down before the numbers, per this file's standing rule. `concurrentBatches` measures
+submitting 256 tasks to an already-running pool, each creating a session, inserting 50 order/customer
+pairs, firing to completion and closing; then awaiting all of them. Rule compilation, executor
+construction and thread creation are all in trial setup. **Total work is fixed at 256 batches and the
+thread count varies**, so perfect scaling is `time(N) == time(1) / N`. A benchmark that ran 256
+batches *per thread* would have shown a flat line and proved nothing.
+
+## The curve, and the control it must be read against
+
+```
+Benchmark                                (sharing)  (threads)  Cnt    Score   Error  Units
+ConcurrencyBenchmarks.concurrentBatches     SHARED          1   15   37.063 ± 0.435  ms/op
+ConcurrencyBenchmarks.concurrentBatches     SHARED          2   15   20.052 ± 0.167  ms/op
+ConcurrencyBenchmarks.concurrentBatches     SHARED          4   15   11.239 ± 0.082  ms/op
+ConcurrencyBenchmarks.concurrentBatches     SHARED          8   15    6.398 ± 0.169  ms/op
+ConcurrencyBenchmarks.concurrentBatches     SHARED         16   15    6.033 ± 0.082  ms/op
+ConcurrencyBenchmarks.sharedNothingBaseline SHARED          1   15   48.504 ± 0.305  ms/op
+ConcurrencyBenchmarks.sharedNothingBaseline SHARED          2   15   24.583 ± 0.095  ms/op
+ConcurrencyBenchmarks.sharedNothingBaseline SHARED          4   15   12.896 ± 0.166  ms/op
+ConcurrencyBenchmarks.sharedNothingBaseline SHARED          8   15    6.779 ± 0.041  ms/op
+ConcurrencyBenchmarks.sharedNothingBaseline SHARED         16   15    4.131 ± 0.141  ms/op
+```
+
+| threads | engine speedup | efficiency | baseline speedup | efficiency | engine as % of baseline |
+|---|---|---|---|---|---|
+| 1 | 1.00x | 100% | 1.00x | 100% | 100% |
+| 2 | 1.85x | 92% | 1.97x | 99% | 94% |
+| 4 | 3.30x | 82% | 3.76x | 94% | 88% |
+| 8 | 5.79x | 72% | 7.16x | 89% | 81% |
+| 16 | 6.14x | 38% | 11.74x | 73% | 52% |
+
+`sharedNothingBaseline` is the experimental control: the identical harness — same pool, same 256
+tasks, same submit-and-await — over arithmetic on locals. It exists because **a raw scaling curve on
+a laptop measures the laptop.** Under a `powersave` governor a one-thread run boosts to a clock an
+all-core run cannot hold, the 16-thread column is 16 threads on 8 cores, and the machine is not
+quiescent. All of that would produce sub-linearity before the engine did anything.
+
+**The control does not excuse the engine, but it accounts for a real share.** At 8 threads the
+engine gives up 27.6 points of efficiency and the box gives up 10.6 of them, so **roughly two fifths
+of the shortfall is the machine and three fifths is the engine.** (An earlier draft said "about a
+tenth"; that was arithmetic error, not a different measurement.) Against its own machine's ceiling
+the engine reaches 81% at 8 threads.
+
+**Near-linear holds to 4 threads and degrades from there.** 92% and 82% at two and four threads; 72%
+at eight, the physical core count. Whether that satisfies §9's "scale near-linearly for the batch
+case" is a judgement call, and the number is recorded rather than graded so a later change has
+something to be compared against.
+
+**SMT buys the engine almost nothing** — 1.06x from 8 threads to 16, where the arithmetic baseline
+gets 1.64x. That is the most informative row, and it is worth being careful about what it means,
+because the obvious reading is backwards.
+
+SMT fills one thread's idle issue slots with a sibling thread's instructions. A workload full of
+*memory stalls is therefore the classic SMT beneficiary* — a cache miss is precisely the idle slot
+the sibling uses. So "SMT does not help this" cannot mean "this is memory-bound"; if the engine were
+merely stalling on memory latency, the 16-thread column would look like the baseline's.
+
+The baseline shows what SMT paying off looks like: `accumulator += index ^ (accumulator >>> 3)` is a
+serial dependency chain with very low ILP — each iteration waits on the last — so it leaves slots
+idle every iteration and a sibling thread fills them, hence 1.64x. What 1.06x indicates instead is
+**saturation of a shared resource** at 8 threads: memory bandwidth, last-level cache capacity, or the
+allocator. A second hyperthread on the same core adds demand to something already at its limit and
+gets nothing back. The two rows are consistent with each other under that reading and contradictory
+under the other one.
+
+§5.5 predicted the ceiling would be "cache-line sharing, not locking". The data agrees it is not
+locking — the shared-versus-private table rules that out directly — and points at a saturated shared
+resource rather than at contention over the rule set. **Which** resource is exactly what `-prof gc`
+would name, and it has not been run.
+
+## Sharing the rule set costs nothing, which is §5.5's actual claim
+
+The `sharing` parameter gives every task one shared rule set, or every *thread* its own — keyed by
+thread rather than by batch index, so that "no two concurrent tasks share a rule set" is true by
+construction rather than true of whatever order the pool happened to pick.
+
+| threads | SHARED | PRIVATE |
+|---|---|---|
+| 1 | 37.063 ± 0.435 | 37.118 ± 0.590 |
+| 2 | 20.052 ± 0.167 | 19.875 ± 0.164 |
+| 4 | 11.239 ± 0.082 | 11.130 ± 0.099 |
+| 8 | 6.398 ± 0.169 | 6.557 ± 0.298 |
+| 16 | 6.033 ± 0.082 | 6.068 ± 0.060 |
+
+**Every row overlaps.** §5.5 stakes the whole scaling story on "thousands of concurrent virtual
+threads reference the same `CompiledRuleSet` with zero contention, because nothing about it mutates
+after compile", and this is that claim measured: the private column is what zero contention has to
+be compared against, and there is nothing between them at any thread count.
+
+No cache-footprint effect is claimed in either direction, and the threshold for claiming one comes
+from the calibration row rather than from taste: its error half-widths are ±1.2% and ±1.6% of score,
+so a gap under about 1.5% is inside the noise this method can resolve. None of these gaps reach it.
+(The 0.15% *separation* on that row is how far apart two identical configurations landed; the ±1.2%
+and ±1.6% are how far apart they could have landed. It is the second number that sets the floor.)
+
+## Session creation: 248ns
+
+```
+ConcurrencyBenchmarks.sessionCreation  avgt  15  248.320 ± 3.065  ns/op
+```
+
+From the same run as everything above, which needed a method-level `@OutputTimeUnit(NANOSECONDS)`:
+JMH's score formatter collapses anything below a thousandth of the chosen unit to `~= 10^-4`, so in
+this class's milliseconds the row printed no digits at all. An earlier draft quoted a number taken
+from a *separate* invocation and presented it inside this table.
+
+§10 calls this "your concurrency throughput ceiling" — the per-task constant no amount of parallelism
+amortises. At 248ns against a 145us batch it is 0.17% of the workload above, so for batches of this
+shape it is not the ceiling in practice. One order of magnitude smaller it is still only 1.7%; two
+orders down, at a 1.4us batch, it is a sixth of the work and the name §10 gives it starts to earn
+itself. That is the reason to have the number rather than assume it.
+
+## What Phase 4 still does not measure
+
+- **Whether the 8-thread shortfall is allocation.** The SMT row points that way but does not prove
+  it; `-prof gc` on this same benchmark would, and was not run.
+- **The virtual-thread path.** `concurrentBatches` uses platform threads deliberately, so the column
+  count means cores. `RuleBatches` ships one virtual thread per task over the carrier pool, so it is
+  *expected* to track this curve — a similar shape is a reasonable expectation, not a construction —
+  and its own per-task overhead is unmeasured.
+- **Swap cost under load.** `RuleSetHolder.publish` is a volatile write and `ConcurrencyTest` proves
+  it mixes nothing, but nothing measures whether a publish perturbs in-flight throughput.
+- **Drain and replay.** `SessionDrain.restart` is O(asserted facts) by inspection and untimed.
+- **Whether the immutability audit stays true.** Two instances of the shallow-copy trap have been
+  found by hand and a manual sweep found no third — but a sweep expires the moment someone adds a
+  field. The systemic answer is a test that walks everything reachable from a `CompiledRuleSet`
+  reflectively and asserts every `Collection` and `Map` it finds rejects mutation, turning "somebody
+  checked" into "the build checks". `ImmutabilityTest` covers the literals only.
+- **Listener dispatch under concurrency.** `TracingListener` now takes a lock per firing (§7.1's
+  premise about per-session listeners being false, see the amendment there). Once per firing is not
+  once per candidate, so this is expected to be invisible — but "expected" is what this file exists
+  to replace.
 
 ## A note on this file's own history
 
@@ -432,135 +572,40 @@ outside it, checking that a parameter changes exactly one thing, and checking th
 changes *anything*.
 
 
----
 
-# The gated update, and Phase 5
+Phase 4 also produced a wrong *inference* over correct numbers, which is a failure mode this note
+had not recorded before. The SMT row was read as "SMT cannot help this, therefore it is memory-bound"
+-- and that inverts the mechanism, because a workload full of memory stalls is the classic SMT
+beneficiary: a cache miss is exactly the idle issue slot the sibling thread fills. The conclusion
+happened to survive under a different argument (saturation of a shared resource, which the baseline's
+own 1.64x corroborates), but the reasoning printed alongside it contradicted its own premise. Numbers
+that reproduce are only half of it; the sentence drawn from them is the other half, and it gets the
+same scrutiny.
 
-Same machine, one run, JDK 25. The Phase 1 and Phase 2 tables above were re-run at the same time and
-reproduce: `selectiveJoin` at 2000 facts came back 216us network against 234ms naive, against the
-206us / 305ms recorded above. A benchmark file nobody can reproduce is one nobody should trust, so
-that is worth stating rather than assuming.
+Phase 4 added a fourth defence, and it is the one the earlier six needed most: **an experimental
+control run through the identical harness.** A scaling curve is a ratio between the benchmark's own
+columns, so nothing inside it can reveal that the machine, not the code, produced the shape — the
+error bars stay tight and the story stays plausible, which is exactly the failure mode above.
+`sharedNothingBaseline` is not a benchmark of anything anyone ships; it exists so the concurrency
+numbers have something other than a straight line to be compared against, and it changed the reading:
+the box scales at 89% where the engine scales at 72%, so about two fifths of the shortfall is the
+machine. The first write-up of that put it at a tenth — the control was right and the arithmetic over
+it was wrong, which is its own lesson about where to look after a measurement survives review.
 
-## §3.4.1's gated update
+Phase 4 also produced the sharpest single correction this file has had, and it was not about a
+measured region at all. The concurrency table was run at one fork, and JMH's ± is the spread *within*
+a fork while every parameter combination is its own fork — so the error bars said nothing about
+inter-fork variance and a 6% gap got written up as a cache-footprint finding. What exposed it was
+noticing that one row of the table is a **null experiment**: at `threads=1` the shared-versus-private
+parameter compares a configuration with itself, and it was reporting a 3.8% difference with
+non-overlapping error bars. **Build a row into the table whose answer you already know**, and read it
+first. Nothing else in that section could have caught this, because every other number is a ratio
+between two columns that were wrong in the same way.
 
-§9 gives Phase 1 a two-part exit criterion and is careful that the parts test different things. The
-correctness part is asserted on a counter in the suite — "assert it, don't infer it", since "no
-propagation happened" is trivially satisfied by an engine that never propagates. This is the other
-part, which a counter cannot answer: whether the no-op path is actually *cheap*.
-
-```
-Benchmark                     (matcher)  (testedPaths)      Score        Error  Units
-UpdateBenchmarks.untestedPathBatch  NETWORK        2       8 700 ±       259  ns/op
-UpdateBenchmarks.untestedPathBatch  NETWORK       40      52 242 ±    19 718  ns/op
-UpdateBenchmarks.testedPathBatch    NETWORK        2      25 867 ±    14 541  ns/op
-UpdateBenchmarks.testedPathBatch    NETWORK       40     191 008 ±    53 507  ns/op
-```
-
-One op is a batch of 100 updates, so divide by 100 for a per-update figure.
-
-**The gate is worth about 3x.** A change to a path no rule reads costs 87ns against 259ns for one
-that propagates at two tested paths, and 522ns against 1 910ns at forty. §3.4.1's diff really does
-stop before the retract-and-reassert, and the saving holds as the rule set widens.
-
-**The no-op is linear in the rule set's tested paths, not constant.** Twenty times the tested paths
-costs six times the no-op update: about 11.5ns per tested path over roughly 64ns of fixed overhead.
-That is worth reading carefully rather than as a criticism of §3.4.2. The forty paths here are
-`watched0`..`watched39` — forty *disjoint* top-level fields, which is the worst possible case for a
-prefix trie, because there is no shared prefix to collapse. This measures the walk, not the pruning.
-**The trie's actual claim is still unmeasured**; the shape that would show it is a rule set whose
-tested paths share deep prefixes, and that benchmark does not exist yet.
-
-**Both matchers read identically** — 8 700 against 8 819 at two paths, 191 008 against 189 662 at
-forty. That is a result, not a missing parameter: only the network has pattern memories to retract
-from and reassert into, so their maintenance does not register against the cost of the diff itself
-at this scale.
-
-**What is outside the measured region, and why.** `updateOwned` rather than `update`, so §2.2's
-payload copy is not on the clock; it is already measured by `insertBatchCopying` against
-`insertBatchOwned` above. One session for the trial, since session construction is measured by
-`oneShotSession`. And a batch of 100, because the interesting cost is a few hundred nanoseconds and
-JMH's own guidance is that per-invocation setup cannot be trusted at that scale.
-
-The first version of this benchmark got all of that wrong — see the note at the end of this file.
-
-## Phase 5: what the DSL and the escape hatch cost
-
-Nothing here was measured before; the sections above predate Phase 5.
-
-### Compiling a rule set is a startup cost, and parsing dominates it
-
-```
-Benchmark                            (rules)      Score       Error  Units
-CompilationBenchmarks.compileFromAst      10     44.537 ±    17.783  us/op
-CompilationBenchmarks.compileFromAst     100    433.288 ±    65.379  us/op
-CompilationBenchmarks.parseRuleFile       10    332.358 ±   103.630  us/op
-CompilationBenchmarks.parseRuleFile      100  3 388.352 ±   924.328  us/op
-CompilationBenchmarks.compileRuleFile     10    368.491 ±     4.045  us/op
-CompilationBenchmarks.compileRuleFile    100  4 013.121 ±  1 271.928  us/op
-```
-
-**§6.5's pipeline is the cheap half by roughly 7x.** At a hundred rules, validation, accessor and
-regex compilation, node sharing, index plans, tested paths, the version hash and the report together
-cost 0.43ms. Getting there from YAML costs 3.39ms — Jackson, the schema gate, the operator maps and
-the source index. If rule-set startup ever needs to be faster, the DSL is where the time is, not the
-compiler.
-
-**All three are linear in rule count.** Ten times the rules costs about ten times the work in every
-column. §6.5 claims node sharing keeps the alpha network sublinear in rule count while being weaker
-for joins; these rules deliberately share half their constraints, and nothing here grows faster than
-linearly. Note this measures *compile* cost, not the network size that sharing actually shrinks —
-that is still unmeasured.
-
-Four milliseconds for a hundred rules is not a number anyone needs to optimise. It is recorded so
-that a future change which makes it forty is noticed.
-
-### §6.4's escape hatch costs about 4x an operator map, and scales the same way
-
-§6.4 makes one quantified claim about the expression escape hatch: "an unindexed CEL condition
-against 100 000 facts is 100 000 evaluations per fire cycle. Cheap-per-call is not cheap." A claim
-that specific deserves a measurement.
-
-Both rules select the same facts and fire the same right-hand side; only the form of the constraint
-differs. Nothing matches, deliberately — that is what makes every fact a *candidate* the condition
-has to be evaluated against, which is the cost §6.4 is warning about. A workload where indexed
-constraints eliminated everything first would measure the index.
-
-```
-Benchmark                                (facts)     Score       Error  Units
-ExpressionBenchmarks.operatorMapCondition    100    14.225 ±     4.523  us/op
-ExpressionBenchmarks.operatorMapCondition   1000   138.924 ±    29.104  us/op
-ExpressionBenchmarks.expressionCondition     100    54.453 ±    19.795  us/op
-ExpressionBenchmarks.expressionCondition    1000   567.440 ±   136.140  us/op
-ExpressionBenchmarks.expressionValue         100    15.856 ±     0.589  us/op
-ExpressionBenchmarks.expressionValue        1000   145.852 ±    14.582  us/op
-```
-
-**The ratio is about 4x and it is flat.** 3.8x at a hundred facts, 4.1x at a thousand. Both columns
-are linear in fact count, which is precisely what §6.4's sentence means: an expression is evaluated
-once per candidate, so the cost is the *number* of evaluations rather than a worse growth curve. The
-honest summary is "roughly four times the per-candidate cost of an operator map, scaling
-identically" — not "expressions do not scale".
-
-That is also the argument for the shape §6.3 recommends. Keep the indexable constraints in `where`
-doing the narrowing and let the condition express only what they cannot: what `where` removes is
-work the condition never does.
-
-**A value expression is not the same cost, and that is the point.** `expressionValue` lands on the
-operator-map control — 15.9us and 145.9us — because a value runs once per *firing* where a condition
-runs once per *candidate*. §6.4's warning is about the left-hand side, and the numbers say so.
-
-## What is still not measured
-
-Carried forward, plus what Phase 5 added:
-
-- **The prefix trie's pruning.** The update benchmark above uses disjoint top-level paths, which is
-  the worst case for a trie and measures the walk instead. Needs tested paths that share deep
-  prefixes.
-- **Node sharing's effect on network size and insert cost.** `CompilationBenchmarks` shares
-  constraints and shows compilation is linear, but §6.5's claim is about the *network*, and
-  `NetworkStructureTest` asserts the sharing structurally without putting a number on it.
-- **The join planner specifically.** Both sides of `selectiveJoin` are the same size, so it measures
-  indexed probing rather than the per-fire reordering.
-- **Fact-payload schema validation.** §2.3 makes it opt-in and says nothing about its cost, so an
-  author choosing whether to register a schema has no figure to weigh. `-schema` has no benchmark.
-- **Concurrent multi-session throughput**, still Phase 4's deliverable.
+A seventh entry, of a different kind: the Phase 5 commit left this file with **two copies of its own
+tail** — the corrected text and the superseded draft it was meant to replace, one after the other.
+The stale copy still asserted the flat 4x expression ratio measured before the facts were moved out
+of the measured region, and the "both matchers read identically" non-finding. A reader arriving at
+the second copy would have found retracted claims presented as current. Deleted in the Phase 4
+commit. Appending to a benchmark log is right; appending a revision instead of replacing what it
+revises is how a log grows contradictions.

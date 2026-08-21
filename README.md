@@ -7,7 +7,7 @@ high-concurrency evaluation the default rather than an afterthought.
 The design is specified in full in [`docs/rule-engine-spec.md`](docs/rule-engine-spec.md). This
 README covers what is built and how to run it.
 
-## Status: Phase 2 is v1, and the DSL of Phase 5 has landed
+## Status: Phase 2 is v1; Phases 4 and 5 have landed on top
 
 Phases 0, 1 and 2 of the spec's roadmap (§9) are complete. §9 marks the end of Phase 2 as v1: the
 complete engine for one-shot and batch sessions. Phase 5's rule-file front end is built on top of
@@ -52,9 +52,13 @@ CEL escape hatch (§6.4). An expression can appear as a pattern `condition:` or 
 a `then` block — the second being a deliberate extension of §11.3's closed verb set, argued in
 `docs/dsl-reference.md`. Both live in modules nobody has to depend on.
 
-**What does not, and where it arrives:** streaming sessions and Rete joins (Phase 3), and the
-concurrency helpers and hot reload (Phase 4). Negation, accumulation, truth maintenance and CEP are
-§1 non-goals with documented interim answers.
+**Phase 4 is complete**: the immutability invariant §5.5 rests every scaling claim on is now
+audited and checked, `RuleSetHolder` swaps a rule set under load, `SessionDrain` moves a running
+session onto new rules, and `RuleBatches` runs a batch per session across virtual threads. The
+scaling curve is measured rather than asserted — see `docs/benchmarks.md`.
+
+**What does not, and where it arrives:** streaming sessions and Rete joins (Phase 3). Negation,
+accumulation, truth maintenance and CEP are §1 non-goals with documented interim answers.
 
 ## Modules
 
@@ -210,6 +214,40 @@ try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
 ```
 
 `halt()` is the one method on a session that may be called from another thread.
+
+`RuleBatches` is that loop with the failure question answered. §5.2 insists you decide what a partial
+batch result means before shipping, so every batch's outcome comes back — successes and failures
+both — instead of the first exception throwing away its siblings' work:
+
+```java
+List<BatchOutcome<FireResult>> outcomes = RuleBatches.run(rules, batches, (session, batch) -> {
+    batch.forEach(f -> session.insert(f.type(), f.payload()));
+    return session.fireAllRules();
+});
+```
+
+Measured on an 8-core machine, 256 such batches scale 3.30x on 4 threads and 5.79x on 8 — against a
+shared-nothing control that manages 3.76x and 7.16x on the same box, so the engine reaches 81% of
+what that machine can do at 8 threads. Sharing one `CompiledRuleSet` across every thread costs
+nothing measurable at any thread count, which is the claim §5.5 stakes the design on.
+
+### Swapping rules while running
+
+`RuleSetHolder` is §5.6's hot reload: a volatile reference, and two contracts. Compile before you
+publish, so a broken rule file leaves the previous version serving; and a swap affects new sessions
+only — anything already running finishes against the rules it started with.
+
+```java
+RuleSetHolder rules = new RuleSetHolder(RuleFiles.compile(source));
+...
+rules.publish(RuleFiles.compile(newSource));   // compile first: a failure here changes nothing
+```
+
+There is no safe in-place swap for a session that is *already* running — its memories, refraction
+state and agenda are all shaped by the old network's node ids. For long-lived sessions the answer is
+`SessionDrain.restart`, which exports the session's facts, closes it, and replays them into a session
+on the new rules. Facts a rule derived are deliberately not replayed: the new session re-derives them
+when it fires, and exporting them would double-count every one.
 
 ## Building
 

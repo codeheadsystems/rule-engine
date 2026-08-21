@@ -6,7 +6,7 @@ import com.fasterxml.jackson.databind.JsonNode;
  * A host-supplied function a rule may call by name -- the closed action set's escape hatch
  * (spec §11.3).
  *
- * <p>Two contracts the engine states but cannot enforce:
+ * <p>Three contracts the engine states but cannot enforce:
  *
  * <ul>
  *   <li><strong>Deterministic.</strong> §7.3's guarantee -- same rule set, same facts, same
@@ -16,6 +16,14 @@ import com.fasterxml.jackson.databind.JsonNode;
  *   <li><strong>Non-blocking and bounded.</strong> Handlers are untrusted for <em>time</em>, not
  *       just for effects. One that blocks indefinitely stalls the session for as long as it blocks,
  *       and there is no fire-loop timeout to rescue it.
+ *   <li><strong>Safe for concurrent use, when the caller shares an options object.</strong>
+ *       Functions reach a session through {@code SessionOptions.functions()}, and options are per
+ *       <em>configuration</em> rather than per session -- {@code RuleBatches.run(rules, inputs,
+ *       batch, options)} builds N concurrent sessions from one options object, so one handler
+ *       instance serves all of them. A handler holding mutable state has to guard it; a stateless
+ *       one, which is most of them, needs nothing. Added in Phase 4 alongside the same correction to
+ *       {@link com.codeheadsystems.rules.listener.RuleEngineListener}; §7.1's claim that nothing
+ *       reachable from options is shared across sessions is annotated there as a defect.
  * </ul>
  */
 @FunctionalInterface

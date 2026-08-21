@@ -1,10 +1,12 @@
 package com.codeheadsystems.rules.session;
 
+import com.codeheadsystems.rules.fact.ExportedFact;
 import com.codeheadsystems.rules.fact.Fact;
 import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.fact.WorkingMemory;
 import com.codeheadsystems.rules.match.ActivationKey;
 import com.fasterxml.jackson.databind.JsonNode;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -131,6 +133,21 @@ public interface RuleSession extends AutoCloseable {
    * @return the working memory
    */
   WorkingMemory workingMemory();
+
+  /**
+   * This session's externally-inserted facts, ready to replay into another session (§5.6).
+   *
+   * <p>The drain half of drain-and-restart, which is what a long-lived session does when the rule
+   * set changes under it: there is no safe in-place swap for a running session, so the answer is to
+   * export, close, and replay into a session on the new rules. See
+   * {@link com.codeheadsystems.rules.fact.WorkingMemory#exportFacts()} for what is and is not
+   * included, and {@code com.codeheadsystems.rules.concurrent.SessionDrain} for the whole move.
+   *
+   * @return the facts, ascending by handle id, which is insertion order
+   */
+  default List<ExportedFact> exportFacts() {
+    return workingMemory().exportFacts();
+  }
 
   /**
    * Whether {@link #halt()} has been called.

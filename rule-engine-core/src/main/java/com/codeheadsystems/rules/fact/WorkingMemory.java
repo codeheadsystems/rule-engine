@@ -1,6 +1,7 @@
 package com.codeheadsystems.rules.fact;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
 
@@ -111,6 +112,12 @@ public interface WorkingMemory {
    *
    * <p>Ownership transfers, as with {@link #insertOwned}.
    *
+   * <p><strong>Records {@link Origin#DERIVED}</strong>, because this is the door a firing rule
+   * inserts through, and that is what keeps {@link #exportFacts()} from double-counting on a §5.6
+   * restart. It follows that a caller who drives {@link #reserveHandle()} and this method
+   * themselves, rather than letting a right-hand side do it, produces facts the export deliberately
+   * drops. Use {@link #insert} or {@link #insertOwned} for facts that are the session's input.
+   *
    * @param handle a previously reserved handle
    * @param type the fact type
    * @param payload the payload; retained, not copied
@@ -157,6 +164,33 @@ public interface WorkingMemory {
    * @return a stream over the snapshot, in ascending handle id
    */
   Stream<Fact> factsOfType(String type);
+
+  /**
+   * The facts the caller inserted, in insertion order, ready to replay into another session (§5.6).
+   *
+   * <p>Three properties, each of which the drain-and-restart story would be wrong without.
+   *
+   * <p><strong>Asserted facts only.</strong> A fact a right-hand side derived is excluded, because
+   * the session it is replayed into re-derives it as soon as it fires. Including them would
+   * double-count every derivation, and the duplicates would look like an engine bug rather than an
+   * export bug. See {@link Origin}.
+   *
+   * <p><strong>Ascending handle id, which is insertion order.</strong> §7.3 promises the same firing
+   * sequence for the same facts <em>in the same insertion order</em>, so a drained-and-replayed
+   * session that reordered its inputs could fire differently from a continuous one while looking
+   * entirely healthy. Handle ids are monotonic and never reused, so this is insertion order by
+   * construction rather than by bookkeeping.
+   *
+   * <p><strong>Current payloads, not original ones.</strong> A fact updated five times exports once,
+   * at its latest value. Replaying the update history would be a different feature (and would need
+   * a history the engine does not keep); replaying the current state is what rebuilds an equivalent
+   * session.
+   *
+   * <p>Payloads are deep-copied, so the returned list shares nothing with this working memory.
+   *
+   * @return the externally-inserted facts, ascending by handle id
+   */
+  List<ExportedFact> exportFacts();
 
   /**
    * The number of facts currently asserted.

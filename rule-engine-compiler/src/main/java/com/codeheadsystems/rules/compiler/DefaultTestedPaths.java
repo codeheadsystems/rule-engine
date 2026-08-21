@@ -3,6 +3,7 @@ package com.codeheadsystems.rules.compiler;
 import com.codeheadsystems.rules.rule.TestedPaths;
 import com.fasterxml.jackson.core.JsonPointer;
 import com.fasterxml.jackson.databind.JsonNode;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
@@ -128,7 +129,25 @@ public final class DefaultTestedPaths implements TestedPaths {
     final Map<String, Map<JsonPointer, Set<String>>> copy = new LinkedHashMap<>();
     source.forEach((type, byPath) -> {
       final Map<JsonPointer, Set<String>> paths = new LinkedHashMap<>();
-      byPath.forEach((path, rules) -> paths.put(path, new LinkedHashSet<>(rules)));
+      /*
+       * unmodifiableSet over a copy, not the copy itself. Map.copyOf is shallow, so without this
+       * the values stay the compiler's live mutable sets and rulesTesting() hands one straight out
+       * through the public TestedPaths on a shared CompiledRuleSet. CompiledRule's compact
+       * constructor carries a comment about the identical trap; this copier was the one of three
+       * here that missed it, while deepCopyTypes and deepCopyRules both used Set.copyOf.
+       *
+       * The damage is worse than a mutated literal and invisible to RuleSetFingerprint, which walks
+       * constraints and action values rather than this index. §3.4.1 step 5 reads this set to decide
+       * which rules to un-refract after an update, so clearing it does not change what matches -- it
+       * stops rules being un-refracted, and a rule that should re-fire after an update never fires
+       * again. No exception, and version() does not move.
+       *
+       * Not Set.copyOf: the result is addAll'd into a LinkedHashSet that reaches
+       * refractionInvalidated and therefore a listener, and Set.copyOf carries a per-JVM iteration
+       * salt. §7.3's determinism contract makes ordering on any path to the agenda load-bearing.
+       */
+      byPath.forEach((path, rules) ->
+          paths.put(path, Collections.unmodifiableSet(new LinkedHashSet<>(rules))));
       copy.put(type, Map.copyOf(paths));
     });
     return Map.copyOf(copy);

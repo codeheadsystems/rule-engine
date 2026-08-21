@@ -25,6 +25,27 @@ import java.util.Optional;
  * <p>Note what is deliberately <em>not</em> here: a join-strategy selector. v1 has one join strategy
  * and one agenda shape, so a selector would be dead config -- a knob with one position, which
  * readers reasonably assume has two. It arrives with the second shape.
+ *
+ * <h2>One options object, many sessions</h2>
+ *
+ * <p><strong>An instance is per configuration, not per session.</strong> It is built once and used
+ * to create sessions repeatedly -- {@code RuleBatches.run(rules, inputs, batch, options)} takes
+ * exactly one and creates N concurrent sessions from it. <strong>Everything reachable from an
+ * options object is therefore shared by every session created from it, and must tolerate concurrent
+ * invocation.</strong> The engine does not synchronize dispatch to any of it.
+ *
+ * <p>This statement lives on the class rather than only on the individual setters because each new
+ * thing reachable from here has had to rediscover it, twice at a cost. {@link Builder#events} was
+ * once a collecting sink held in the options, which put one unsynchronised {@code ArrayList} behind
+ * every session built from them; that one was fixed by resolving the sink per session, and the
+ * default is stateless so that not choosing cannot go wrong. Listeners were added afterwards and
+ * inherited none of that reasoning, which is how §7.1 came to claim -- wrongly -- that "a listener
+ * is never shared mutable state across sessions and nothing on the path synchronizes". See the
+ * amendment at §7.1, {@link RuleEngineListener} and {@link HostFunction}.
+ *
+ * <p>So: whatever is added to this class next is shared too, and says so here already. A caller who
+ * wants per-session state wants a per-session options object, which is cheap -- this is a builder
+ * over a handful of fields, not something to pool.
  */
 public final class SessionOptions {
 
@@ -251,9 +272,10 @@ public final class SessionOptions {
     /**
      * Sets the event sink, replacing the per-session collecting default.
      *
-     * <p>If these options are reused across sessions, this instance is shared by all of them and
-     * must be thread-safe. That is the caller's decision to make; the default is stateless
-     * precisely so that not making it cannot go wrong.
+     * <p>If these options are reused to create more than one session, this instance is shared by all
+     * of them and must tolerate concurrent invocation -- see the class documentation. That is the
+     * caller's decision to make; the default is resolved per session and is stateless, precisely so
+     * that not making it cannot go wrong.
      *
      * @param value the sink
      * @return this builder
@@ -277,6 +299,12 @@ public final class SessionOptions {
     /**
      * Registers a listener.
      *
+     * <p>If these options are reused to create more than one session, this instance is shared by all
+     * of them and must tolerate concurrent invocation -- see the class documentation. That is the
+     * caller's decision, and it is the natural one to make when collecting a trace across a batch
+     * run. {@code TracingListener} is safe to share; note that sharing also interleaves sessions
+     * into one buffer, which its own documentation warns costs you loop diagnosis.
+     *
      * @param value the listener
      * @return this builder
      */
@@ -287,6 +315,10 @@ public final class SessionOptions {
 
     /**
      * Registers a host function a {@code callFunction} action may dispatch to.
+     *
+     * <p>If these options are reused to create more than one session, this instance is shared by all
+     * of them and must tolerate concurrent invocation -- see the class documentation. A stateless
+     * handler, which is most of them, needs nothing.
      *
      * @param name the name rules refer to it by
      * @param function the implementation

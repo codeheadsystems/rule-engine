@@ -7,6 +7,7 @@ import com.fasterxml.jackson.core.JsonPointer;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -78,7 +79,7 @@ public final class DefaultWorkingMemory implements WorkingMemory {
     Objects.requireNonNull(payload, "payload");
     validate(type, payload);
     final FactHandle handle = new FactHandle(nextHandleId++);
-    final Fact fact = new Fact(handle, type, payload, ++recencyCounter);
+    final Fact fact = new Fact(handle, type, payload, ++recencyCounter, Origin.ASSERTED);
     byHandle.put(handle.id(), fact);
     byType.computeIfAbsent(type, ignored -> new LinkedHashSet<>()).add(handle.id());
     observer.factInserted(fact);
@@ -114,7 +115,14 @@ public final class DefaultWorkingMemory implements WorkingMemory {
       throw new IllegalArgumentException("handle " + handle.id() + " was not reserved");
     }
     validate(type, payload);
-    final Fact fact = new Fact(handle, type, payload, ++recencyCounter);
+    // DERIVED, and this is the only place it is set. insertReserved is the only ENGINE path into
+    // working memory that a right-hand side uses -- RhsExecutor touches working memory at several
+    // sites and this is its only insert -- which is what makes one bit here enough to keep the §5.6
+    // export honest. It is not the only path in existence: the method is public on WorkingMemory, so
+    // a caller reserving a handle themselves gets a fact exportFacts() will drop. Documented on the
+    // interface rather than defended against, because reserveHandle/insertReserved exists for the
+    // engine's staging protocol and a caller using it has taken on the protocol.
+    final Fact fact = new Fact(handle, type, payload, ++recencyCounter, Origin.DERIVED);
     byHandle.put(handle.id(), fact);
     byType.computeIfAbsent(type, ignored -> new LinkedHashSet<>()).add(handle.id());
     observer.factInserted(fact);
@@ -152,7 +160,8 @@ public final class DefaultWorkingMemory implements WorkingMemory {
     // Step 2. Replace the stored payload at the SAME recency and return. The payload is always
     // replaced; only propagation is conditional.
     if (changed.isEmpty()) {
-      final Fact unchanged = new Fact(handle, before.type(), newPayload, before.recency());
+      final Fact unchanged = new Fact(handle, before.type(), newPayload, before.recency(),
+          before.origin());
       byHandle.put(handle.id(), unchanged);
       skippedUpdates++;
       observer.updateSkipped(unchanged);
@@ -166,7 +175,8 @@ public final class DefaultWorkingMemory implements WorkingMemory {
     // identity, not a new fact -- which is what keeps refraction keyed on (ruleId, handles) working
     // without special casing, because a match destroyed in step 3 and recreated in step 6 arrives
     // at selection with the same key.
-    final Fact after = new Fact(handle, before.type(), newPayload, ++recencyCounter);
+    final Fact after = new Fact(handle, before.type(), newPayload, ++recencyCounter,
+        before.origin());
     byHandle.put(handle.id(), after);
 
     // Step 5. Deliberately un-refract the rules that DO test a changed path -- and only those.
@@ -236,6 +246,18 @@ public final class DefaultWorkingMemory implements WorkingMemory {
   }
 
   @Override
+  public List<ExportedFact> exportFacts() {
+    // Sorted explicitly rather than relying on byHandle's insertion order. LinkedHashMap keeps a
+    // re-put key at its original position, so today the two agree -- but that is an implementation
+    // detail of update(), and §7.3's ordering guarantee is too load-bearing to rest on it.
+    return byHandle.values().stream()
+        .filter(fact -> fact.origin() == Origin.ASSERTED)
+        .sorted(Comparator.comparingLong(fact -> fact.handle().id()))
+        .map(fact -> new ExportedFact(fact.type(), fact.payload().deepCopy(), fact.origin()))
+        .toList();
+  }
+
+  @Override
   public int size() {
     return byHandle.size();
   }
@@ -285,7 +307,8 @@ public final class DefaultWorkingMemory implements WorkingMemory {
    */
   private Fact exposed(final Fact fact) {
     return strict
-        ? new Fact(fact.handle(), fact.type(), fact.payload().deepCopy(), fact.recency())
+        ? new Fact(fact.handle(), fact.type(), fact.payload().deepCopy(), fact.recency(),
+            fact.origin())
         : fact;
   }
 

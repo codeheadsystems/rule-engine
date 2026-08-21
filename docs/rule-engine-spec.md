@@ -1434,6 +1434,20 @@ public enum SuppressReason { REFRACTED, NO_LOOP }
 
 Registered per session via `SessionOptions`, so a listener is never shared mutable state across sessions and nothing on the path synchronizes.
 
+> **Amendment (Phase 4).** The sentence above is wrong and the implementation does not follow it.
+> `SessionOptions` is per *configuration*, not per session: one instance is built once and used to
+> create many sessions, which is exactly what `RuleBatches.run(rules, inputs, batch, options)` does,
+> N times concurrently. A listener held in options is therefore shared mutable state across
+> sessions, and a caller wanting a trace out of a batch run has no other move. **A listener
+> implementation must be safe for concurrent use**, and the ones shipped here are: `TracingListener`
+> locks around its deque, `JfrListener` holds no instance state. The same correction applies to
+> `HostFunction`, which reaches every session through `options.functions()` by the same route.
+>
+> Listener dispatch happens once per firing rather than once per candidate, so this costs
+> approximately what §7.1's own `NoOpListener` argument already accepts. The alternative --
+> resolving a listener per session the way `EventSink` is resolved -- is not available, because a
+> listener is the caller's object and the caller expects to read it afterwards.
+
 **Two callbacks need their names taken seriously.** `onUpdate`'s path set is only what the *network tests* — a listener used as an audit log would under-report actual changes, so the parameter is named for what it is. And refraction may suppress a match before an `Activation` object exists at all — under Rete it is never created, under TREAT it is created during recomputation and dropped at selection (§4.1, §4.4) — so a callback taking an `Activation` would be unimplementable in one shape and misleading in the other. Suppression gets its own callback taking the `ActivationKey`, which both shapes always have.
 
 **`FireRecord` carrying the staged effects and the runners-up is the load-bearing part.** §4.6 stages an RHS's effects and commits them atomically, so one record answers "what did this firing do" without reconstructing it from a stream of mutations. And "why did B fire before A" is a top-three question that is unanswerable from a record naming only the winner.
