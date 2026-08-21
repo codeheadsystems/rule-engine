@@ -16,7 +16,7 @@ jobs:
 
       # The build targets a JDK 25 toolchain (spec section 5). Gradle itself runs on this JDK and
       # resolves the toolchain from it.
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '25'
