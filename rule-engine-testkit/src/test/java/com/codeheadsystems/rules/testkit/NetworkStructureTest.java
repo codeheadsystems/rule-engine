@@ -7,6 +7,7 @@ import com.codeheadsystems.rules.compiler.RuleCompiler;
 import com.codeheadsystems.rules.network.Network;
 import com.codeheadsystems.rules.network.PatternNode;
 import com.codeheadsystems.rules.network.SessionMemories;
+import com.codeheadsystems.rules.rule.Operator;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -121,8 +122,8 @@ class NetworkStructureTest {
   }
 
   @Test
-  @DisplayName("the index plan indexes the paths joins probe, and nothing else")
-  void indexPlanFollowsTheJoins() {
+  @DisplayName("both ends of a join are indexed, because either may be the smaller side")
+  void indexPlanCoversBothEndsOfAJoin() {
     final CompiledRuleSet ruleSet = RuleCompiler.compile(List.of(
         Rules.rule("join")
             .when("o", "Order", pattern -> pattern.eq("status", "PENDING").gt("total", 10))
@@ -131,12 +132,44 @@ class NetworkStructureTest {
             .build()));
     final Network network = ruleSet.network();
 
-    // The Order pattern filters on /status and /total but nothing joins against it, so indexing
-    // either would build a structure whose only bucket is the memory itself.
-    assertThat(network.patternNodes().getFirst().indexPlan().isEmpty()).isTrue();
-    // The Customer pattern is joined on /id, which is exactly what needs an index.
+    // The constraint is written on the Customer pattern, so /id obviously needs an index.
     assertThat(network.patternNodes().get(1).indexPlan().hashed())
         .containsExactly(Paths.compile("id"));
+    // ...and so does Order./customerId, which the constraint does not sit on. Section 3.3 makes
+    // the smaller side a per-fire decision, so the matcher may bind customers first and probe for
+    // their orders. Planning one pattern at a time can only ever see half of each edge.
+    assertThat(network.patternNodes().getFirst().indexPlan().hashed())
+        .containsExactly(Paths.compile("customerId"));
+  }
+
+  @Test
+  @DisplayName("alpha-only paths are still not indexed")
+  void alphaPathsAreNotIndexed() {
+    // A pattern's memory already contains exactly the facts passing its alpha tests, so indexing
+    // /status would build a structure whose only bucket is the memory itself.
+    final CompiledRuleSet ruleSet = RuleCompiler.compile(List.of(
+        Rules.rule("alpha-only")
+            .when("o", "Order", pattern -> pattern.eq("status", "PENDING").gt("total", 10))
+            .then(actions -> actions.emit("hit"))
+            .build()));
+
+    assertThat(ruleSet.network().patternNodes().getFirst().indexPlan().isEmpty()).isTrue();
+  }
+
+  @Test
+  @DisplayName("an unindexable join operator produces no index on either end")
+  void unindexableJoinsIndexNothing() {
+    // NE is an anti-match: "everything except one bucket", which an index cannot narrow. Section
+    // 3.3 names it, and it reverses to NE rather than to something probeable.
+    final CompiledRuleSet ruleSet = RuleCompiler.compile(List.of(
+        Rules.rule("anti")
+            .when("a", "Quote", pattern -> pattern.eq("sku", "WIDGET"))
+            .when("b", "Quote", pattern -> pattern.ref("vendor", "a.vendor", Operator.NE))
+            .then(actions -> actions.emit("hit"))
+            .build()));
+
+    assertThat(ruleSet.network().patternNodes())
+        .allSatisfy(node -> assertThat(node.indexPlan().isEmpty()).isTrue());
   }
 
   @Test

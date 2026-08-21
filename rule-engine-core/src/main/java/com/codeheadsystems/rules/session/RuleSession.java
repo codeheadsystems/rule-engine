@@ -3,6 +3,7 @@ package com.codeheadsystems.rules.session;
 import com.codeheadsystems.rules.fact.Fact;
 import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.fact.WorkingMemory;
+import com.codeheadsystems.rules.match.ActivationKey;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.Optional;
 import java.util.UUID;
@@ -105,6 +106,22 @@ public interface RuleSession extends AutoCloseable {
    *     result
    */
   FireResult fireAllRules(FireOptions options);
+
+  /**
+   * Whether a match has already fired, and at what recency.
+   *
+   * <p>Exists for §7.2's third verdict, which is the one nobody guesses: a rule that "stopped
+   * working" has usually already fired on those exact facts. Saying so explicitly, with the recency
+   * it fired at, is the difference between a useful explanation and one that lists constraints the
+   * author can already see are satisfied.
+   *
+   * <p>This is deliberately the <em>only</em> window onto refraction state. §5.1 refuses to publish
+   * the agenda because {@code nextToFire()} consumes; this reads and consumes nothing.
+   *
+   * @param key the match's identity
+   * @return the recency it fired at, or empty if it has not fired
+   */
+  Optional<Long> firedAt(ActivationKey key);
 
   /**
    * Read access to working memory, and how callers reach {@link WorkingMemory#factsOfType}.

@@ -7,9 +7,10 @@ high-concurrency evaluation the default rather than an afterthought.
 The design is specified in full in [`docs/rule-engine-spec.md`](docs/rule-engine-spec.md). This
 README covers what is built and how to run it.
 
-## Status: Phase 1
+## Status: Phase 2 — this is v1
 
-Phases 0 and 1 of the spec's roadmap (§9) are complete.
+Phases 0, 1 and 2 of the spec's roadmap (§9) are complete. §9 marks the end of Phase 2 as v1: the
+complete engine for one-shot and batch sessions.
 
 **Phase 0** is the **naive matcher**: no network, no indexes, no incremental maintenance, and a cost
 of `O(rules × facts^arity)`. It is deliberately unoptimised and it is still shipped, because it is
@@ -23,6 +24,12 @@ expressing two constraints compile to two nodes, evaluated once per fact), per-p
 holding exactly what matches, hash and sorted indexes on the paths joins probe, §3.4.2's prefix
 trie for the update diff, and the tracing and Flight Recorder listeners.
 
+**Phase 2** is the **join**: both ends of every join edge are indexed, and the binding order is
+chosen fresh on each fire cycle — smallest memory first, connected before disconnected. A rule's
+*written* order no longer dictates its cost, which is §3.3's "which side is smaller is a per-fire
+decision under TREAT". It also adds `MatchExplainer`, which answers the question a trace cannot:
+**why did rule R *not* fire?**
+
 The two matchers are held to agreement by a differential suite covering retraction, join-key churn,
 mutating right-hand sides and seeded random walks. The index is a *pure* optimisation: probe results
 are intersected with actual pattern membership, so a corrupt index is slow rather than wrong.
@@ -32,10 +39,10 @@ are intersected with actual pattern membership, so a corrupt index is slow rathe
 RHS staging with the five actions, the firing loop with its work limits, dry runs, strict mode, and
 the determinism contract.
 
-**What does not, and where it arrives:** the TREAT join network and match explanations (Phase 2),
-streaming sessions and Rete joins (Phase 3), the concurrency helpers and hot reload (Phase 4), the
-JSON/YAML DSL and CEL (Phase 5). Negation, accumulation, truth maintenance and CEP are §1 non-goals
-with documented interim answers. Rules are written in Java until the DSL lands.
+**What does not, and where it arrives:** streaming sessions and Rete joins (Phase 3), the
+concurrency helpers and hot reload (Phase 4), the JSON/YAML DSL and CEL (Phase 5). Negation,
+accumulation, truth maintenance and CEP are §1 non-goals with documented interim answers. Rules are
+written in Java until the DSL lands.
 
 ## Modules
 
@@ -43,7 +50,7 @@ with documented interim answers. Rules are written in Java until the DSL lands.
 |---|---|
 | `rule-engine-core` | Fact model, working memory, matching primitives, agenda, refraction, sessions |
 | `rule-engine-compiler` | `RuleDefinition` → `CompiledRuleSet`: validation, accessor and pattern compilation, tested paths, version hash |
-| `rule-engine-observability` | `TracingListener`, `JfrListener` |
+| `rule-engine-observability` | `TracingListener`, `JfrListener`, `MatchExplainer` |
 | `rule-engine-testkit` | Fixtures, the firing-sequence oracle, the shuffle-determinism and matcher-equivalence harnesses, JMH benchmarks |
 
 `-dsl`, `-schema` and `-cel` (§8) arrive with the phases that need them.
@@ -126,6 +133,36 @@ violation deterministically in test: engine-owned payloads are handed out as cop
 that aliases the stored payload is rejected, and the conflict-resolution strategy is asserted to be
 a total order consistent with equality. §7.5 asks for the full suite to run under it in CI and
 forbids it in production; `strictTest` is that run.
+
+## Why didn't my rule fire?
+
+A firing leaves a record; a *non*-firing leaves nothing to look up. `MatchExplainer` is the
+diagnostic that goes and looks (§7.2):
+
+```java
+Explanation why = new MatchExplainer(rules, session).explain("high-value-order-review");
+System.out.println(why.describe());
+
+// rule high-value-order-review: matched, but refracted — already fired at recency 4
+//   o: Order — 1 considered, 1 matched
+//   c: Customer — 1 considered, 1 matched
+```
+
+It deliberately does not use the matching network. The network is optimised to *not* compute what
+you want here: an index skips non-candidates without recording why, and a pattern memory holds the
+survivors and has forgotten the casualties. So it re-evaluates constraints one at a time against
+working memory — slower by every measure, and the only way to know which constraint did the
+eliminating.
+
+Pin the facts you are actually asking about when you have them, which is the sharper question:
+
+```java
+why = explainer.explain("high-value-order-review", Map.of("o", orderHandle, "c", customerHandle));
+```
+
+Three verdicts cover most real cases: no fact of some type exists; N considered and all failed a
+named constraint, *with the value that failed it*; and the one nobody guesses — **the rule already
+fired on those exact facts**, with the recency it fired at.
 
 ## If a rule action throws
 

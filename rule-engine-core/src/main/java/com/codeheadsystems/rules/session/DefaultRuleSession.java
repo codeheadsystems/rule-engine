@@ -118,6 +118,11 @@ public final class DefaultRuleSession implements RuleSession {
   }
 
   @Override
+  public Optional<Long> firedAt(final ActivationKey key) {
+    return refraction.firedAt(key);
+  }
+
+  @Override
   public WorkingMemory workingMemory() {
     return workingMemory;
   }

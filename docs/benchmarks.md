@@ -129,3 +129,58 @@ are below the network, and neither phase touched them.
   rather than the size of the rule set, and the benchmark rule set has six tested paths — far too
   few for the difference to appear. Needs a wide rule set and a high update rate.
 - **Concurrent multi-session throughput**, still Phase 4's deliverable.
+
+
+---
+
+# Phase 2: indexed joins
+
+The Phase 1 note above ended by saying the growth curve was still super-linear because the join was
+still enumerate-then-filter, and that flattening it was Phase 2's job. It is flattened.
+
+A first attempt at measuring this failed instructively and is worth recording, because the failure
+is easy to repeat. It joined two thousand orders against three customers — lopsided, which is the
+shape the join planner exists for — and measured essentially nothing: 3.50ms against 4.05ms with
+error bars of ±4.9ms. The reason was not the engine. Two thirds of those orders *matched*, so the
+benchmark spent its time firing six hundred right-hand sides and whatever the join did was invisible
+underneath them. **A join benchmark has to produce few matches, or it is a right-hand-side
+benchmark.**
+
+So: both sides large, and a join key selective enough that only five pairs match.
+
+```
+Benchmark                       (facts)  (matcher)          Score           Error  Units
+Phase0Benchmarks.selectiveJoin      500    NETWORK        258 703 ±       420 441  ns/op
+Phase0Benchmarks.selectiveJoin      500      NAIVE     14 119 156 ±    15 354 859  ns/op
+Phase0Benchmarks.selectiveJoin     2000    NETWORK      1 048 269 ±       201 680  ns/op
+Phase0Benchmarks.selectiveJoin     2000      NAIVE    233 620 100 ±    41 917 504  ns/op
+```
+
+**The ratio is roughly 55x at 500 a side and 200x at 2000**, and the error bars are wide enough that
+those multiples should be treated as "one to two orders of magnitude" rather than as figures. What
+the numbers support without any statistical care at all is the shape:
+
+| | 500 -> 2000 facts (4x) | growth |
+|---|---|---|
+| Network | 259us -> 1 048us | **4.05x — linear** |
+| Oracle | 14.1ms -> 234ms | **16.5x — quadratic** |
+
+Four times the facts costs the network four times the work and the oracle sixteen. That is the
+difference between probing an index once per fact and comparing every fact against every other, and
+it is the claim §3.3 makes: indexed join probing is "the single biggest lever for join-heavy rule
+sets, and exactly what hand-rolled 'simple' engines skip and then can't scale."
+
+The separation is large enough to survive the noise. The multiples are not; do not quote them.
+
+## What is still not measured
+
+- **The join planner specifically.** The benchmark above has equal-sized sides, so it measures
+  indexed probing and not the per-fire reordering. Isolating the planner needs a lopsided join whose
+  matches stay few — a harder shape to construct, since lopsidedness tends to come with either very
+  many matches or very few candidates. `JoinPlanTest` asserts the ordering decisions structurally;
+  no benchmark yet puts a number on what they are worth.
+- **Node sharing's effect on insert cost**, unchanged from the Phase 1 note: the benchmark rule sets
+  have almost no duplicate constraints, so they exercise none of the sharing §6.5's sublinearity
+  claim is about.
+- **The prefix trie**, likewise: six tested paths is far too few for the difference to appear.
+- **Concurrent multi-session throughput**, still Phase 4's deliverable.

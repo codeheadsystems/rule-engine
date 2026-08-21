@@ -146,6 +146,53 @@ class NetworkEquivalenceTest {
   }
 
   @Test
+  @DisplayName("a heavily asymmetric join, where the planner reverses the written order")
+  void asymmetricJoinIsReordered() {
+    // The case the join planner exists for: written "for each pending order, find its customer",
+    // but with two thousand orders and three customers the cheap direction is the other one. The
+    // planner reverses it, and the answer must not move.
+    final List<RuleDefinition> rules = List.of(
+        Rules.rule("review-risky-order")
+            .when("o", "Order", pattern -> pattern.eq("status", "PENDING"))
+            .when("c", "Customer", pattern -> pattern.ref("id", "o.customerId")
+                .eq("riskTier", "HIGH"))
+            .then(actions -> actions.emit("review",
+                "orderId", Rules.ref("o.id"), "customerId", Rules.ref("c.id")))
+            .build());
+
+    MatcherEquivalence.assertEquivalent(rules, session -> {
+      for (int customer = 0; customer < 3; customer++) {
+        session.insert("Customer", Facts.obj(
+            "id", customer, "riskTier", customer == 0 ? "HIGH" : "LOW"));
+      }
+      for (int order = 0; order < 2_000; order++) {
+        session.insert("Order", Facts.obj(
+            "id", order, "status", "PENDING", "customerId", order % 3));
+      }
+    });
+  }
+
+  @Test
+  @DisplayName("the asymmetry reversed, so the planner has to change its mind")
+  void asymmetricJoinTheOtherWay() {
+    final List<RuleDefinition> rules = List.of(
+        Rules.rule("review-risky-order")
+            .when("o", "Order", pattern -> pattern.eq("status", "PENDING"))
+            .when("c", "Customer", pattern -> pattern.ref("id", "o.customerId"))
+            .then(actions -> actions.emit("review", "orderId", Rules.ref("o.id")))
+            .build());
+
+    MatcherEquivalence.assertEquivalent(rules, session -> {
+      for (int order = 0; order < 3; order++) {
+        session.insert("Order", Facts.obj("id", order, "status", "PENDING", "customerId", order));
+      }
+      for (int customer = 0; customer < 2_000; customer++) {
+        session.insert("Customer", Facts.obj("id", customer));
+      }
+    });
+  }
+
+  @Test
   @DisplayName("rules whose RHS mutates working memory, so the network churns mid-fire")
   void mutatingRules() {
     final List<RuleDefinition> mutating = List.of(

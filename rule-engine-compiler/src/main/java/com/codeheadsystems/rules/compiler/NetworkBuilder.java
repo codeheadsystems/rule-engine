@@ -18,6 +18,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Stream;
 
 /**
  * Builds the matching network from already-compiled rules (spec §6.5).
@@ -78,12 +79,14 @@ final class NetworkBuilder {
     final Map<String, List<PatternNode>> byFactType = new LinkedHashMap<>();
     for (final CompiledRule rule : rules) {
       final List<PatternNode> forRule = new ArrayList<>(rule.patterns().size());
-      for (final CompiledPattern pattern : rule.patterns()) {
+      final Map<Integer, IndexPlan> plans = plansFor(rule);
+      for (int position = 0; position < rule.patterns().size(); position++) {
+        final CompiledPattern pattern = rule.patterns().get(position);
         final List<AlphaNode> conjunction = pattern.alphaTests().stream()
             .map(test -> shared.get(test.constraint()))
             .toList();
-        final PatternNode node = new PatternNode(
-            nextNodeId++, pattern.factType(), conjunction, planFor(pattern));
+        final PatternNode node = new PatternNode(nextNodeId++, pattern.factType(), conjunction,
+            plans.getOrDefault(position, IndexPlan.none()));
         forRule.add(node);
         byFactType.computeIfAbsent(pattern.factType(), ignored -> new ArrayList<>()).add(node);
       }
@@ -102,34 +105,62 @@ final class NetworkBuilder {
   }
 
   /**
-   * The index plan for one pattern.
+   * The index plans for every pattern of one rule.
    *
-   * <p>Driven by the pattern's <em>join</em> constraints, not by its alpha ones. A pattern's memory
-   * already contains exactly the facts passing its alpha tests, so indexing one of those would build
-   * a structure whose only bucket is the memory itself. What needs an index is the path some join
-   * probes: given a bound order, find the customers whose {@code /id} matches.
+   * <p>Rule-scoped rather than pattern-scoped, because a join has <em>two</em> ends and either may
+   * be the one worth probing. Given {@code Customer(id == $ref o.customerId)}, the constraint is
+   * written on the customer pattern -- but §3.3 makes choosing the smaller side a per-fire decision,
+   * so the matcher may want to bind customers first and then find the orders belonging to one. That
+   * needs an index on {@code Order./customerId}, a path the constraint does not sit on. Planning one
+   * pattern at a time can only ever see half of each edge.
    *
-   * @param pattern the compiled pattern
-   * @return the paths to index, and how
+   * <p>Driven by <em>join</em> constraints, not alpha ones: a pattern's memory already contains
+   * exactly the facts passing its alpha tests, so indexing one of those would build a structure
+   * whose only bucket is the memory itself.
+   *
+   * @param rule the compiled rule
+   * @return the plan for each pattern position that needs one
    */
-  private static IndexPlan planFor(final CompiledPattern pattern) {
-    final Set<JsonPointer> hashed = new LinkedHashSet<>();
-    final Set<JsonPointer> sorted = new LinkedHashSet<>();
-    for (final JoinTest join : pattern.joinTests()) {
-      final Operator operator = join.source().op();
-      if (operator == Operator.EQ) {
-        hashed.add(join.path());
-      } else if (isOrdering(operator)) {
-        sorted.add(join.path());
+  private static Map<Integer, IndexPlan> plansFor(final CompiledRule rule) {
+    final Map<Integer, Set<JsonPointer>> hashed = new LinkedHashMap<>();
+    final Map<Integer, Set<JsonPointer>> sorted = new LinkedHashMap<>();
+    for (int position = 0; position < rule.patterns().size(); position++) {
+      for (final JoinTest join : rule.patterns().get(position).joinTests()) {
+        record(hashed, sorted, position, join.path(), join.source().op());
+        // The far end of the same edge, read backwards. Everything section 3.3 calls unindexable --
+        // NE, NOT_IN, MATCHES -- reverses to nothing and is simply not indexed, on either side.
+        join.source().op().reversed().ifPresent(reversed ->
+            record(hashed, sorted, join.otherIndex(), join.otherAccessor().pointer(), reversed));
       }
-      // Everything else -- NE, NOT_IN, IN, MATCHES -- is what §3.3 calls not indexable. An
-      // anti-match is "everything except one bucket", which an index cannot narrow. Those joins
-      // fall to the post-filter, correct but linear, and §7.4's report is where they become
-      // visible at authoring time rather than under load.
     }
-    return hashed.isEmpty() && sorted.isEmpty()
-        ? IndexPlan.none()
-        : new IndexPlan(List.copyOf(hashed), List.copyOf(sorted));
+    final Map<Integer, IndexPlan> plans = new LinkedHashMap<>();
+    Stream.concat(hashed.keySet().stream(), sorted.keySet().stream()).distinct().forEach(position ->
+        plans.put(position, new IndexPlan(
+            List.copyOf(hashed.getOrDefault(position, Set.of())),
+            List.copyOf(sorted.getOrDefault(position, Set.of())))));
+    return plans;
+  }
+
+  /**
+   * Records one path as needing an index, if its operator can use one.
+   *
+   * @param hashed the equality-index requirements, by pattern position
+   * @param sorted the range-index requirements, by pattern position
+   * @param position the pattern the path belongs to
+   * @param path the path
+   * @param operator how the join reads that path
+   */
+  private static void record(final Map<Integer, Set<JsonPointer>> hashed,
+      final Map<Integer, Set<JsonPointer>> sorted, final int position, final JsonPointer path,
+      final Operator operator) {
+    if (operator == Operator.EQ) {
+      hashed.computeIfAbsent(position, ignored -> new LinkedHashSet<>()).add(path);
+    } else if (isOrdering(operator)) {
+      sorted.computeIfAbsent(position, ignored -> new LinkedHashSet<>()).add(path);
+    }
+    // Everything else is what section 3.3 calls not indexable. An anti-match is "everything except
+    // one bucket", which an index cannot narrow. Those joins fall to the post-filter, correct but
+    // linear, and section 7.4's report is where they become visible at authoring time.
   }
 
   /**

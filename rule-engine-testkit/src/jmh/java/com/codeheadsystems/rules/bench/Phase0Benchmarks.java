@@ -342,4 +342,87 @@ public class Phase0Benchmarks {
       return session.fireAllRules();
     }
   }
+
+  /** Two large populations joined by a highly selective key, so matching dominates. */
+  @State(Scope.Thread)
+  public static class SelectiveJoin {
+
+    /** Which matcher to measure. */
+    @Param({"NETWORK", "NAIVE"})
+    public String matcher;
+
+    /** How many facts on each side of the join. */
+    @Param({"500", "2000"})
+    public int facts;
+
+    private CompiledRuleSet ruleSet;
+    private com.codeheadsystems.rules.session.SessionOptions options;
+
+    /** Compiles the rule and prepares the session configuration. */
+    @Setup(Level.Trial)
+    public void setUp() {
+      ruleSet = RuleCompiler.compile(List.of(Rules.rule("order-customer")
+          .when("o", "Order", pattern -> pattern.eq("status", "PENDING"))
+          .when("c", "Customer", pattern -> pattern.ref("id", "o.customerId"))
+          .then(actions -> actions.emit("matched", "id", Rules.ref("o.id")))
+          .build()));
+      options = com.codeheadsystems.rules.session.SessionOptions.builder()
+          .matching(com.codeheadsystems.rules.session.MatchingStrategy.valueOf(matcher))
+          .build();
+    }
+
+    /**
+     * The compiled rules.
+     *
+     * @return the rule set
+     */
+    public CompiledRuleSet ruleSet() {
+      return ruleSet;
+    }
+
+    /**
+     * The session configuration under test.
+     *
+     * @return the options
+     */
+    public com.codeheadsystems.rules.session.SessionOptions options() {
+      return options;
+    }
+  }
+
+  /**
+   * The benchmark that actually isolates the join.
+   *
+   * <p>An earlier version of this used a lopsided population -- two thousand orders against three
+   * customers -- and measured almost nothing, because two thirds of the orders <em>matched</em> and
+   * the six hundred resulting firings dwarfed the matching. Whatever the join did was invisible
+   * underneath the right-hand sides.
+   *
+   * <p>So: both sides large, and the join key selective enough that only a handful of pairs match.
+   * The oracle has no way to avoid comparing every order against every customer, which is
+   * {@code facts^2} join evaluations; the network probes an index once per order. Few matches means
+   * few firings, so what is left on the clock is the join and nothing else.
+   *
+   * <p>This is §3.3's claim stated as an experiment: indexed probing is "the single biggest lever
+   * for join-heavy rule sets, and exactly what hand-rolled 'simple' engines skip and then can't
+   * scale."
+   *
+   * @param state the prepared rule set
+   * @return the fire result
+   */
+  @Benchmark
+  public FireResult selectiveJoin(final SelectiveJoin state) {
+    try (RuleSession session = state.ruleSet().newSession(state.options())) {
+      for (int customer = 0; customer < state.facts; customer++) {
+        session.insert("Customer", Facts.obj("id", customer));
+      }
+      for (int order = 0; order < state.facts; order++) {
+        // Only five orders name a customer that exists; the rest point into empty space.
+        session.insert("Order", Facts.obj(
+            "id", order, "status", "PENDING",
+            "customerId", order < 5 ? order : -order - 1));
+      }
+      return session.fireAllRules();
+    }
+  }
 }

@@ -4,16 +4,21 @@ import com.codeheadsystems.rules.agenda.ConflictResolutionStrategy;
 import com.codeheadsystems.rules.agenda.RecomputingAgenda;
 import com.codeheadsystems.rules.agenda.RefractionMemory;
 import com.codeheadsystems.rules.fact.Fact;
+import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.fact.WorkingMemory;
 import com.codeheadsystems.rules.listener.RuleEngineListener;
+import com.codeheadsystems.rules.match.Activation;
 import com.codeheadsystems.rules.rule.AlphaTest;
 import com.codeheadsystems.rules.rule.CompiledPattern;
 import com.codeheadsystems.rules.rule.CompiledRule;
+import com.codeheadsystems.rules.rule.JoinTest;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /**
- * The brute-force matcher: for every pattern, scan every fact of its type and test it.
+ * The brute-force matcher: bind the patterns in the order they are written, and for each one scan
+ * every fact of its type and test it.
  *
  * <p>Its cost is {@code O(rules x facts^arity)}, which is exactly what spec §3.1's "naive re-scan"
  * row says it should be. That is the point. §9 makes Phase 0 a real deliverable because this is the
@@ -27,7 +32,8 @@ import java.util.List;
  *
  * <p><strong>Keep it readable over fast.</strong> A clever naive matcher is a contradiction: every
  * optimisation here is a place the oracle and the thing it is checking could be wrong in the same
- * way.
+ * way. It deliberately does not reorder joins, does not consult an index, and does not remember
+ * anything between fire cycles.
  */
 public final class NaiveAgenda extends RecomputingAgenda {
 
@@ -47,23 +53,40 @@ public final class NaiveAgenda extends RecomputingAgenda {
     super(rules, workingMemory, refraction, strategy, listeners, strict);
   }
 
-  /**
-   * {@inheritDoc}
-   *
-   * <p>A snapshot of every fact of the type, in ascending handle id (§2.4), filtered by running the
-   * pattern's alpha tests one at a time. No index, no memory, no sharing -- if fifty rules test the
-   * same constraint, this evaluates it fifty times per fact per fire cycle.
-   */
   @Override
-  protected List<Fact> candidates(final CompiledRule rule, final int position, final long[] bound) {
+  protected List<Activation> matchesOf(final CompiledRule rule, final List<String> aliases) {
+    final List<Activation> matches = new ArrayList<>();
+    extend(rule, aliases, 0, new long[rule.patterns().size()], matches);
+    return matches;
+  }
+
+  /**
+   * Depth-first extension of a partial binding, left to right through the written pattern order.
+   *
+   * @param rule the rule
+   * @param aliases the rule's aliases
+   * @param position the pattern to bind next
+   * @param bound the handles bound so far, mutated in place and copied into each completed tuple
+   * @param matches the list to append completed matches to
+   */
+  private void extend(final CompiledRule rule, final List<String> aliases, final int position,
+      final long[] bound, final List<Activation> matches) {
+    if (position == rule.patterns().size()) {
+      matches.add(buildActivation(rule, bound, aliases));
+      return;
+    }
     final CompiledPattern pattern = rule.patterns().get(position);
-    final List<Fact> matching = new ArrayList<>();
-    workingMemory().factsOfType(pattern.factType()).forEach(fact -> {
-      if (satisfiesAlpha(pattern, fact)) {
-        matching.add(fact);
+    // A snapshot in ascending handle id (§2.4), which is what makes the enumeration order -- and
+    // therefore anything derived from it -- reproducible across runs and hosts.
+    for (final Fact candidate : workingMemory().factsOfType(pattern.factType()).toList()) {
+      if (pattern.conflictsWith(bound, candidate.handle().id())
+          || !satisfiesAlpha(pattern, candidate)
+          || !satisfiesJoins(pattern, candidate, bound)) {
+        continue;
       }
-    });
-    return matching;
+      bound[position] = candidate.handle().id();
+      extend(rule, aliases, position + 1, bound, matches);
+    }
   }
 
   /**
@@ -76,6 +99,29 @@ public final class NaiveAgenda extends RecomputingAgenda {
   private static boolean satisfiesAlpha(final CompiledPattern pattern, final Fact candidate) {
     for (final AlphaTest test : pattern.alphaTests()) {
       if (!test.test(candidate.payload())) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Whether a candidate passes every cross-fact test of a pattern against the current binding.
+   *
+   * <p>Safe to evaluate every one of them here, without checking whether the other end is bound,
+   * because this matcher binds strictly left to right and §6.5 guarantees a reference resolves to
+   * an <em>earlier</em> alias.
+   *
+   * @param pattern the pattern
+   * @param candidate the candidate fact
+   * @param bound the handles bound so far
+   * @return whether it passes
+   */
+  private boolean satisfiesJoins(final CompiledPattern pattern, final Fact candidate,
+      final long[] bound) {
+    for (final JoinTest test : pattern.joinTests()) {
+      final Optional<Fact> other = workingMemory().get(new FactHandle(bound[test.otherIndex()]));
+      if (other.isEmpty() || !test.test(candidate.payload(), other.get().payload())) {
         return false;
       }
     }

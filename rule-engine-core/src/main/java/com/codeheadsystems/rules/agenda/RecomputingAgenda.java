@@ -1,7 +1,5 @@
 package com.codeheadsystems.rules.agenda;
 
-import com.codeheadsystems.rules.fact.Fact;
-import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.fact.WorkingMemory;
 import com.codeheadsystems.rules.listener.RuleEngineListener;
 import com.codeheadsystems.rules.listener.SuppressReason;
@@ -9,7 +7,6 @@ import com.codeheadsystems.rules.match.Activation;
 import com.codeheadsystems.rules.match.Tuple;
 import com.codeheadsystems.rules.rule.CompiledPattern;
 import com.codeheadsystems.rules.rule.CompiledRule;
-import com.codeheadsystems.rules.rule.JoinTest;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Iterator;
@@ -31,12 +28,12 @@ import java.util.Optional;
  * <p>Everything that decides <em>which</em> activation fires lives here, shared by every matcher:
  * dirty tracking, the recomputation loop, refraction at selection, the conflict-resolution
  * comparator and the strict-mode contract checks. Subclasses supply only
- * {@link #candidates(CompiledRule, int, long[])} -- which facts to consider for one pattern.
+ * {@link #matchesOf(CompiledRule, List)} -- how to find the matches in the first place.
  *
  * <p>That split is the point. The naive matcher and the network matcher must produce identical
  * firing sequences (§9's exit criterion for every phase after Phase 0), and the cheapest way to
- * guarantee that is for them to share every line of the code that could make them differ. What is
- * left to differ is exactly what the phase is about: how candidates are found.
+ * guarantee that is for the code that could make them differ not to exist twice. What is left to
+ * differ is exactly what each phase is about: how matches are found.
  *
  * <p>Two properties of §4.1's loop are reproduced here, because they are what make firing terminate
  * rather than spin:
@@ -105,24 +102,41 @@ public abstract class RecomputingAgenda implements Agenda {
   }
 
   /**
-   * The facts to consider for one pattern, already satisfying that pattern's single-fact tests.
+   * Every complete match of one rule, against the current contents of working memory.
    *
-   * <p>Implementations must return facts in <strong>ascending handle id</strong>. Firing order does
-   * not depend on it -- conflict resolution is a total order on the match itself -- but keeping
-   * every matcher's enumeration order identical is what lets them be compared activation-for-
-   * activation rather than only firing-for-firing.
+   * <p>This is the <em>only</em> thing a matcher is free to do differently. Everything that decides
+   * which of those matches fires -- dirty tracking, refraction at selection, the conflict-resolution
+   * comparator, the strict-mode contract checks -- lives in this class and is shared, because §9
+   * requires every matcher to produce identical firing sequences and the cheapest way to guarantee
+   * that is for the code that could make them differ not to exist twice.
    *
-   * <p>Cross-fact tests are <em>not</em> this method's job; the base class applies them. An
-   * implementation may still use them to narrow what it returns -- probing an index by a join key
-   * rather than returning the whole memory is exactly the Phase 1 optimisation -- but narrowing is
-   * an optimisation, and correctness never depends on it.
+   * <p>Implementations must produce matches in a deterministic order. Firing order does not depend
+   * on it -- conflict resolution is a total order on the match itself, precisely so that
+   * enumeration order cannot reach the agenda -- but a non-deterministic enumeration would still
+   * make listener callbacks and explanations vary between runs.
    *
-   * @param rule the rule being recomputed
-   * @param position the pattern's position in the rule
-   * @param bound the handle ids bound at earlier positions
-   * @return the candidate facts, ascending by handle id
+   * @param rule the rule to match
+   * @param aliases the rule's aliases, to be shared by every tuple it produces
+   * @return the complete matches
    */
-  protected abstract List<Fact> candidates(CompiledRule rule, int position, long[] bound);
+  protected abstract List<Activation> matchesOf(CompiledRule rule, List<String> aliases);
+
+  /**
+   * Builds an activation and notifies listeners.
+   *
+   * @param rule the rule that matched
+   * @param bound the handle ids bound at each pattern position
+   * @param aliases the rule's aliases
+   * @return the activation
+   */
+  protected final Activation buildActivation(final CompiledRule rule, final long[] bound,
+      final List<String> aliases) {
+    final Activation activation = new Activation(rule, new Tuple(bound, aliases), workingMemory);
+    for (final RuleEngineListener listener : listeners) {
+      listener.onActivationCreated(activation);
+    }
+    return activation;
+  }
 
   /**
    * The session's working memory, for subclasses that dereference handles.
@@ -250,58 +264,7 @@ public abstract class RecomputingAgenda implements Agenda {
    * @return the matches
    */
   private List<Activation> recompute(final CompiledRule rule, final List<String> aliases) {
-    final List<Activation> matches = new ArrayList<>();
-    extend(rule, aliases, 0, new long[rule.patterns().size()], matches);
-    return matches;
-  }
-
-  /**
-   * Depth-first extension of a partial binding across the remaining patterns.
-   *
-   * @param rule the rule
-   * @param aliases the rule's aliases
-   * @param position the pattern to bind next
-   * @param bound the handles bound so far, mutated in place and copied into each completed tuple
-   * @param matches the list to append completed matches to
-   */
-  private void extend(final CompiledRule rule, final List<String> aliases, final int position,
-      final long[] bound, final List<Activation> matches) {
-    if (position == rule.patterns().size()) {
-      final Activation activation = new Activation(rule, new Tuple(bound, aliases), workingMemory);
-      matches.add(activation);
-      for (final RuleEngineListener listener : listeners) {
-        listener.onActivationCreated(activation);
-      }
-      return;
-    }
-    final CompiledPattern pattern = rule.patterns().get(position);
-    for (final Fact candidate : candidates(rule, position, bound)) {
-      if (pattern.conflictsWith(bound, candidate.handle().id())
-          || !satisfiesJoins(pattern, candidate, bound)) {
-        continue;
-      }
-      bound[position] = candidate.handle().id();
-      extend(rule, aliases, position + 1, bound, matches);
-    }
-  }
-
-  /**
-   * Whether a candidate passes every cross-fact test of a pattern against the current binding.
-   *
-   * @param pattern the pattern
-   * @param candidate the candidate fact
-   * @param bound the handles bound so far
-   * @return whether it passes
-   */
-  private boolean satisfiesJoins(final CompiledPattern pattern, final Fact candidate,
-      final long[] bound) {
-    for (final JoinTest test : pattern.joinTests()) {
-      final Optional<Fact> other = workingMemory.get(new FactHandle(bound[test.otherIndex()]));
-      if (other.isEmpty() || !test.test(candidate.payload(), other.get().payload())) {
-        return false;
-      }
-    }
-    return true;
+    return matchesOf(rule, aliases);
   }
 
   /**
