@@ -216,6 +216,42 @@ public final class SessionOptions {
   }
 
   /**
+   * A builder pre-populated with this configuration.
+   *
+   * <p>For "the same session setup, one thing different", which is otherwise unexpressible once the
+   * options are built: every field is final and there is no copy constructor. The case that
+   * prompted it is running one configuration under a second matcher --
+   * {@code options.toBuilder().matching(RETE).build()} -- which is what lets the determinism
+   * harness cover the streaming shape without callers having to pass their setup twice.
+   *
+   * <p>The event sink is carried across only if one was supplied, and the guard is not optional --
+   * {@code Builder#events} rejects null, so copying unconditionally would fail on the common path.
+   * It also keeps §7.1's property that an unset sink is resolved per session rather than shared.
+   * That second reason buys nothing today, because the resolved default is stateless; it is there
+   * for the day the default is stateful again, which is what it was when
+   * {@code DefaultRuleSession} acquired the comment about one {@code ArrayList} behind every
+   * session.
+   *
+   * @return a builder holding this configuration
+   */
+  public Builder toBuilder() {
+    final Builder builder = builder()
+        .limits(limits)
+        .conflictResolution(conflictResolution)
+        .onRhsError(onRhsError)
+        .strict(strict)
+        .dryRun(dryRun)
+        .runnersUpLimit(runnersUpLimit)
+        .matching(matching);
+    if (events != null) {
+      builder.events(events);
+    }
+    listeners.forEach(builder::listener);
+    functions.forEach(builder::function);
+    return builder;
+  }
+
+  /**
    * Whether the runners-up list should be populated at all.
    *
    * <p>Computing it means ranking the eligible activations rather than selecting the maximum, so it
@@ -367,7 +403,8 @@ public final class SessionOptions {
     /**
      * Selects the matcher.
      *
-     * @param value the strategy. {@link MatchingStrategy#NAIVE} is the oracle and is far slower
+     * @param value the strategy. {@link MatchingStrategy#NAIVE} is the oracle and is far slower;
+     *     {@link MatchingStrategy#RETE} materialises joins for streaming sessions
      * @return this builder
      */
     public Builder matching(final MatchingStrategy value) {

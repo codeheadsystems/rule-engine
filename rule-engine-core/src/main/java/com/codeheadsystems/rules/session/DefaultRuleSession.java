@@ -14,6 +14,7 @@ import com.codeheadsystems.rules.match.ActivationKey;
 import com.codeheadsystems.rules.naive.NaiveAgenda;
 import com.codeheadsystems.rules.network.NetworkAgenda;
 import com.codeheadsystems.rules.network.SessionMemories;
+import com.codeheadsystems.rules.rete.ReteAgenda;
 import com.codeheadsystems.rules.rhs.RhsErrorHandler;
 import com.codeheadsystems.rules.rhs.RhsExecutor;
 import com.codeheadsystems.rules.rhs.RhsResult;
@@ -63,11 +64,14 @@ public final class DefaultRuleSession implements RuleSession {
         new DefaultWorkingMemory(ruleSet.testedPaths(), ruleSet.factSchemas(),
             new Observer(), options.strict());
     this.memories = new SessionMemories(ruleSet.network());
-    this.agenda = options.matching() == MatchingStrategy.NAIVE
-        ? new NaiveAgenda(ruleSet.rules(), workingMemory, refraction,
-            options.conflictResolution(), options.listeners(), options.strict())
-        : new NetworkAgenda(ruleSet.rules(), ruleSet.network(), memories, workingMemory,
-            refraction, options.conflictResolution(), options.listeners(), options.strict());
+    this.agenda = switch (options.matching()) {
+      case NAIVE -> new NaiveAgenda(ruleSet.rules(), workingMemory, refraction,
+          options.conflictResolution(), options.listeners(), options.strict());
+      case NETWORK -> new NetworkAgenda(ruleSet.rules(), ruleSet.network(), memories, workingMemory,
+          refraction, options.conflictResolution(), options.listeners(), options.strict());
+      case RETE -> new ReteAgenda(ruleSet.rules(), ruleSet.network(), memories, workingMemory,
+          refraction, options.conflictResolution(), options.listeners(), options.strict());
+    };
     // A sink the caller did not supply is resolved HERE, and the default is stateless. Holding a
     // collecting sink in SessionOptions put one unsynchronised ArrayList behind every session built
     // from the same options -- the natural way to use them, and exactly the across-session
@@ -353,6 +357,10 @@ public final class DefaultRuleSession implements RuleSession {
     @Override
     public void factInserted(final Fact fact) {
       ruleSet.network().insert(fact.type(), fact.handle().id(), fact.payload(), memories);
+      // After the alpha network, before markDirty: the Rete shape walks the join for this fact and
+      // needs the pattern memberships to already include it (§4.3's activate half). The recomputing
+      // shapes ignore this call entirely.
+      agenda.factInserted(fact);
       agenda.markDirty(fact.type());
       for (final RuleEngineListener listener : options.listeners()) {
         listener.onInsert(fact);
@@ -364,6 +372,7 @@ public final class DefaultRuleSession implements RuleSession {
       // Against the payload the fact had when it was asserted, which is what `fact` carries here.
       // Computing removal keys from anything else leaves orphaned index entries (§3.4.1 step 3).
       ruleSet.network().retract(fact.type(), fact.handle().id(), fact.payload(), memories);
+      agenda.factRetracted(fact);
       agenda.markDirty(fact.type());
       for (final RuleEngineListener listener : options.listeners()) {
         listener.onRetract(fact);

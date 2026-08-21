@@ -11,9 +11,9 @@ governs it — the answer to "why is it written this way" is almost always there
 alternatives that were rejected. If the code and the spec disagree, one of them is a defect; decide
 which and say so, do not silently pick.
 
-`README.md` documents what is built — Phases 0–2 (= v1), Phase 4's concurrency layer and Phase 5's
-DSL front end, including Phase 5's two optional halves, the CEL escape hatch (§6.4) and `FactSchemas`
-(§2.3) — and what is not: streaming sessions and Rete joins (Phase 3). §9 holds the
+`README.md` documents what is built — Phases 0–2 (= v1), Phase 4's concurrency layer, Phase 5's DSL
+front end including its two optional halves (the CEL escape hatch §6.4 and `FactSchemas` §2.3), and
+the first slice of Phase 3's streaming matcher. §9 holds the
 roadmap and each phase's exit criteria.
 
 `docs/dsl-reference.md` and `docs/dsl-guide.md` document the rule-file DSL. Every rule file printed
@@ -122,6 +122,12 @@ found. Keeping the divergence-capable code in one place is what makes the two ma
 - **`NaiveAgenda`** (`naive/`, Phase 0) — no network, no indexes, `O(rules × facts^arity)`. It is
   the **correctness oracle** and is deliberately still shipped. Selected with
   `SessionOptions.matching(MatchingStrategy.NAIVE)`. Never in production.
+- **`ReteAgenda`** (`rete/`, Phase 3, in progress) — joins materialised as facts arrive, in
+  `BetaMemory`, instead of recomputed per fire. Selected with `MatchingStrategy.RETE`, for
+  long-lived streaming sessions. Shares the join walk with `NetworkAgenda` via `JoinEnumerator` —
+  a pinned position makes the incremental result a subset of the full one *by construction*, which
+  is what §9's "TREAT and Rete produce identical firing sequences" rests on. It is a constant-factor
+  win, not a better curve, until §11.2's differential propagation lands.
 - **`NetworkAgenda`** (`network/`, Phases 1–2) — the default. `EntryNode` (per fact type) →
   shared `AlphaNode`s (one per *distinct* constraint) → `PatternNode` + its `PatternMemory` →
   indexed joins ordered per fire cycle by `JoinPlan` (smallest memory first, connected before

@@ -57,8 +57,16 @@ audited and checked, `RuleSetHolder` swaps a rule set under load, `SessionDrain`
 session onto new rules, and `RuleBatches` runs a batch per session across virtual threads. The
 scaling curve is measured rather than asserted — see `docs/benchmarks.md`.
 
-**What does not, and where it arrives:** streaming sessions and Rete joins (Phase 3). Negation,
-accumulation, truth maintenance and CEP are §1 non-goals with documented interim answers.
+**Phase 3 has started.** `SessionOptions.matching(RETE)` selects a third matcher that materialises
+joins as facts arrive instead of recomputing them per fire cycle, for long-lived streaming sessions.
+It is held to the same oracle as the other two — every differential scenario in the suite runs under
+all three. Expect a constant-factor win on a streaming insert-and-fire loop rather than a better
+curve: the join is amortised, the per-fire conflict-set rebuild is not yet. Still to come in the
+phase: differential propagation (§11.2), `fireUntilHalt` and a hardened `SessionActor` (§5.4), and
+session fact-eviction (§4.4), which a streaming session that never retracts needs.
+
+**What does not exist:** negation, accumulation, truth maintenance and CEP, which are §1 non-goals
+with documented interim answers.
 
 ## Modules
 

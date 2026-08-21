@@ -25,5 +25,31 @@ public enum MatchingStrategy {
    * reference implementation every optimisation is differential-tested against -- and as a
    * debugging tool for when the network is the thing under suspicion.
    */
-  NAIVE
+  NAIVE,
+
+  /**
+   * The streaming matcher: joins are materialised as facts arrive and maintained across inserts
+   * (§11.1's option B, Phase 3).
+   *
+   * <p>For the long-lived session re-evaluating a large working memory against a small delta, which
+   * is the workload {@link #NETWORK} serves badly -- §4.1 recomputes every dirty rule's joins at
+   * every fire cycle, deliberately, because that is the right trade for the one-shot and batch
+   * shapes v1 targets.
+   *
+   * <p><strong>Expect a constant factor, not a better curve.</strong> Measured at roughly 2-3x on a
+   * streaming insert-and-fire loop, with both shapes still growing super-linearly: the join is paid
+   * once per fact here, but the conflict set is still rebuilt per fire cycle for every dirty rule.
+   * §11.2's differential propagation is what addresses the remainder. Benchmark it against your own
+   * workload rather than switching on the strategy name.
+   *
+   * <p><strong>Not a faster {@code NETWORK}, a different trade.</strong> A batch session that
+   * inserts once and fires once does the same join work either way and additionally pays to
+   * maintain a memory it reads exactly once. It also holds that memory: a streaming session that
+   * never retracts grows without bound, which is a property of the workload rather than a defect,
+   * and what §4.4's eviction exists for.
+   *
+   * <p>Held to the other two by {@code MatcherEquivalence}: §9's exit criterion for Phase 3 is that
+   * this and the TREAT shape produce identical firing sequences on the same input.
+   */
+  RETE
 }

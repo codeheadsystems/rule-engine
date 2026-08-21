@@ -108,6 +108,54 @@ class CelEngineTest {
   }
 
   @Nested
+  @DisplayName("what a condition means for the streaming matcher's materialised memory")
+  class StreamingMemoryShape {
+
+    @Test
+    @DisplayName("the beta memory holds matches a condition then rejects, and keeps holding them")
+    void memoryHoldsPreFilterMatches() {
+      /*
+       * §6.4 conditions are applied in RecomputingAgenda.postFilter -- the shared base -- so every
+       * matcher applies them identically and MatcherEquivalence covers that. What is specific to
+       * the Rete shape, and what nothing else asserts, is the SHAPE of its state: the beta memory
+       * holds matches the condition will reject. It has to, because a condition is evaluated
+       * against a COMPLETE tuple and the memory is what completes it.
+       *
+       * The regression that would break is a future optimisation filtering at maintenance time to
+       * keep the memory smaller. That is wrong twice over: a condition reads payloads, and payloads
+       * change under §3.4.1's skipped update without the memory being touched, so a match filtered
+       * out when it was derived could never come back.
+       *
+       * This test lives in -cel because only a real condition reaches the post-filter. An earlier
+       * version of it used `hasField`, which compiles to an ALPHA test -- evaluated before pattern
+       * membership, so the memory would have been post-filtered with respect to it, the exact
+       * opposite of the claim. It would have passed against the regression it named.
+       */
+      final RuleDefinition rule = Rules.rule("bigger-than-partner")
+          .when("a", "Order", pattern -> pattern.gt("total", 0))
+          .when("b", "Order", pattern -> pattern.constraint(
+              new ExpressionConstraint("b.total > a.total", Set.of("a", "b"))))
+          .then(actions -> actions.emit("bigger", "id", Rules.ref("b.id")))
+          .build();
+
+      // Every ordered pair is a match the memory holds; only the ascending ones survive the
+      // condition. Driven through the oracle so the count cannot drift from what a match means.
+      MatcherEquivalence.assertEquivalent(List.of(rule),
+          session -> {
+            for (int id = 0; id < 4; id++) {
+              session.insert("Order", Facts.obj("id", id, "total", id * 100));
+            }
+            session.fireAllRules();
+            // A second insert after firing: the new fact must complete matches against everything
+            // already held, and the condition must be applied to those too rather than to a
+            // memory that was pruned when its members arrived.
+            session.insert("Order", Facts.obj("id", 4, "total", 50));
+          },
+          SessionOptions.builder(), withCel());
+    }
+  }
+
+  @Nested
   @DisplayName("an expression on the right")
   class Values {
 

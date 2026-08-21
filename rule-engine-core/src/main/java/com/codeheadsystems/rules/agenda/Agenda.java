@@ -1,5 +1,6 @@
 package com.codeheadsystems.rules.agenda;
 
+import com.codeheadsystems.rules.fact.Fact;
 import com.codeheadsystems.rules.match.Activation;
 import java.util.Optional;
 
@@ -99,4 +100,43 @@ public interface Agenda {
    * @param factType the type whose facts changed
    */
   void markDirty(String factType);
+
+  /**
+   * Tells the agenda a fact has entered working memory.
+   *
+   * <p>Default no-op, and the default is the honest one for the shapes that recompute. §4.3
+   * explains why: under TREAT "nothing pushes and nothing pulls" -- a dirty rule's conflict set is
+   * replaced wholesale at the next recomputation, so knowing <em>which</em> fact arrived buys
+   * nothing that {@link #markDirty} has not already bought. Only the Rete shape overrides it, to
+   * extend its beta memory with the matches the fact completes.
+   *
+   * <p><strong>This is not §4.3's {@code activate}.</strong> That pushes an <em>activation</em>
+   * into the conflict set as a token arrives; this reports a <em>fact</em> so a join memory can be
+   * maintained, and the conflict set is still replaced wholesale at the next recomputation. The
+   * distinction is worth keeping because §9 lists the Rete agenda shape as a deliverable in its own
+   * right, and it is not this one.
+   *
+   * <p>Called after the alpha network has taken the fact, so an implementation may read pattern
+   * memberships that already include it.
+   *
+   * @param fact the fact that has entered working memory
+   */
+  default void factInserted(Fact fact) {
+    // Nothing to do for a recomputing shape; see the contract above.
+  }
+
+  /**
+   * Tells the agenda a fact is leaving working memory.
+   *
+   * <p>Default no-op, for the same reason as {@link #factInserted}: a retracted fact's matches
+   * disappear under TREAT because the next recomputation does not produce them, which needs no
+   * agenda surgery. The Rete shape overrides it to drop the matches the fact took part in, which is
+   * what a streaming session's steady-state heap depends on -- and, like {@link #factInserted},
+   * is a report about a fact rather than §4.3's {@code deactivateAllInvolving} over activations.
+   *
+   * @param fact the fact leaving working memory, carrying the payload it had when asserted
+   */
+  default void factRetracted(Fact fact) {
+    // Nothing to do for a recomputing shape; see the contract above.
+  }
 }

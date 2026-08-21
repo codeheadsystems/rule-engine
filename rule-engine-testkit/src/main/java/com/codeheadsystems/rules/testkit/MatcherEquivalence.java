@@ -97,6 +97,35 @@ public final class MatcherEquivalence {
             that was not updated on retract, or an index probe that narrowed away a real match.""",
             oracle.describe(), network.describe())
         .isEqualTo(oracle);
+
+    /*
+     * The third shape, and §9's exit criterion for Phase 3 stated as an assertion: "TREAT and Rete
+     * produce identical firing sequences on the same input ... established by differential test
+     * against the v1 engine, which by then is a shipped oracle, not a thought experiment".
+     *
+     * Checked here rather than in a test of its own so that every scenario any caller already
+     * writes covers it. A separate Rete suite would cover what someone remembered to write twice.
+     */
+    final FiringSequence rete = Engine.run(RuleCompiler.compile(rules, compilerOptions),
+        options.matching(MatchingStrategy.RETE).build(), scenario);
+
+    assertThat(rete)
+        .describedAs("""
+            The Rete matcher disagrees with the naive oracle.
+
+            Oracle:
+            %s
+
+            Rete:
+            %s
+
+            Rete materialises matches as facts arrive instead of re-joining at fire time, so the \
+            failure is almost always in maintenance rather than in matching: a beta memory that \
+            kept a match whose fact was retracted, a pinned walk that missed completions because \
+            the fact was not yet in its pattern memory when it ran, or the same match derived \
+            twice through two positions of one type and not deduplicated.""",
+            oracle.describe(), rete.describe())
+        .isEqualTo(oracle);
     return network;
   }
 }

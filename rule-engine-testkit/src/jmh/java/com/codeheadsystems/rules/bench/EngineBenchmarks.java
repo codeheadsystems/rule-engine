@@ -37,10 +37,17 @@ import tools.jackson.databind.node.ObjectNode;
  * project ends up with an optimisation nobody can prove helped.
  *
  * <p>That is why the naive matcher is still shipped and still benchmarked here. §9 makes it the
- * correctness oracle every later phase is differential-tested against; this class uses it as the performance one, by running the identical
- * workload through both strategies under a {@code matcher} parameter. The interesting number is
- * never a single figure -- it is the ratio between the two columns, and how that ratio moves as the
- * fact count grows.
+ * correctness oracle every later phase is differential-tested against; this class uses it as the
+ * performance one, by running the identical workload through every strategy under a
+ * {@code matcher} parameter. The interesting number is never a single figure -- it is the ratio
+ * between the columns, and how that ratio moves as the fact count grows.
+ *
+ * <p><strong>Read the {@code RETE} column against the workload, not as a third speed.</strong>
+ * These benchmarks insert a batch and fire once, which is the shape §11.1 chose TREAT for and the
+ * one the streaming matcher is worst at -- it maintains a beta memory it then reads exactly once.
+ * A column that loses here is the expected result, not a regression. The workload Phase 3 exists
+ * for is insert-then-fire repeated against a large working memory, and no benchmark in this class
+ * has that shape yet; §9's "amortizes join cost" stays unmeasured until one does.
  *
  * <p>Run with {@code ./gradlew :rule-engine-testkit:jmh}; see {@code docs/benchmarks.md}.
  */
@@ -275,7 +282,7 @@ public class EngineBenchmarks {
     public int facts;
 
     /** Which matcher to measure. NAIVE is the Phase 0 oracle; NETWORK is Phase 1. */
-    @Param({"NETWORK", "NAIVE"})
+    @Param({"NETWORK", "NAIVE", "RETE"})
     public String matcher;
 
     private CompiledRuleSet ruleSet;
@@ -351,7 +358,7 @@ public class EngineBenchmarks {
   public static class SelectiveJoin {
 
     /** Which matcher to measure. */
-    @Param({"NETWORK", "NAIVE"})
+    @Param({"NETWORK", "NAIVE", "RETE"})
     public String matcher;
 
     /** How many facts on each side of the join. */
