@@ -236,7 +236,12 @@ public final class MatchExplainer {
     for (int position = 0; position < rule.patterns().size(); position++) {
       final CompiledPattern pattern = rule.patterns().get(position);
       final PatternResult result = results.get(position);
-      final boolean joined = pattern.joinTests().isEmpty() || result.survivors().isEmpty();
+      // Only claim "nothing joined" when the search actually finished. An unfinished walk found no
+      // combination YET, which is a different sentence -- and since verdict() returns a join note
+      // before it ever reaches the budget-aware wording, emitting one here would make that wording
+      // unreachable for every rule with a join and turn a lower bound into a definite negative.
+      final boolean joined = pattern.joinTests().isEmpty() || result.survivors().isEmpty()
+          || !matches.complete();
       annotated.add(joined || !matches.found().isEmpty()
           ? result
           : new PatternResult(result.alias(), result.factType(), result.considered(),

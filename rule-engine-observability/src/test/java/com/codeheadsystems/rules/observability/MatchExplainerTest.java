@@ -480,6 +480,75 @@ class MatchExplainerTest {
   }
 
   @Test
+  @DisplayName("an unfinished search never claims a match does not exist")
+  void truncatedSearchDoesNotDenyAMatch() {
+    // The sharpest failure this class can have: telling an author their rule cannot match when it
+    // demonstrably does. Two unrelated 600-fact populations expand every prefix, and the single C
+    // that joins sits behind the LAST A in handle order -- so the work budget runs out before the
+    // walk reaches it.
+    //
+    // `complete` was already false here and describe() already carried the disclaimer, but the
+    // headline verdict said "no combination of them satisfies c.x EQ a.k". It is the same shape as
+    // a defect already fixed in this class once: an earlier branch in verdict() returning before
+    // the honest sentence is reached.
+    final RuleDefinition rule = Rules.rule("late-match")
+        .when("a", "A", pattern -> pattern.hasField("k", true))
+        .when("b", "B", pattern -> pattern.hasField("k", true))
+        .when("c", "C", pattern -> pattern.ref("x", "a.k"))
+        .then(actions -> actions.emit("hit"))
+        .build();
+    final CompiledRuleSet rules = Engine.compile(rule);
+
+    try (RuleSession session = rules.newSession()) {
+      for (int index = 0; index < 600; index++) {
+        session.insert("A", Facts.obj("k", index));
+        session.insert("B", Facts.obj("k", index));
+      }
+      session.insert("C", Facts.obj("x", 599));
+
+      // The rule really does match, 600 times.
+      assertThat(session.fireAllRules().firedCount()).isEqualTo(600);
+    }
+
+    try (RuleSession session = rules.newSession()) {
+      for (int index = 0; index < 600; index++) {
+        session.insert("A", Facts.obj("k", index));
+        session.insert("B", Facts.obj("k", index));
+      }
+      session.insert("C", Facts.obj("x", 599));
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain("late-match");
+
+      assertThat(explanation.complete()).isFalse();
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict -> {
+        assertThat(verdict)
+            .describedAs("a match provably exists, so no definite negative is permissible")
+            .doesNotContain("no combination");
+        assertThat(verdict).contains("budget");
+      });
+    }
+  }
+
+  @Test
+  @DisplayName("a finished search still gets the definite 'nothing joined' answer")
+  void completeSearchKeepsTheDefiniteAnswer() {
+    // The suppression above must not cost the useful case: when the walk finishes, "no combination
+    // satisfies this join" is exactly the sentence the author needs.
+    final CompiledRuleSet rules = Engine.compile(REVIEW);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("Order",
+          Facts.obj("id", 1, "total", 25_000, "status", "PENDING", "customerId", 7));
+      session.insert("Customer", Facts.obj("id", 999, "riskTier", "HIGH"));
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain(REVIEW.id());
+
+      assertThat(explanation.complete()).isTrue();
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict ->
+          assertThat(verdict).contains("no combination"));
+    }
+  }
+
+  @Test
   @DisplayName("an unknown rule id fails loudly")
   void unknownRule() {
     final CompiledRuleSet rules = Engine.compile(REVIEW);
