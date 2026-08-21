@@ -7,14 +7,14 @@ import com.codeheadsystems.rules.rule.FieldConstraint;
 import com.codeheadsystems.rules.rule.JoinConstraint;
 import com.codeheadsystems.rules.rule.Operator;
 import com.codeheadsystems.rules.rule.RangeConstraint;
-import tools.jackson.core.JacksonException;
-import tools.jackson.databind.JsonNode;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
 
 /**
  * §6.2.1's operator table, a row at a time.

@@ -1,7 +1,7 @@
 package com.codeheadsystems.rules.rule;
 
-import tools.jackson.databind.JsonNode;
 import java.util.Objects;
+import tools.jackson.databind.JsonNode;
 
 /**
  * A single-fact comparison of one field against a literal (spec §2.5).

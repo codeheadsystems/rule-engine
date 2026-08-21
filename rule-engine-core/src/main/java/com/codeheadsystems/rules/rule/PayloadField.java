@@ -1,8 +1,8 @@
 package com.codeheadsystems.rules.rule;
 
 import com.codeheadsystems.rules.access.Paths;
-import tools.jackson.core.JsonPointer;
 import java.util.Objects;
+import tools.jackson.core.JsonPointer;
 
 /**
  * One named field of a payload an action builds -- an {@code insertFact} payload, an {@code emit}

@@ -1,7 +1,7 @@
 package com.codeheadsystems.rules.network;
 
-import tools.jackson.databind.JsonNode;
 import java.util.BitSet;
+import tools.jackson.databind.JsonNode;
 
 /**
  * The result of evaluating one fact against every distinct alpha test of its type.

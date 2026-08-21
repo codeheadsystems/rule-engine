@@ -7,15 +7,15 @@ import com.codeheadsystems.rules.expr.CompiledExpression;
 import com.codeheadsystems.rules.expr.ExpressionBindings;
 import com.codeheadsystems.rules.expr.ExpressionCompilationException;
 import com.codeheadsystems.rules.expr.ExpressionEvaluationException;
-import tools.jackson.core.JacksonException;
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
-import tools.jackson.databind.node.MissingNode;
 import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.MissingNode;
 
 /**
  * The CEL implementation of §6.4's escape hatch.

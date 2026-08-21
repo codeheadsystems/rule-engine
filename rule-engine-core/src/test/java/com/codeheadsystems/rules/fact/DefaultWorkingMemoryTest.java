@@ -7,10 +7,6 @@ import com.codeheadsystems.rules.access.Paths;
 import com.codeheadsystems.rules.rule.TestedPaths;
 import com.codeheadsystems.rules.schema.FactSchemas;
 import com.codeheadsystems.rules.schema.SchemaViolationException;
-import tools.jackson.core.JsonPointer;
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.node.JsonNodeFactory;
-import tools.jackson.databind.node.ObjectNode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -18,6 +14,10 @@ import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * Working memory, and spec section 3.4.1's update algorithm.

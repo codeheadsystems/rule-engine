@@ -1,8 +1,10 @@
 package com.codeheadsystems.rules.dsl;
 
+import static org.assertj.core.api.Assertions.as;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
+import static org.assertj.core.api.InstanceOfAssertFactories.STRING;
 
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
@@ -10,15 +12,15 @@ import com.codeheadsystems.rules.session.EmittedEvent;
 import com.codeheadsystems.rules.session.FireResult;
 import com.codeheadsystems.rules.session.RuleSession;
 import com.codeheadsystems.rules.session.TerminationReason;
-import tools.jackson.core.JacksonException;
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * The DSL's front door, end to end (spec §9's Phase 5 exit criterion).
@@ -197,8 +199,25 @@ class RuleFilesTest {
   }
 
   @Nested
-  @DisplayName("a non-scalar apiVersion is a diagnostic, not a stack trace")
+  @DisplayName("a wrong apiVersion is a readable diagnostic, whatever shape it has")
   class ApiVersionShape {
+
+    @Test
+    @DisplayName("a misspelled version is quoted once, not twice")
+    void misspelledVersionRendersCleanly() {
+      // The common case, and the one two successive fixes got wrong: asText() rendered a string
+      // bare, toString() renders it with its JSON quotes, and `declares '"rules.v2"'` is what the
+      // author would have seen. Asserting the rendered message rather than only the error code is
+      // the whole point -- the code was identical through both bugs.
+      final RuleFileException thrown = catchThrowableOfType(RuleFileException.class,
+          () -> RuleFiles.compile(RuleSource.yaml("v.yaml", "apiVersion: rules.v2\nrules: []\n")));
+
+      assertThat(thrown).isNotNull();
+      assertThat(thrown.diagnostics()).first()
+          .extracting(DslDiagnostic::message, as(STRING))
+          .contains("declares 'rules.v2'")
+          .doesNotContain("\"rules.v2\"");
+    }
 
     /*
      * Found while migrating to Jackson 3. Jackson 2's asText() returned "" for a container node;
@@ -213,7 +232,7 @@ class RuleFilesTest {
      */
     @ParameterizedTest
     @ValueSource(strings = {"{}", "[]", "{ a: b }", "[1, 2]", "7", "true"})
-    @DisplayName("every non-string apiVersion reports UNKNOWN_API_VERSION")
+    @DisplayName("every non-string apiVersion reports UNKNOWN_API_VERSION rather than throwing")
     void nonStringApiVersion(final String declared) {
       final RuleFileException thrown = catchThrowableOfType(RuleFileException.class,
           () -> RuleFiles.compile(RuleSource.yaml("v.yaml",

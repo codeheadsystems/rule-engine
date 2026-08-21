@@ -17,13 +17,13 @@ import com.codeheadsystems.rules.rule.RetractFact;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.rule.SetField;
 import com.codeheadsystems.rules.rule.ValueExpr;
-import tools.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
+import tools.jackson.databind.JsonNode;
 
 /**
  * Builds rule definitions in Java.

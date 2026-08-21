@@ -1,7 +1,7 @@
 package com.codeheadsystems.rules.fact;
 
-import tools.jackson.databind.JsonNode;
 import java.util.Objects;
+import tools.jackson.databind.JsonNode;
 
 /**
  * One unit of data in working memory: a handle, a type name and a JSON payload (spec §2.2).

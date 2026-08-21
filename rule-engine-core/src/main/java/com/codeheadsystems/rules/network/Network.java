@@ -1,10 +1,10 @@
 package com.codeheadsystems.rules.network;
 
-import tools.jackson.databind.JsonNode;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import tools.jackson.databind.JsonNode;
 
 /**
  * The compiled node graph: immutable, shared by every session (spec §3.2.3, §6.5).

@@ -25,6 +25,12 @@ updates:
       jackson:
         patterns:
           - tools.jackson*
+      # networknt is deliberately NOT in that group. Only one artifact uses its version.ref, so the
+      # same-line-conflict rationale does not apply, and the two projects release independently.
+      # Note the consequence, since nothing here encodes it: libs.versions.toml says networknt's
+      # major tracks our Jackson major, and with no `ignore` rule a networknt 4.x PR will arrive on
+      # its own and fail CI. That is the intended outcome -- a red build is the right way to be told
+      # a major needs a decision -- but it is better read here than rediscovered.
       jmh:
         patterns:
           - org.openjdk.jmh:*

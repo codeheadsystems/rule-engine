@@ -1,10 +1,10 @@
 package com.codeheadsystems.rules.dsl;
 
-import tools.jackson.core.TokenStreamLocation;
-import tools.jackson.core.JacksonException;
-import tools.jackson.databind.JsonNode;
 import java.util.List;
 import java.util.Optional;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.TokenStreamLocation;
+import tools.jackson.databind.JsonNode;
 
 /**
  * Rule-file text into a bound document (spec §6.5's first step).
@@ -82,15 +82,23 @@ final class RuleFileReader {
       return true;
     }
     /*
-     * toString(), not asString(). Jackson 3's asString() throws on an object or array node where
-     * Jackson 2's asText() returned an empty string -- and `declared` comes straight out of an
-     * untrusted rule file, so `apiVersion: {}` turned this diagnostic into a raw JsonNodeException
-     * escaping RuleFiles.compile. toString() renders every node kind, which is what a message
-     * quoting what it found actually wants: the author sees `'{"a":"b"}'` rather than `''`.
+     * asString(toString()), and both halves matter.
+     *
+     * Not a bare asString(): Jackson 3 throws on an object or array node where Jackson 2's asText()
+     * returned an empty string, and `declared` comes straight out of an untrusted rule file -- so
+     * `apiVersion: {}` turned this diagnostic into a raw JsonNodeException escaping
+     * RuleFiles.compile.
+     *
+     * Not a bare toString() either, which was the first fix and was wrong on the case that actually
+     * happens. A misspelled version is a STRING, and toString() renders a string with its JSON
+     * quotes, so `apiVersion: rules.v2` reported `declares '"rules.v2"'` -- doubled quotes on the
+     * single most likely spelling of this error. The default-argument form keeps asText()'s
+     * rendering for every scalar and falls back to the JSON form only for the containers that would
+     * otherwise throw.
      */
     final String found = declared.isMissingNode()
         ? "no 'apiVersion' key"
-        : "'" + declared.toString() + "'";
+        : "'" + declared.asString(declared.toString()) + "'";
     sink.add(DslDiagnostic.at(DslError.UNKNOWN_API_VERSION,
         index.nearest(declared.isMissingNode() ? "" : "/apiVersion"), null,
         "this rule file declares " + found + "; this engine implements '"
@@ -127,8 +135,8 @@ final class RuleFileReader {
   /**
    * Turns a Jackson failure into a located diagnostic.
    *
-   * <p><strong>{@code JacksonException} is unchecked under Jackson 3</strong>, where its Jackson 2
-   * predecessor {@code JacksonException} was checked. Nothing here changed shape, but the
+   * <p><strong>{@code JacksonException} is unchecked under Jackson 3</strong>, where the Jackson 2
+   * exception it replaces here, {@code JsonProcessingException}, was checked. Nothing here changed shape, but the
    * compiler no longer insists: deleting either catch above would now build clean and turn a
    * malformed rule file back into a raw stack trace in somebody's startup log, which is the exact
    * outcome the second catch's comment argues against. The catches are load-bearing on their own

@@ -1,8 +1,8 @@
 package com.codeheadsystems.rules.rule;
 
-import tools.jackson.databind.JsonNode;
 import java.util.Objects;
 import java.util.Optional;
+import tools.jackson.databind.JsonNode;
 
 /**
  * A bounded range over one field: {@code between} and its one-sided forms (spec §2.5).

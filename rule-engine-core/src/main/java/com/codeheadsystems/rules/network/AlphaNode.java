@@ -1,8 +1,8 @@
 package com.codeheadsystems.rules.network;
 
 import com.codeheadsystems.rules.rule.AlphaTest;
-import tools.jackson.databind.JsonNode;
 import java.util.Objects;
+import tools.jackson.databind.JsonNode;
 
 /**
  * A single-fact test, shared across every rule that expresses it (spec §3.2.1).

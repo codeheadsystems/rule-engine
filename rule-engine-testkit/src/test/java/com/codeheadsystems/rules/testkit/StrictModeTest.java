@@ -7,9 +7,9 @@ import com.codeheadsystems.rules.agenda.ConflictResolutionStrategy;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.RuleSession;
 import com.codeheadsystems.rules.session.SessionOptions;
-import tools.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * Strict mode (spec section 7.5): the checks that are too expensive for production but catch a

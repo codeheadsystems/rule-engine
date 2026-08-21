@@ -11,13 +11,13 @@ import com.codeheadsystems.rules.rule.Literal;
 import com.codeheadsystems.rules.rule.PayloadField;
 import com.codeheadsystems.rules.rule.RetractFact;
 import com.codeheadsystems.rules.rule.SetField;
-import tools.jackson.core.JacksonException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import tools.jackson.core.JacksonException;
 
 /**
  * §6.2.2's five verbs, one at a time.

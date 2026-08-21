@@ -1,18 +1,16 @@
 package com.codeheadsystems.rules.observability;
 
-import com.codeheadsystems.rules.fact.Fact;
 import com.codeheadsystems.rules.expr.ExpressionBindings;
+import com.codeheadsystems.rules.fact.Fact;
 import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.match.ActivationKey;
 import com.codeheadsystems.rules.rule.AlphaTest;
 import com.codeheadsystems.rules.rule.CompiledPattern;
-import com.codeheadsystems.rules.rule.ExpressionTest;
 import com.codeheadsystems.rules.rule.CompiledRule;
+import com.codeheadsystems.rules.rule.ExpressionTest;
 import com.codeheadsystems.rules.rule.JoinTest;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
 import com.codeheadsystems.rules.session.RuleSession;
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.node.MissingNode;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -20,6 +18,8 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Optional;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.MissingNode;
 
 /**
  * Answers "why did rule R <em>not</em> fire?" (spec §7.2).

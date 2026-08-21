@@ -1,9 +1,9 @@
 package com.codeheadsystems.rules.value;
 
-import tools.jackson.databind.JsonNode;
 import java.math.BigDecimal;
 import java.util.Optional;
 import java.util.OptionalInt;
+import tools.jackson.databind.JsonNode;
 
 /**
  * Canonicalises JSON values into the one Java type per compatibility class that the engine hashes,

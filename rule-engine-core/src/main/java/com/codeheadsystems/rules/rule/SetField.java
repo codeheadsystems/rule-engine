@@ -1,8 +1,8 @@
 package com.codeheadsystems.rules.rule;
 
 import com.codeheadsystems.rules.access.Paths;
-import tools.jackson.core.JsonPointer;
 import java.util.Objects;
+import tools.jackson.core.JsonPointer;
 
 /**
  * Mutates a field of a fact bound by the LHS (spec §2.5, §6.2.2).

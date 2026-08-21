@@ -6,6 +6,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.codeheadsystems.rules.compiler.RuleCompilationException;
 import com.codeheadsystems.rules.compiler.RuleCompiler;
+import com.codeheadsystems.rules.fact.FactHandle;
+import com.codeheadsystems.rules.listener.RuleEngineListener;
 import com.codeheadsystems.rules.listener.RuleEngineListener;
 import com.codeheadsystems.rules.listener.SuppressReason;
 import com.codeheadsystems.rules.match.ActivationKey;
@@ -14,8 +16,7 @@ import com.codeheadsystems.rules.rhs.StagedEffect;
 import com.codeheadsystems.rules.rule.Constraint;
 import com.codeheadsystems.rules.rule.FieldConstraint;
 import com.codeheadsystems.rules.rule.Operator;
-import com.codeheadsystems.rules.fact.FactHandle;
-import com.codeheadsystems.rules.listener.RuleEngineListener;
+import com.codeheadsystems.rules.rule.Operator;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CollectingEventSink;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
@@ -25,8 +26,7 @@ import com.codeheadsystems.rules.session.FireResult;
 import com.codeheadsystems.rules.session.RuleSession;
 import com.codeheadsystems.rules.session.SessionOptions;
 import com.codeheadsystems.rules.session.TerminationReason;
-import tools.jackson.core.JsonPointer;
-import tools.jackson.databind.node.ArrayNode;
+import com.codeheadsystems.rules.value.Comparisons;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -37,6 +37,9 @@ import java.util.stream.IntStream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * Regressions for the defects a senior review found after Phase 0 was first written.
@@ -220,6 +223,96 @@ class ReviewRegressionTest {
         assertThatThrownBy(session::fireAllRules).isInstanceOf(IllegalStateException.class);
 
         assertThat(trace).containsExactly("alert", "alert", "boom");
+      }
+    }
+  }
+
+  @Nested
+  @DisplayName("numeric equality means the same thing at every depth")
+  class ContainerNumericEquality {
+
+    /*
+     * Found reviewing the Jackson 3 migration. Jackson 2's DecimalNode.equals compared with
+     * BigDecimal.compareTo (scale-insensitive); Jackson 3 uses BigDecimal.equals (scale-SENSITIVE),
+     * so 100.00 and 100.0 stopped being equal inside a container.
+     *
+     * That left the engine contradicting itself. §2.6.1 puts every number in one {number} class and
+     * Canonical strips trailing zeros, which is what makes `10000` and `10000.0` agree -- and the
+     * scalar path still said they did while the container path, which delegated straight to
+     * Jackson, said they did not. Same two numbers, different answer depending on whether they sat
+     * inside an object.
+     *
+     * The literal reading of §2.6.1 ("EQ on two object/array values is Jackson's structural
+     * equals") was still satisfied, which is exactly why this is worth a test rather than a shrug:
+     * that sentence was written when Jackson's structural equals happened to agree with this
+     * engine's numeric equality, and it silently stopped describing the same thing. The spec
+     * sentence is amended; the code follows the engine's own numeric semantics at every depth.
+     */
+    private static final ObjectNode SCALED =
+        Facts.obj("amount", new java.math.BigDecimal("100.00"));
+    private static final ObjectNode UNSCALED =
+        Facts.obj("amount", new java.math.BigDecimal("100.0"));
+
+    @Test
+    @DisplayName("a decimal's scale does not decide an object-valued EQ")
+    void objectValuedEqualityIgnoresScale() {
+      assertThat(Comparisons.test(Operator.EQ, SCALED, UNSCALED))
+          .describedAs("{amount: 100.00} EQ {amount: 100.0}")
+          .isTrue();
+    }
+
+    @Test
+    @DisplayName("nor an array-valued one, at any nesting depth")
+    void arrayValuedEqualityIgnoresScale() {
+      assertThat(Comparisons.test(Operator.EQ,
+          Facts.array(new java.math.BigDecimal("2.50")),
+          Facts.array(new java.math.BigDecimal("2.5")))).isTrue();
+      assertThat(Comparisons.test(Operator.EQ,
+          Facts.obj("nested", Facts.array(Facts.obj("v", new java.math.BigDecimal("1.000")))),
+          Facts.obj("nested", Facts.array(Facts.obj("v", new java.math.BigDecimal("1"))))))
+          .describedAs("object > array > object > number")
+          .isTrue();
+    }
+
+    @Test
+    @DisplayName("and the scalar path still agrees, which is the property that broke")
+    void scalarAgreesWithContainer() {
+      assertThat(Comparisons.test(Operator.EQ,
+          Facts.obj("v", new java.math.BigDecimal("100.00")).get("v"),
+          Facts.obj("v", new java.math.BigDecimal("100.0")).get("v"))).isTrue();
+    }
+
+    @Test
+    @DisplayName("§2.6.1's other container rules still hold: key order free, element order not")
+    void structuralRulesUnchanged() {
+      assertThat(Comparisons.test(Operator.EQ,
+          Facts.json("{\"a\": 1, \"b\": 2}"), Facts.json("{\"b\": 2, \"a\": 1}")))
+          .describedAs("object key order does not matter").isTrue();
+      assertThat(Comparisons.test(Operator.EQ,
+          Facts.array(1, 2), Facts.array(2, 1)))
+          .describedAs("array element order does").isFalse();
+      assertThat(Comparisons.test(Operator.EQ,
+          Facts.json("{\"a\": 1}"), Facts.json("{\"a\": 1, \"b\": 2}")))
+          .describedAs("a missing key is not equal").isFalse();
+      assertThat(Comparisons.test(Operator.EQ, Facts.json("{}"), Facts.array()))
+          .describedAs("an object is not an array").isFalse();
+    }
+
+    @Test
+    @DisplayName("an object matches a fact through the whole engine, not just the comparator")
+    void endToEnd() {
+      final CompiledRuleSet rules = RuleCompiler.compile(List.of(Rules.rule("exact-object")
+          .when("o", "Order", pattern -> pattern.eq("breakdown",
+              Facts.obj("net", new java.math.BigDecimal("100.0"))))
+          .then(actions -> actions.emit("matched"))
+          .build()));
+
+      try (RuleSession session = rules.newSession()) {
+        session.insert("Order", Facts.obj("breakdown",
+            Facts.obj("net", new java.math.BigDecimal("100.00"))));
+        assertThat(session.fireAllRules().firedCount())
+            .describedAs("a money amount written at a different scale still matches")
+            .isEqualTo(1);
       }
     }
   }

@@ -1,8 +1,8 @@
 package com.codeheadsystems.rules.access;
 
+import java.util.Objects;
 import tools.jackson.core.JsonPointer;
 import tools.jackson.databind.JsonNode;
-import java.util.Objects;
 
 /**
  * A {@link FieldAccessor} backed by a precompiled {@link JsonPointer} (spec §2.6).

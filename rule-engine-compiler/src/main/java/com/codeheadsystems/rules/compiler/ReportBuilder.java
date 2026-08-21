@@ -1,5 +1,6 @@
 package com.codeheadsystems.rules.compiler;
 
+import com.codeheadsystems.rules.expr.CompiledExpression;
 import com.codeheadsystems.rules.network.Network;
 import com.codeheadsystems.rules.report.CelCost;
 import com.codeheadsystems.rules.report.CompilerReport;
@@ -7,7 +8,6 @@ import com.codeheadsystems.rules.report.Diagnostic;
 import com.codeheadsystems.rules.report.SharingStats;
 import com.codeheadsystems.rules.report.UnindexedConstraint;
 import com.codeheadsystems.rules.rule.ActionDefinition;
-import com.codeheadsystems.rules.expr.CompiledExpression;
 import com.codeheadsystems.rules.rule.CompiledPattern;
 import com.codeheadsystems.rules.rule.CompiledRule;
 import com.codeheadsystems.rules.rule.Constraint;
@@ -22,8 +22,6 @@ import com.codeheadsystems.rules.schema.FactSchemas;
 import com.codeheadsystems.rules.schema.Presence;
 import com.codeheadsystems.rules.schema.SchemaType;
 import com.codeheadsystems.rules.value.Canonical;
-import tools.jackson.core.JsonPointer;
-import tools.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -34,6 +32,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.JsonNode;
 
 /**
  * Builds §7.4's compiler report, on the shared graph and the rules that produced it.
@@ -382,6 +382,11 @@ final class ReportBuilder {
         .anyMatch(other -> other instanceof FieldConstraint guard
             && guard.op() == Operator.HAS_FIELD
             && guard.field().equals(field)
+            // booleanValue() throws under Jackson 3 on a non-boolean, and the HAS_FIELD check above
+            // proves the OPERATOR, not the literal's type. What actually makes this safe is
+            // non-local: RuleCompiler.run throws on non-empty diagnostics before it ever calls
+            // ReportBuilder.build, and a hasField carrying a non-boolean is already a diagnostic by
+            // then. Reordering those two phases would turn this line into a crash.
             && guard.literal().booleanValue());
   }
 

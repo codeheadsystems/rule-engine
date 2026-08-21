@@ -1,7 +1,6 @@
 package com.codeheadsystems.rules.rule;
 
 import com.codeheadsystems.rules.expr.CompiledExpression;
-import tools.jackson.core.JsonPointer;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -9,6 +8,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import tools.jackson.core.JsonPointer;
 
 /**
  * The compile-time companion to {@link RuleDefinition} (spec §4.2): the definition plus everything

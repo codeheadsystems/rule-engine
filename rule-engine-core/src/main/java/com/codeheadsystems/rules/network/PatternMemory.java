@@ -2,8 +2,6 @@ package com.codeheadsystems.rules.network;
 
 import com.codeheadsystems.rules.access.JsonPointerAccessor;
 import com.codeheadsystems.rules.value.Canonical;
-import tools.jackson.core.JsonPointer;
-import tools.jackson.databind.JsonNode;
 import java.math.BigDecimal;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -14,6 +12,8 @@ import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.JsonNode;
 
 /**
  * One pattern's alpha memory and its indexes: per-session mutable state (spec §3.2.3, §3.3).

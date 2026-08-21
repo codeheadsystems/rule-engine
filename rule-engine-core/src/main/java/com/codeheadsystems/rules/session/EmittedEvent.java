@@ -1,7 +1,7 @@
 package com.codeheadsystems.rules.session;
 
-import tools.jackson.databind.JsonNode;
 import java.util.Objects;
+import tools.jackson.databind.JsonNode;
 
 /**
  * An emission captured rather than delivered: the collecting sink's element type, and what a fire

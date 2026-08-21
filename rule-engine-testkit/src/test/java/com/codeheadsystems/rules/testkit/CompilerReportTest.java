@@ -11,14 +11,14 @@ import com.codeheadsystems.rules.rule.Operator;
 import com.codeheadsystems.rules.rule.RangeConstraint;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
-import tools.jackson.databind.node.IntNode;
-import tools.jackson.databind.node.StringNode;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.node.IntNode;
+import tools.jackson.databind.node.StringNode;
 
 /**
  * The compiler report (spec §7.4).

@@ -1,9 +1,9 @@
 package com.codeheadsystems.rules.rhs;
 
 import com.codeheadsystems.rules.fact.FactHandle;
+import java.util.Objects;
 import tools.jackson.core.JsonPointer;
 import tools.jackson.databind.JsonNode;
-import java.util.Objects;
 
 /**
  * One effect a firing produced, as committed (spec §7.1).

@@ -15,15 +15,15 @@ import com.codeheadsystems.rules.session.CompiledRuleSet;
 import com.codeheadsystems.rules.session.RuleSession;
 import com.codeheadsystems.rules.testkit.Facts;
 import com.codeheadsystems.rules.testkit.Rules;
+import java.util.List;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.DoubleNode;
 import tools.jackson.databind.node.StringNode;
-import java.util.List;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
-import org.junit.jupiter.api.Test;
 
 /**
  * What registering a schema buys, end to end (spec §2.3, §6.5, §2.6.1).

@@ -11,9 +11,6 @@ import com.codeheadsystems.rules.session.RuleSession;
 import com.codeheadsystems.rules.testkit.Facts;
 import com.codeheadsystems.rules.testkit.Rules;
 import com.codeheadsystems.rules.value.Comparisons;
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.node.JsonNodeFactory;
-import tools.jackson.databind.node.ObjectNode;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.openjdk.jmh.annotations.Benchmark;
@@ -27,6 +24,9 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.infra.Blackhole;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * The primitives and end-to-end throughput §10 asks for, on both matchers.

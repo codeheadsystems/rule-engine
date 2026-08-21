@@ -1,16 +1,15 @@
 package com.codeheadsystems.rules.agenda;
 
+import com.codeheadsystems.rules.expr.ExpressionBindings;
+import com.codeheadsystems.rules.expr.ExpressionEvaluationException;
 import com.codeheadsystems.rules.fact.WorkingMemory;
 import com.codeheadsystems.rules.listener.RuleEngineListener;
 import com.codeheadsystems.rules.listener.SuppressReason;
 import com.codeheadsystems.rules.match.Activation;
 import com.codeheadsystems.rules.match.Tuple;
-import tools.jackson.databind.node.MissingNode;
-import com.codeheadsystems.rules.expr.ExpressionBindings;
-import com.codeheadsystems.rules.expr.ExpressionEvaluationException;
 import com.codeheadsystems.rules.rule.CompiledPattern;
-import com.codeheadsystems.rules.rule.ExpressionTest;
 import com.codeheadsystems.rules.rule.CompiledRule;
+import com.codeheadsystems.rules.rule.ExpressionTest;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Iterator;
@@ -19,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import tools.jackson.databind.node.MissingNode;
 
 /**
  * The lazily-recomputing agenda shape of spec §4.1, with candidate generation left to a subclass.

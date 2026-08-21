@@ -5,12 +5,12 @@ import com.codeheadsystems.rules.rule.FieldConstraint;
 import com.codeheadsystems.rules.rule.JoinConstraint;
 import com.codeheadsystems.rules.rule.Operator;
 import com.codeheadsystems.rules.rule.RangeConstraint;
-import tools.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import tools.jackson.databind.JsonNode;
 
 /**
  * §6.2.1's operator table, which is the whole of what a {@code where} block means.

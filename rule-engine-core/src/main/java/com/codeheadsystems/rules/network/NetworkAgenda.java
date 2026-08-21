@@ -10,14 +10,14 @@ import com.codeheadsystems.rules.listener.RuleEngineListener;
 import com.codeheadsystems.rules.match.Activation;
 import com.codeheadsystems.rules.rule.CompiledRule;
 import com.codeheadsystems.rules.rule.Operator;
-import tools.jackson.core.JsonPointer;
-import tools.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.SortedSet;
 import java.util.TreeSet;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.JsonNode;
 
 /**
  * The indexed matcher: candidates come from pattern memories, and joins probe the smaller side.

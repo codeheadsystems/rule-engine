@@ -216,7 +216,7 @@ public final class Fact {
 
 **`recency` lives here.** Working memory owns it. Because `Fact` is replaced wholesale on update, a `Fact` object is an immutable snapshot at one recency — which is exactly why tuples bind handles and dereference through working memory rather than holding `Fact` references (§3.2.2).
 
-The payload's canonical type is Jackson's [`JsonNode`](https://www.javadoc.io/doc/com.fasterxml.jackson.core/jackson-databind/latest/com/fasterxml/jackson/databind/JsonNode.html) — not `Object`, not a `FactAdapter` SPI over multiple representations. Committing to one representation means the matching network, field access (§2.6), and the DSL (§6) all speak the same tree model, with no adapter indirection and no "which kind is this fact" branching in the hot path. A fact's origin becomes irrelevant to how it is matched: parsed JSON, parsed YAML (same Jackson tree model — §6.1), or built with `JsonNodeFactory` all produce the identical shape in working memory.
+The payload's canonical type is Jackson's [`JsonNode`](https://www.javadoc.io/doc/tools.jackson.core/jackson-databind/latest/tools/jackson/databind/JsonNode.html) — not `Object`, not a `FactAdapter` SPI over multiple representations. Committing to one representation means the matching network, field access (§2.6), and the DSL (§6) all speak the same tree model, with no adapter indirection and no "which kind is this fact" branching in the hot path. A fact's origin becomes irrelevant to how it is matched: parsed JSON, parsed YAML (same Jackson tree model — §6.1), or built with `JsonNodeFactory` all produce the identical shape in working memory.
 
 **Payload ownership, and the cost of defending it.** Get this wrong and index entries point at values the fact no longer has: silent wrong matches, not a crash. `ObjectNode`/`ArrayNode` are mutable containers, and Jackson has no immutable tree type. If code outside the engine mutates a payload after insert, it breaks the assumption that a fact's content changes only through explicit `update()` — an assumption §2.6's accessor caching, §3.3's index maintenance, and §3.4's differential propagation all depend on.
 
@@ -419,7 +419,7 @@ public record JsonPointerAccessor(JsonPointer pointer) implements FieldAccessor 
 }
 ```
 
-At compile time — not at match time — resolve each `(factType, field)` pair into a compiled [`JsonPointer`](https://www.javadoc.io/doc/com.fasterxml.jackson.core/jackson-core/latest/com/fasterxml/jackson/core/JsonPointer.html) once: `JsonPointer.compile("/" + field.replace('.', '/'))` turns `customer.id` into `/customer/id`. Reuse it across every session and every fact of that type. Jackson's `JsonPointer` is documented as immutable and shareable, so caching in the `CompiledRuleSet` needs no synchronization.
+At compile time — not at match time — resolve each `(factType, field)` pair into a compiled [`JsonPointer`](https://www.javadoc.io/doc/tools.jackson.core/jackson-core/latest/tools/jackson/core/JsonPointer.html) once: `JsonPointer.compile("/" + field.replace('.', '/'))` turns `customer.id` into `/customer/id`. Reuse it across every session and every fact of that type. Jackson's `JsonPointer` is documented as immutable and shareable, so caching in the `CompiledRuleSet` needs no synchronization.
 
 Two things worth being explicit about, since this is a different performance profile than a POJO + `MethodHandle` design:
 
@@ -449,7 +449,9 @@ Three consequences worth stating out loud:
 - **Logic is two-valued, not three-valued.** A constraint against an absent or wrong-typed value is `false` — with the deliberate exception of `NE`/`NOT_IN`, which are `!EQ`/`!IN` and therefore **true** for absent fields. That exception is a genuine trap (`status: { ne: "CLOSED" }` matches an `Order` with no `status` at all), so the compiler warns whenever `NE`/`NOT_IN` is applied to a path a registered schema (§2.3) marks optional, suggesting the explicit `{ hasField: true }` companion. Three-valued logic was considered and rejected: it doubles every truth table and forces authors to reason about `UNKNOWN` propagation through `AND` — a larger cognitive cost than one documented asymmetry.
 - **Cross-type comparison is `false` at runtime, but a compile error wherever a schema can prove it.** Runtime leniency is necessary because unstructured facts are the default (§2.3); compile-time strictness is what makes the leniency safe where you have declared a schema.
 
-**Type-compatibility classes** for the "wrong type" row: `{number}`, `{string}`, `{boolean}`, `{array}`, `{object}`. Comparison is defined *within* a class only. Two exceptions: `IN`/`NOT_IN` compare a scalar against array *elements* (an array literal is expected, not a mismatch), and `EQ` on two `object`/`array` values is Jackson's structural `equals` — object key order does not matter, array element order does.
+**Type-compatibility classes** for the "wrong type" row: `{number}`, `{string}`, `{boolean}`, `{array}`, `{object}`. Comparison is defined *within* a class only. Two exceptions: `IN`/`NOT_IN` compare a scalar against array *elements* (an array literal is expected, not a mismatch), and `EQ` on two `object`/`array` values is structural — object key order does not matter, array element order does, and **numbers inside a container compare exactly as they do outside one**.
+
+> **Amendment (Jackson 3 migration).** This sentence read "is Jackson's structural `equals`" until the engine moved to Jackson 3. That was accurate while Jackson 2's `DecimalNode.equals` compared with `BigDecimal.compareTo`, which ignores scale, and so happened to agree with this engine's own numeric equality. Jackson 3 switched to `BigDecimal.equals`, which is scale-sensitive — so `{amount: 100.00}` and `{amount: 100.0}` stopped being equal inside a container while remaining equal as scalars. The sentence stayed literally true and quietly meant something else. Delegating equality to a library is only safe while the library agrees with you; `Comparisons` now walks containers itself and compares numbers through `Canonical` at every depth, which is what the `{number}` type class in this section implies. See `ReviewRegressionTest.ContainerNumericEquality`.
 
 #### 2.6.2 Numeric canonicalization
 
@@ -1199,7 +1201,7 @@ A session holds a strong reference to the rule set it was created from, so in-fl
 
 ### 6.1 One object model, two serializations
 
-Use [Jackson](https://github.com/FasterXML/jackson) with both `ObjectMapper` (JSON) and `YAMLMapper` (YAML, from the [`jackson-dataformats-text` yaml module](https://github.com/FasterXML/jackson-dataformats-text/tree/2.x/yaml) — the standalone repo is archived and merged there) deserializing into the *same* intermediate POJO tree, which compiles to `RuleDefinition` (§2.5). Don't build two parsers; the difference is one factory choice against an identical target type.
+Use [Jackson](https://github.com/FasterXML/jackson) with both `ObjectMapper` (JSON) and `YAMLMapper` (YAML, from the [`jackson-dataformats-text` yaml module](https://github.com/FasterXML/jackson-dataformats-text/tree/3.x/yaml) — the standalone repo is archived and merged there) deserializing into the *same* intermediate POJO tree, which compiles to `RuleDefinition` (§2.5). Don't build two parsers; the difference is one factory choice against an identical target type.
 
 ### 6.2 Rule schema
 
@@ -1620,7 +1622,7 @@ rule-engine-testkit/       naive-matcher oracle, differential/property-based har
 
 **Two notes on the boundaries.**
 
-*One DSL module, not one per serialization.* §6.1 argues for one object model and one parser, which is precisely why two modules make no sense: the entire difference is `ObjectMapper` vs `YAMLMapper`, one factory choice against an identical target type. Two modules means two build files and two versions to keep in step, to encapsulate one line. If YAML's transitive `snakeyaml` is unwanted in some deployment, make it an `optional` dependency.
+*One DSL module, not one per serialization.* §6.1 argues for one object model and one parser, which is precisely why two modules make no sense: the entire difference is `ObjectMapper` vs `YAMLMapper`, one factory choice against an identical target type. Two modules means two build files and two versions to keep in step, to encapsulate one line. If YAML's transitive parser is unwanted in some deployment, make it an `optional` dependency. (Under Jackson 3 that transitive is `org.snakeyaml:snakeyaml-engine`, not Jackson 2's `org.yaml:snakeyaml` — an exclusion written against the old coordinates silently excludes nothing.)
 
 *`rule-engine-testkit` is not optional.* The roadmap leans on it in three places: Phase 0's naive matcher is the correctness oracle for every later phase, §11.2's chosen update semantics have oracle-equivalence as a Phase 1 exit criterion, and §7.3's determinism contract needs shuffle tests. All three are things consumers want too — a rule author testing their own rule set wants the same fixtures and oracle. Left in another module's `src/test`, they are unusable from outside and quietly rot.
 
@@ -1812,8 +1814,8 @@ Fact handles are session-scoped `long`s and involve none of this; UUIDv7 is used
 | Topic | Reference |
 |---|---|
 | RFC 6901 (JSON Pointer) — the basis for `FieldAccessor`, and note it has no wildcard | [RFC 6901](https://datatracker.ietf.org/doc/html/rfc6901) |
-| `JsonNode` | [jackson-databind API](https://www.javadoc.io/doc/com.fasterxml.jackson.core/jackson-databind/latest/com/fasterxml/jackson/databind/JsonNode.html) |
-| `JsonPointer` — immutable and shareable, backing §2.6's caching | [jackson-core API](https://www.javadoc.io/doc/com.fasterxml.jackson.core/jackson-core/latest/com/fasterxml/jackson/core/JsonPointer.html) |
+| `JsonNode` | [jackson-databind API](https://www.javadoc.io/doc/tools.jackson.core/jackson-databind/latest/tools/jackson/databind/JsonNode.html) |
+| `JsonPointer` — immutable and shareable, backing §2.6's caching | [jackson-core API](https://www.javadoc.io/doc/tools.jackson.core/jackson-core/latest/tools/jackson/core/JsonPointer.html) |
 | `BigDecimal` scale-sensitive `equals` vs `compareTo` — the §2.6.2 trap, stated in the Javadoc itself | [`java.math.BigDecimal` (JDK 25)](https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/math/BigDecimal.html) |
 | Linear-time regex for rule-authored `matches` (§2.6.3) | [`com.google.re2j:re2j`](https://github.com/google/re2j) · [Russ Cox, "Regular Expression Matching Can Be Simple And Fast"](https://swtch.com/~rsc/regexp/regexp1.html) |
 
@@ -1836,7 +1838,7 @@ Fact handles are session-scoped `long`s and involve none of this; UUIDv7 is used
 | Topic | Reference |
 |---|---|
 | Jackson | [FasterXML/jackson](https://github.com/FasterXML/jackson) |
-| Jackson YAML module | [jackson-dataformats-text, `yaml`](https://github.com/FasterXML/jackson-dataformats-text/tree/2.x/yaml) |
+| Jackson YAML module | [jackson-dataformats-text, `yaml`](https://github.com/FasterXML/jackson-dataformats-text/tree/3.x/yaml) |
 | CEL — spec | [cel.dev](https://cel.dev/) · [cel-expr/cel-spec](https://github.com/cel-expr/cel-spec) |
 | CEL — Java implementation, and its cost estimator (§6.4) | [cel-expr/cel-java](https://github.com/cel-expr/cel-java), Maven `dev.cel:cel`. **Not** to be confused with `org.projectnessie.cel`, which is an independent Go→Java port with different semantics and feature coverage — they are separate projects, not old and new coordinates of one |
 | JSON Schema | [json-schema.org](https://json-schema.org/) |

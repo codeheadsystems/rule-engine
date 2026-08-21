@@ -1,6 +1,5 @@
 package com.codeheadsystems.rules.dsl;
 
-import tools.jackson.databind.JsonNode;
 import com.networknt.schema.Error;
 import com.networknt.schema.Schema;
 import com.networknt.schema.SchemaRegistry;
@@ -12,6 +11,7 @@ import java.io.UncheckedIOException;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import tools.jackson.databind.JsonNode;
 
 /**
  * The rule-file schema gate (spec §6.5: "fail fast, before touching the network").

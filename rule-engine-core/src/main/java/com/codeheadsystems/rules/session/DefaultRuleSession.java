@@ -18,14 +18,14 @@ import com.codeheadsystems.rules.rhs.RhsErrorHandler;
 import com.codeheadsystems.rules.rhs.RhsExecutor;
 import com.codeheadsystems.rules.rhs.RhsResult;
 import com.codeheadsystems.rules.rule.ActionDefinition;
-import tools.jackson.core.JsonPointer;
-import tools.jackson.databind.JsonNode;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.JsonNode;
 
 /**
  * The Phase 0 session: working memory, the naive agenda, refraction, and §4.7's firing loop.

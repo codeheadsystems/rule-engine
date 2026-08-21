@@ -5,10 +5,10 @@ import com.codeheadsystems.rules.fact.Fact;
 import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.fact.WorkingMemory;
 import com.codeheadsystems.rules.match.ActivationKey;
-import tools.jackson.databind.JsonNode;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import tools.jackson.databind.JsonNode;
 
 /**
  * A single-writer evaluation session (spec §5.1).

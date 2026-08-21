@@ -1,13 +1,13 @@
 package com.codeheadsystems.rules.compiler;
 
-import tools.jackson.core.JsonPointer;
-import tools.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.JsonNode;
 
 /**
  * A prefix trie over one fact type's tested paths (spec §3.4.2).

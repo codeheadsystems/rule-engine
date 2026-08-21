@@ -1,8 +1,8 @@
 package com.codeheadsystems.rules.rule;
 
 import com.codeheadsystems.rules.access.Paths;
-import tools.jackson.core.JsonPointer;
 import java.util.Objects;
+import tools.jackson.core.JsonPointer;
 
 /**
  * A reference to a field of a fact bound by the LHS, resolved at fire time (spec §2.5).

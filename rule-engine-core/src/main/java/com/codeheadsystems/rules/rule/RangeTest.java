@@ -2,8 +2,8 @@ package com.codeheadsystems.rules.rule;
 
 import com.codeheadsystems.rules.access.FieldAccessor;
 import com.codeheadsystems.rules.value.Comparisons;
-import tools.jackson.databind.JsonNode;
 import java.util.Objects;
+import tools.jackson.databind.JsonNode;
 
 /**
  * A compiled {@link RangeConstraint}.

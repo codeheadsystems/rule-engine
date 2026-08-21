@@ -1,8 +1,8 @@
 package com.codeheadsystems.rules.schema;
 
-import tools.jackson.databind.JsonNode;
 import java.util.List;
 import java.util.Optional;
+import tools.jackson.databind.JsonNode;
 
 /**
  * Optional per-fact-type payload schemas (spec §2.3).

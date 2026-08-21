@@ -1,13 +1,13 @@
 package com.codeheadsystems.rules.compiler;
 
 import com.codeheadsystems.rules.rule.TestedPaths;
-import tools.jackson.core.JsonPointer;
-import tools.jackson.databind.JsonNode;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.JsonNode;
 
 /**
  * The compiled tested-path artifact (spec §2.4).

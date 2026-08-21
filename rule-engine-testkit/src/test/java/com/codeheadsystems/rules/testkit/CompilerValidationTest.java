@@ -13,6 +13,7 @@ import com.codeheadsystems.rules.rule.Operator;
 import com.codeheadsystems.rules.rule.PatternDefinition;
 import com.codeheadsystems.rules.rule.Quantifier;
 import com.codeheadsystems.rules.rule.RuleDefinition;
+import com.codeheadsystems.rules.session.CompiledRuleSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -324,6 +325,40 @@ class CompilerValidationTest {
     assertThat(compiled.testedPaths().forType("Customer"))
         .extracting(Object::toString)
         .containsExactly("/id");
+  }
+
+  @Test
+  @DisplayName("the version hash has a fixed value, not merely a stable one")
+  void versionHashIsPinned() {
+    /*
+     * Everything else about the version hash is asserted relatively -- same rules give the same
+     * string, different rules give a different one -- and DslEquivalenceTest compares a rule file's
+     * hash against the builder's. All of that stays green if the hash function moves wholesale.
+     *
+     * That is a real gap rather than a theoretical one. §5.6's hot reload, §2.5's refraction and the
+     * run-both-and-compare cutover all key on rule-set identity, and the Jackson 3 migration could
+     * have moved every hash silently: RuleCompiler.version hashes a string built from the when/then
+     * record toStrings, which render their JsonNodes. It happened not to -- Jackson 3's toString is
+     * byte-identical to Jackson 2's for every node kind this engine produces -- but nothing in the
+     * suite would have said so.
+     *
+     * So one fixed rule set is pinned to one literal hash. If this fails, rule-set identity moved,
+     * and that is a decision to be made deliberately (bump COMPILER_VERSION and say why in the
+     * commit) rather than discovered by a consumer whose stored version stopped matching.
+     */
+    final CompiledRuleSet pinned = RuleCompiler.compile(List.of(Rules.rule("pinned")
+        .salience(5)
+        .when("o", "Order", pattern -> pattern
+            .eq("status", "PENDING")
+            .gt("total", 10000)
+            .in("region", "EU", "US"))
+        .when("c", "Customer", pattern -> pattern.ref("id", "o.customerId"))
+        .then(actions -> actions.emit("out", "id", Rules.ref("o.id")))
+        .build()));
+
+    assertThat(pinned.version())
+        .describedAs("rule-set identity is a compatibility surface; see this test's comment")
+        .isEqualTo("sha256:80ead2110b810f97");
   }
 
   @Test

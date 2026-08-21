@@ -1,13 +1,13 @@
 package com.codeheadsystems.rules.dsl;
 
+import java.util.Locale;
+import java.util.Optional;
 import tools.jackson.core.StreamReadFeature;
 import tools.jackson.core.TokenStreamFactory;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.cfg.MapperBuilder;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.dataformat.yaml.YAMLMapper;
-import java.util.Locale;
-import java.util.Optional;
 
 /**
  * Which serialization a rule file is written in (spec §6.1).
@@ -111,7 +111,10 @@ public enum RuleFormat {
    * Holds the YAML mapper, initialised on first use.
    *
    * <p><strong>This nesting is load-bearing, not stylistic.</strong> §8 asks that a deployment
-   * which does not want YAML be able to exclude its transitive {@code snakeyaml}. A static field on
+   * which does not want YAML be able to exclude its transitive YAML parser -- which under Jackson 3
+   * is {@code org.snakeyaml:snakeyaml-engine}, a different group <em>and</em> artifact from Jackson
+   * 2's {@code org.yaml:snakeyaml}. An exclusion written against the old coordinates excludes
+   * nothing, silently. A static field on
    * {@link RuleFormat} itself would be initialised when the enum class loads -- that is, when
    * anything so much as names {@code RuleFormat.JSON} -- and a missing {@code snakeyaml} would then
    * be a {@code NoClassDefFoundError} on the JSON path, which has nothing to do with YAML. Holding

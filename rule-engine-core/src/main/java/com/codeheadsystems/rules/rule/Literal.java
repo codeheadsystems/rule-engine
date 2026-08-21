@@ -1,7 +1,7 @@
 package com.codeheadsystems.rules.rule;
 
-import tools.jackson.databind.JsonNode;
 import java.util.Objects;
+import tools.jackson.databind.JsonNode;
 
 /**
  * A constant value in a {@code then} block (spec §2.5).

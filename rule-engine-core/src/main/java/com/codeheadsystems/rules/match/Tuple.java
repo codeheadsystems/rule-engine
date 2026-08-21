@@ -3,11 +3,11 @@ package com.codeheadsystems.rules.match;
 import com.codeheadsystems.rules.fact.Fact;
 import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.fact.WorkingMemory;
-import tools.jackson.databind.JsonNode;
 import java.util.Arrays;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Objects;
+import tools.jackson.databind.JsonNode;
 
 /**
  * One partial or complete match: an ordered binding of pattern aliases to fact <em>handles</em>

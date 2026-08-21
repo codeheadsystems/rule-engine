@@ -1,9 +1,9 @@
 package com.codeheadsystems.rules.fact;
 
-import tools.jackson.databind.JsonNode;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
+import tools.jackson.databind.JsonNode;
 
 /**
  * The per-session set of currently-asserted facts (spec §2.4).

@@ -1,8 +1,8 @@
 package com.codeheadsystems.rules.observability;
 
 import com.codeheadsystems.rules.rule.Constraint;
-import tools.jackson.databind.JsonNode;
 import java.util.Objects;
+import tools.jackson.databind.JsonNode;
 
 /**
  * The constraint that eliminated a pattern's candidates, with the value that failed it

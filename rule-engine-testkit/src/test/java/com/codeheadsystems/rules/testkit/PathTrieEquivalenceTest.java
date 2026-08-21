@@ -5,13 +5,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.codeheadsystems.rules.compiler.RuleCompiler;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.rule.TestedPaths;
-import tools.jackson.core.JsonPointer;
-import tools.jackson.databind.node.ObjectNode;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * The prefix trie against the probe loop it replaced (spec §3.4.2).

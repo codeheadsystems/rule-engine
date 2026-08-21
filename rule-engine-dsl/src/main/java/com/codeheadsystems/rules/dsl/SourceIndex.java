@@ -1,13 +1,12 @@
 package com.codeheadsystems.rules.dsl;
 
-import tools.jackson.core.TokenStreamLocation;
-import tools.jackson.core.JsonParser;
-import tools.jackson.core.ObjectReadContext;
-import tools.jackson.core.JsonToken;
-import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import tools.jackson.core.JsonParser;
+import tools.jackson.core.JsonToken;
+import tools.jackson.core.ObjectReadContext;
+import tools.jackson.core.TokenStreamLocation;
 
 /**
  * Where every element of a rule file sits, keyed by JSON Pointer.
@@ -44,11 +43,12 @@ final class SourceIndex {
    */
   static SourceIndex of(final RuleSource source) {
     final Map<String, SourceLocation> found = new HashMap<>();
-    try (JsonParser parser = source.format().factory().createParser(ObjectReadContext.empty(), source.text())) {
+    try (JsonParser parser = source.format().factory()
+        .createParser(ObjectReadContext.empty(), source.text())) {
       if (parser.nextToken() != null) {
         walk(parser, source.name(), "", found);
       }
-    } catch (final IOException | RuntimeException ignored) {
+    } catch (final RuntimeException ignored) {
       // See the note above: the bind pass reports what is actually wrong with this document.
     }
     return new SourceIndex(source.name(), Map.copyOf(found));
@@ -61,10 +61,9 @@ final class SourceIndex {
    * @param file the file name to stamp on locations
    * @param pointer the JSON Pointer of the value being walked
    * @param found the index being built
-   * @throws IOException if the parser fails
    */
   private static void walk(final JsonParser parser, final String file, final String pointer,
-      final Map<String, SourceLocation> found) throws IOException {
+      final Map<String, SourceLocation> found) {
     record(found, pointer, file, parser.currentTokenLocation());
     final JsonToken token = parser.currentToken();
     if (token == JsonToken.START_OBJECT) {

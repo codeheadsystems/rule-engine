@@ -1,8 +1,8 @@
 package com.codeheadsystems.rules.session;
 
-import tools.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.List;
+import tools.jackson.databind.JsonNode;
 
 /**
  * The default sink: collects emissions so they come back as the <em>return value</em> of a fire

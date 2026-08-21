@@ -23,8 +23,8 @@ import com.codeheadsystems.rules.rule.JoinConstraint;
 import com.codeheadsystems.rules.rule.JoinTest;
 import com.codeheadsystems.rules.rule.Literal;
 import com.codeheadsystems.rules.rule.Operator;
-import com.codeheadsystems.rules.rule.PayloadField;
 import com.codeheadsystems.rules.rule.PatternDefinition;
+import com.codeheadsystems.rules.rule.PayloadField;
 import com.codeheadsystems.rules.rule.Quantifier;
 import com.codeheadsystems.rules.rule.RangeConstraint;
 import com.codeheadsystems.rules.rule.RangeTest;
@@ -36,8 +36,6 @@ import com.codeheadsystems.rules.rule.ValueExpr;
 import com.codeheadsystems.rules.schema.SchemaType;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
 import com.codeheadsystems.rules.session.DefaultCompiledRuleSet;
-import tools.jackson.core.JsonPointer;
-import tools.jackson.databind.JsonNode;
 import com.google.re2j.Pattern;
 import com.google.re2j.PatternSyntaxException;
 import java.nio.charset.StandardCharsets;
@@ -53,6 +51,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.JsonNode;
 
 /**
  * Compiles rule definitions into an immutable, shareable rule set (spec section 6.5, Phase 0

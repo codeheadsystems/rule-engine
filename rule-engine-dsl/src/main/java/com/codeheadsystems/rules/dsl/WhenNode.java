@@ -1,9 +1,9 @@
 package com.codeheadsystems.rules.dsl;
 
-import tools.jackson.databind.JsonNode;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import tools.jackson.databind.JsonNode;
 
 /**
  * One {@code when} clause as written in a file (spec §6.2).

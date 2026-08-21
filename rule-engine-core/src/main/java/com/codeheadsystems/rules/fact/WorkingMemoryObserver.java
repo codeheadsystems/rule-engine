@@ -1,7 +1,7 @@
 package com.codeheadsystems.rules.fact;
 
-import tools.jackson.core.JsonPointer;
 import java.util.Set;
+import tools.jackson.core.JsonPointer;
 
 /**
  * The hook working memory calls as facts change, so that the session can maintain everything keyed

@@ -1,5 +1,6 @@
 package com.codeheadsystems.rules.rhs;
 
+import com.codeheadsystems.rules.expr.CompiledExpression;
 import com.codeheadsystems.rules.fact.Fact;
 import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.fact.WorkingMemory;
@@ -8,7 +9,6 @@ import com.codeheadsystems.rules.match.Activation;
 import com.codeheadsystems.rules.rule.ActionDefinition;
 import com.codeheadsystems.rules.rule.CallFunction;
 import com.codeheadsystems.rules.rule.Emit;
-import com.codeheadsystems.rules.expr.CompiledExpression;
 import com.codeheadsystems.rules.rule.ExpressionValue;
 import com.codeheadsystems.rules.rule.FieldRef;
 import com.codeheadsystems.rules.rule.InsertFact;
@@ -20,10 +20,6 @@ import com.codeheadsystems.rules.rule.ValueExpr;
 import com.codeheadsystems.rules.session.EmitContext;
 import com.codeheadsystems.rules.session.EmittedEvent;
 import com.codeheadsystems.rules.session.EventSink;
-import tools.jackson.core.JsonPointer;
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.node.JsonNodeFactory;
-import tools.jackson.databind.node.ObjectNode;
 import java.io.Serial;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -34,6 +30,10 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * Executes one right-hand side: stage everything, then commit (spec §4.6).

@@ -1,7 +1,7 @@
 package com.codeheadsystems.rules.fact;
 
-import tools.jackson.databind.JsonNode;
 import java.util.Objects;
+import tools.jackson.databind.JsonNode;
 
 /**
  * A fact lifted out of a session so it can be replayed into another one (spec §5.6).

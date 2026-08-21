@@ -2,9 +2,9 @@ package com.codeheadsystems.rules.session;
 
 import com.codeheadsystems.rules.network.Network;
 import com.codeheadsystems.rules.report.CompilerReport;
-import com.codeheadsystems.rules.schema.FactSchemas;
 import com.codeheadsystems.rules.rule.CompiledRule;
 import com.codeheadsystems.rules.rule.TestedPaths;
+import com.codeheadsystems.rules.schema.FactSchemas;
 import java.util.List;
 import java.util.Objects;
 

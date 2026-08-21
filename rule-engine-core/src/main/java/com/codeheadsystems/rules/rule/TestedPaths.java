@@ -1,9 +1,9 @@
 package com.codeheadsystems.rules.rule;
 
-import tools.jackson.core.JsonPointer;
-import tools.jackson.databind.JsonNode;
 import java.util.LinkedHashSet;
 import java.util.Set;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.JsonNode;
 
 /**
  * Which payload paths the rule set reads, per fact type and per rule (spec §2.4).

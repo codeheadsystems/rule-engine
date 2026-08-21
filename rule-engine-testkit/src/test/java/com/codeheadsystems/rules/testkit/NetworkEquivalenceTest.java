@@ -92,7 +92,7 @@ class NetworkEquivalenceTest {
       session.fireAllRules();
       session.workingMemory().factsOfType("Order").toList()
           .forEach(fact -> {
-            if (fact.payload().path("id").intValue() % 2 == 0) {
+            if (fact.payload().path("id").intValue(-1) % 2 == 0) {
               session.retract(fact.handle());
             }
           });
@@ -111,10 +111,10 @@ class NetworkEquivalenceTest {
       session.fireAllRules();
       session.workingMemory().factsOfType("Order").toList().forEach(fact -> {
         final var moved = Facts.obj(
-            "id", fact.payload().path("id").intValue(),
+            "id", fact.payload().path("id").intValue(-1),
             "status", "PENDING",
             "total", 25_000,
-            "customerId", (fact.payload().path("customerId").intValue() + 1) % 4,
+            "customerId", (fact.payload().path("customerId").intValue(-1) + 1) % 4,
             "region", "US",
             "code", "A1");
         session.update(fact.handle(), moved);
@@ -130,7 +130,7 @@ class NetworkEquivalenceTest {
       session.fireAllRules();
       session.workingMemory().factsOfType("Order").toList().forEach(fact ->
           session.update(fact.handle(), Facts.obj(
-              "id", fact.payload().path("id").intValue(), "status", "SHIPPED")));
+              "id", fact.payload().path("id").intValue(-1), "status", "SHIPPED")));
     });
   }
 
@@ -445,7 +445,7 @@ class NetworkEquivalenceTest {
           if (!orders.isEmpty()) {
             final var target = orders.get(random.nextInt(orders.size()));
             session.update(target.handle(), Facts.obj(
-                "id", target.payload().path("id").intValue(),
+                "id", target.payload().path("id").intValue(-1),
                 "status", random.nextBoolean() ? "PENDING" : "SHIPPED",
                 "total", random.nextInt(30_000),
                 "customerId", random.nextInt(4),

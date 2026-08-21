@@ -5,7 +5,6 @@ import com.codeheadsystems.rules.expr.ExpressionBindings;
 import com.codeheadsystems.rules.expr.ExpressionCompilationException;
 import com.codeheadsystems.rules.expr.ExpressionCompiler;
 import com.codeheadsystems.rules.expr.ExpressionEvaluationException;
-import tools.jackson.databind.JsonNode;
 import dev.cel.common.CelAbstractSyntaxTree;
 import dev.cel.common.CelOptions;
 import dev.cel.common.CelValidationException;
@@ -24,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import tools.jackson.databind.JsonNode;
 
 /**
  * §6.4's escape hatch, compiled with CEL.

@@ -1,8 +1,8 @@
 package com.codeheadsystems.rules.network;
 
-import tools.jackson.core.JsonPointer;
 import java.util.List;
 import java.util.Objects;
+import tools.jackson.core.JsonPointer;
 
 /**
  * Which of a pattern's paths get indexed, and how (spec §3.3).

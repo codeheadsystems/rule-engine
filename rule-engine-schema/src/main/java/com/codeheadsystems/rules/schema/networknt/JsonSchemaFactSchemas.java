@@ -3,7 +3,6 @@ package com.codeheadsystems.rules.schema.networknt;
 import com.codeheadsystems.rules.schema.FactSchemas;
 import com.codeheadsystems.rules.schema.Presence;
 import com.codeheadsystems.rules.schema.SchemaType;
-import tools.jackson.databind.JsonNode;
 import com.networknt.schema.Error;
 import com.networknt.schema.Schema;
 import com.networknt.schema.SpecificationVersion;
@@ -13,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import tools.jackson.databind.JsonNode;
 
 /**
  * Fact-payload schemas read from JSON Schema documents (spec §2.3).

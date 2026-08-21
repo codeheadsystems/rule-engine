@@ -1,9 +1,9 @@
 package com.codeheadsystems.rules.rule;
 
 import com.codeheadsystems.rules.access.FieldAccessor;
-import tools.jackson.databind.JsonNode;
 import com.google.re2j.Pattern;
 import java.util.Objects;
+import tools.jackson.databind.JsonNode;
 
 /**
  * A compiled {@link Operator#MATCHES} constraint (spec §2.6.3).

@@ -3,8 +3,6 @@ package com.codeheadsystems.rules.fact;
 import com.codeheadsystems.rules.rule.TestedPaths;
 import com.codeheadsystems.rules.schema.FactSchemas;
 import com.codeheadsystems.rules.schema.SchemaViolationException;
-import tools.jackson.core.JsonPointer;
-import tools.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -18,6 +16,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
+import tools.jackson.core.JsonPointer;
+import tools.jackson.databind.JsonNode;
 
 /**
  * The single-writer working memory (spec §2.4), implementing §3.4.1's update algorithm.

@@ -2,9 +2,9 @@ package com.codeheadsystems.rules.rule;
 
 import com.codeheadsystems.rules.access.JsonPointerAccessor;
 import com.codeheadsystems.rules.value.Comparisons;
+import java.util.Objects;
 import tools.jackson.core.JsonPointer;
 import tools.jackson.databind.JsonNode;
-import java.util.Objects;
 
 /**
  * A compiled cross-fact test (spec §3.2.1's {@code JoinNode.postFilter}, without the network).

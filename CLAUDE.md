@@ -77,13 +77,21 @@ publish this would break every consumer at once with no gradual path.
 **The trap when touching Jackson code here.** Jackson 3 made the typed accessors *strict*.
 `stringValue()`, `intValue()`, `longValue()`, `doubleValue()`, `booleanValue()` and
 `decimalValue()` now **throw** on a type mismatch where Jackson 2's `textValue()`/`intValue()`
-returned `null`/`0`/`false`. Most of those kept their names, so the compiler says nothing — a
+returned `null`/`0`/`false` — and so does the coercing `asX()` family (`asString()`, `asBoolean()`,
+`asInt()`, `asDouble()`, `asDecimal()`), which is easy to miss because coercion sounds total.
+`Comparisons` calls `asBoolean()` on the matching hot path; it is safe only because the compiler
+rejects a non-boolean `HAS_FIELD`/`IS_NULL` literal *and* forbids both as join operators. Most of those kept their names, so the compiler says nothing — a
 missing type guard is a runtime throw on the matching path, not a wrong answer. Every call site in
 main source is guarded (`isString()`, `isNumber()`, or a compile-time rejection), and it must stay
 that way. Where Jackson 2's null-returning behaviour is what you want, the one-argument form
 (`stringValue(null)`) is the equivalent. `asString()` throws on objects and arrays too, where
 `asText()` returned `""` — that one bit `RuleFileReader`'s `apiVersion` diagnostic, on untrusted
 input; see `RuleFilesTest.ApiVersionShape`.
+
+**Container `EQ` no longer delegates to `JsonNode.equals`** — see the §2.6.1 amendment. Jackson 3's
+`DecimalNode` equality is scale-sensitive where Jackson 2's was not, which made `100.00` and `100.0`
+unequal *inside* a container while `Canonical` kept them equal as scalars. `Comparisons` walks
+containers itself now, comparing numbers through `Canonical` at every depth.
 
 **Rule-set version hashes did not move.** `RuleCompiler.version()` hashes a canonical string built
 from `rule.when()`/`rule.then()`, whose records render their `JsonNode`s via `toString()` — and

@@ -1,9 +1,10 @@
 package com.codeheadsystems.rules.value;
 
 import com.codeheadsystems.rules.rule.Operator;
-import tools.jackson.databind.JsonNode;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
+import tools.jackson.databind.JsonNode;
 
 /**
  * The normative implementation of §2.6.1's comparison table.
@@ -110,7 +111,74 @@ public final class Comparisons {
       // One side is a scalar and the other is a container: a cross-class comparison, hence false.
       return false;
     }
-    return sameContainerKind(actual, literal) && actual.equals(literal);
+    return sameContainerKind(actual, literal) && structurallyEqual(actual, literal);
+  }
+
+  /**
+   * Structural equality over two containers, with numbers compared the way §2.6.1 compares them
+   * everywhere else.
+   *
+   * <p><strong>Not {@code JsonNode.equals}, and the difference is a defect this replaced.</strong>
+   * Jackson 2's {@code DecimalNode.equals} compared with {@code BigDecimal.compareTo}, which ignores
+   * scale; Jackson 3's uses {@code BigDecimal.equals}, which does not. Delegating to Jackson
+   * therefore made {@code 100.00} and {@code 100.0} unequal <em>inside a container</em> while
+   * {@link Canonical} kept them equal as scalars -- the same two numbers answering differently
+   * depending on nesting, which is precisely the kind of silently-wrong match §2.6.1 exists to
+   * prevent. Money written at two scales is the everyday way to hit it.
+   *
+   * <p>§2.6.1 originally read "{@code EQ} on two object/array values is Jackson's structural
+   * equals". That sentence was true of Jackson 2 and stayed literally true of Jackson 3 while
+   * meaning something else, so the spec is amended rather than the code bent to it: the engine has
+   * one definition of numeric equality and applies it at every depth. The rest of the container
+   * contract is unchanged -- object key order does not matter, array element order does.
+   *
+   * <p>Only container {@code EQ} pays for this walk, and {@code JsonNode.equals} was already a deep
+   * walk, so the cost is a comparison per leaf rather than an extra traversal.
+   *
+   * @param left one container
+   * @param right the other, already known to be the same kind
+   * @return whether they are equal under §2.6.1
+   */
+  private static boolean structurallyEqual(final JsonNode left, final JsonNode right) {
+    if (left.size() != right.size()) {
+      return false;
+    }
+    if (left.isArray()) {
+      for (int index = 0; index < left.size(); index++) {
+        if (!nodesEqual(left.get(index), right.get(index))) {
+          return false;
+        }
+      }
+      return true;
+    }
+    for (final Map.Entry<String, JsonNode> field : left.properties()) {
+      final JsonNode other = right.get(field.getKey());
+      if (other == null || !nodesEqual(field.getValue(), other)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Equality for one pair of nodes at any depth: canonical for numbers, recursive for containers.
+   *
+   * @param left one value
+   * @param right the other
+   * @return whether they are equal
+   */
+  private static boolean nodesEqual(final JsonNode left, final JsonNode right) {
+    if (left.isNumber() && right.isNumber()) {
+      // Canonical.compare returns empty for a value BigDecimal cannot represent -- a non-finite
+      // double built in Java. Those compare unequal rather than throwing, matching what the scalar
+      // path does with them.
+      final OptionalInt sign = Canonical.compare(left, right);
+      return sign.isPresent() && sign.getAsInt() == 0;
+    }
+    if (sameContainerKind(left, right)) {
+      return structurallyEqual(left, right);
+    }
+    return !left.isContainer() && !right.isContainer() && left.equals(right);
   }
 
   /**

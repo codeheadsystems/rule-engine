@@ -1,10 +1,6 @@
 package com.codeheadsystems.rules.cel;
 
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.node.ArrayNode;
-import tools.jackson.databind.node.JsonNodeFactory;
 import com.codeheadsystems.rules.expr.ExpressionEvaluationException;
-import tools.jackson.databind.node.ObjectNode;
 import com.google.common.primitives.UnsignedLong;
 import com.google.protobuf.NullValue;
 import java.math.BigDecimal;
@@ -12,6 +8,10 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * Moves values between the engine's JSON model and CEL's.
@@ -82,7 +82,16 @@ final class JsonValues {
       node.properties().forEach(field -> fields.put(field.getKey(), toCel(field.getValue())));
       return fields;
     }
-    return node.asString();
+    /*
+     * asString(default), not asString(). What reaches here is a BinaryNode (base64, fine) or a
+     * POJONode -- and Jackson 3's POJONode.asString() THROWS for any non-String payload where
+     * Jackson 2's asText() returned String.valueOf(pojo). A POJONode enters a payload through
+     * ObjectNode.putPOJO, which is public Jackson API and insert(String, JsonNode) accepts, so this
+     * is reachable without doing anything exotic -- and it lands on the MATCHING path, because a
+     * pattern condition: is evaluated in RecomputingAgenda. Throwing out of a fire cycle for a
+     * payload Jackson 2 rendered happily is not an acceptable way to find out.
+     */
+    return node.asString(node.toString());
   }
 
   /**

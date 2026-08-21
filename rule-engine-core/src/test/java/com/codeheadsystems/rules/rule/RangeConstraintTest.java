@@ -3,10 +3,10 @@ package com.codeheadsystems.rules.rule;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import tools.jackson.databind.node.IntNode;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.node.IntNode;
 
 /**
  * {@link RangeConstraint}'s canonical form (spec §2.5, §6.2.1).
