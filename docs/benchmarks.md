@@ -878,15 +878,24 @@ One op is 50 updates; the table is per update.
 
 | matcher | patterns | rules | one path | every path | one/every | vs 1 rule |
 |---|---|---|---|---|---|---|
-| TREAT | 1 | 1 | 227ns | 227ns | 1.00 | 1.0x |
-| TREAT | 1 | 8 | 742ns | 991ns | 0.75 | 3.3x |
-| TREAT | 1 | 64 | 5 911ns | 11 556ns | 0.51 | 26.0x |
-| TREAT | 2 | 1 | 386ns | 394ns | 0.98 | 1.0x |
-| TREAT | 2 | 8 | 2 729ns | 2 967ns | 0.92 | 7.1x |
-| TREAT | 2 | 64 | 19 460ns | 24 604ns | 0.79 | 50.4x |
-| Rete | 1 | 64 | 27 889ns | 33 991ns | 0.82 | 43.6x |
-| Rete | 2 | 8 | 24 197ns | 25 400ns | 0.95 | 7.6x |
-| Rete | 2 | 64 | 259 789ns | 284 912ns | 0.91 | 81.8x |
+| TREAT | 1 | 1 | 230ns | 228ns | 1.01 | 1.0x |
+| TREAT | 1 | 8 | 759ns | 987ns | 0.77 | 3.3x |
+| TREAT | 1 | 64 | 5 800ns | 11 640ns | 0.50 | 25.2x |
+| TREAT | 2 | 1 | 407ns | 416ns | 0.98 | 1.0x |
+| TREAT | 2 | 8 | 2 610ns | 2 714ns | 0.96 | 6.4x |
+| TREAT | 2 | 64 | 19 406ns | 24 155ns | 0.80 | 47.6x |
+| Rete | 1 | 1 | 412ns | 415ns | 0.99 | 1.0x |
+| Rete | 1 | 8 | 2 624ns | 2 902ns | 0.90 | 6.4x |
+| Rete | 1 | 64 | 20 315ns | 29 136ns | 0.70 | 49.3x |
+| Rete | 2 | 1 | 3 297ns | 3 199ns | 1.03 | 1.0x |
+| Rete | 2 | 8 | 25 117ns | 25 069ns | 1.00 | 7.6x |
+| Rete | 2 | 64 | 274 150ns | 273 177ns | 1.00 | 83.2x |
+
+**Every cell above is from one run of one build**, which is worth saying because an earlier version of
+this table was not: it carried a post-change figure for one arm beside a pre-change figure for the
+other and derived a ratio from the pair. The two arms traverse the same propagation path and differ
+only in payload contents, so a change to that path moves both, and a table that updates one column
+is comparing two engines.
 
 Raw JMH output, with error bars, is in the run log; every score above sits inside 12% relative error
 except `everyTestedPathChanges` at 64/TREAT/1 (20%) and 64/Rete/2 (9%). Where an update spends, at
@@ -902,9 +911,9 @@ except `everyTestedPathChanges` at 64/TREAT/1 (20%) and 64/Rete/2 (9%). Where an
 
 ## What they say
 
-**Update cost is linear in the number of rules on the hot type.** 227ns → 742ns → 5 911ns for 1, 8
-and 64 single-pattern rules; 64x the rules costs 26x. With joins and the streaming matcher it is 82x
-across the same range. The fact is retracted from and re-asserted into every pattern memory of every
+**Update cost is linear in the number of rules on the hot type.** 230ns → 759ns → 5 800ns for 1, 8
+and 64 single-pattern rules under TREAT; 64x the rules costs 25x. With joins and the streaming
+matcher it is 83x across the same range. The fact is retracted from and re-asserted into every pattern memory of every
 rule that patterns its type, whichever field changed.
 
 **That is exactly what (B) removes.** Differential propagation touches only the patterns whose
@@ -914,9 +923,11 @@ Rete with joins. The profile agrees with the scaling: 22.3% of all samples and 7
 work is memory churn plus re-testing, against 5.1% for the diff that (B) must keep.
 
 **The gate does not save what the broken benchmark suggested.** With state churn present, a
-one-field update costs 0.79 to 0.95 of a whole-fact one at realistic arity — not 0.29. §3.4.1's diff
-decides *whether* to propagate, and once it decides yes the churn is the same either way. The 0.51
-at arity 1 with 64 rules is the most the gate ever recovers here.
+one-field update costs 0.70 to 1.00 of a whole-fact one at realistic arity — not 0.29. §3.4.1's diff
+decides *whether* to propagate, and once it decides yes the churn is the same either way. Under Rete
+with joins it saves **nothing measurable at all** (1.00 at both 8 and 64 rules): the beta memory is
+torn down and re-derived whichever field moved. The 0.50 at arity 1 with 64 rules under TREAT is the
+most the gate ever recovers here, and it is the least realistic column in the table.
 
 **§11.2's precondition is met**, on §11.2's own nominated workload, by a wide margin. That is a
 finding about the measurement, not a decision to build: (B)'s cost is a `dependsOn()` superset
@@ -933,10 +944,44 @@ activation — a permanent, invisible correctness burden that this file cannot p
 - **Whether a cheaper fix gets most of it.** `PatternMemory` is a `TreeSet` and 15.6% of samples are
   its `add`/`remove`; an update that re-asserts an unchanged membership might be made to skip the
   index churn without the full `dependsOn()` machinery. Unexplored.
-- **The `JoinPlan` finding from the broken run still stands** and is independent: `JoinEnumerator`
-  builds a plan per pattern site per insert, including for single-pattern rules with no join. That
-  is part of why the Rete column is so much larger, and it is a local fix with no correctness
-  obligation attached.
+- **A rule set spread across fact types**, again: the linear term is rules on the *hot* type.
+
+## The `JoinPlan` fast path, which came out of this measurement
+
+The profile of the broken run found `JoinEnumerator.enumerate` building a `JoinPlan` per pattern
+site per insert — including for single-pattern rules, which have no join to plan. `ReteAgenda`
+enumerates once per site of the arriving type, so sixty four single-pattern rules on one type built
+sixty four plans per insert, each allocating two lists, two BitSets, an ArrayList, two stream
+pipelines and a `List.copyOf` to describe one trivial step.
+
+For arity one the plan is a constant: bind position zero, no edges (an edge needs another alias to
+point at), no implicit inequalities (they need two patterns of a type). It does not depend on the
+memory sizes either, so it is now a single shared instance — safe because `Step` copies both
+components on the way in and clones the array on the way out.
+
+Rete's update cost, arity one, per update — same benchmark, before and after the fast path:
+
+| rules | before | after | |
+|---|---|---|---|
+| 1 | 640ns | 412ns | −36% |
+| 8 | 3 708ns | 2 624ns | −29% |
+| 64 | 27 889ns | 20 315ns | −27% |
+
+At 64 rules that is 7 573ns per update over 64 plans — about **118ns per plan**, which is what one
+of these costs to build and throw away.
+
+**The two controls are the interesting part.** Two-pattern rules are unchanged — 3 177ns against
+3 297ns at one rule, 259 789ns against 274 150ns at sixty four — because they have a real join and
+still need a real plan. And TREAT is unchanged throughout, because `NetworkAgenda` does not
+enumerate on insert, so nothing in the measured region builds a plan at all. (It does take the fast
+path at fire time, once per dirty single-pattern rule per cycle; no benchmark here measures that
+side.) A change that claimed to remove plan construction for rules with no join should move exactly
+one column, and it does.
+
+It does not change §11.2's case: cost is still linear in rules on the hot type (418ns, 2 557ns,
+20 551ns is 49x across 64x the rules), so differential propagation's floor is still the one-rule
+column. What it does is take Rete's update from 4.7x TREAT's to 3.5x at arity one — a third of that gap,
+not most of it.
 
 ## A note on this file's own history
 

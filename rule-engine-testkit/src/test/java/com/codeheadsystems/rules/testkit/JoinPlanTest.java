@@ -1,6 +1,7 @@
 package com.codeheadsystems.rules.testkit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.codeheadsystems.rules.compiler.RuleCompiler;
 import com.codeheadsystems.rules.network.JoinPlan;
@@ -32,6 +33,45 @@ class JoinPlanTest {
         .then(actions -> actions.emit("hit"))
         .build();
     return RuleCompiler.compile(List.of(rule)).rules().getFirst();
+  }
+
+  @Test
+  @DisplayName("every single-pattern rule gets the same plan object, and nothing can corrupt it")
+  void singlePatternRulesShareOnePlan() {
+    /*
+     * A single-pattern rule's plan is invariant -- a join edge needs another alias to point at, and
+     * the implicit inequality is recorded only against earlier positions -- so it is one shared
+     * instance rather than one per call. That is a static object reachable from every rule in every
+     * session, which is the risk class RuleSetFingerprint exists for, so it is worth pinning both
+     * halves: that it really is shared, and that a caller cannot write through it.
+     */
+    final CompiledRule first = Engine.compile(Rules.rule("a")
+        .when("o", "Order", pattern -> pattern.gt("total", 0))
+        .then(actions -> actions.emit("a"))
+        .build()).rules().get(0);
+    final CompiledRule second = Engine.compile(Rules.rule("b")
+        .when("c", "Customer", pattern -> pattern.eq("tier", "GOLD"))
+        .then(actions -> actions.emit("b"))
+        .build()).rules().get(0);
+
+    final JoinPlan one = JoinPlan.of(first, new int[] {17});
+    final JoinPlan other = JoinPlan.of(second, new int[] {4_000});
+
+    assertThat(one).describedAs("shared, and independent of the memory sizes").isSameAs(other);
+    assertThat(one.steps()).singleElement().satisfies(step -> {
+      assertThat(step.position()).isZero();
+      assertThat(step.edges()).isEmpty();
+      assertThat(step.distinctFrom()).isEmpty();
+    });
+
+    // Nothing here can reach the shared state: the list is immutable and the array is a clone --
+    // and is empty in any case, so there is not even an element to overwrite.
+    final JoinPlan.Step step = one.steps().get(0);
+    assertThatThrownBy(() -> step.edges().add(null))
+        .isInstanceOf(UnsupportedOperationException.class);
+    assertThat(JoinPlan.of(first, new int[] {1}).steps().get(0).distinctFrom())
+        .describedAs("still pristine for the next rule that asks")
+        .isEmpty();
   }
 
   @Test
