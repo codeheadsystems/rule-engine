@@ -271,6 +271,20 @@ public final class ReteAgenda extends RecomputingAgenda {
   /**
    * {@inheritDoc}
    *
+   * <p>The one case where a held match leaves the conflict set without having fired. Keeping it
+   * would let a rule set that rejects most of what it matches drive the conflict set back to the
+   * size of the join memory -- rebuilding and re-evaluating an activation per rejected match on
+   * every cycle, which is exactly what §4.3 removed for the ordinary case. See the base class for
+   * why dropping it loses nothing.
+   */
+  @Override
+  protected void onRejected(final Activation activation) {
+    pendingByRule.get(indexOf(activation.rule())).remove(activation.tuple());
+  }
+
+  /**
+   * {@inheritDoc}
+   *
    * <p>§4.3's {@code deactivate}. A held match that has fired is out of the conflict set for good
    * unless something re-derives it -- refraction would suppress it at every selection anyway, so
    * keeping it would be a scan per fire over matches that cannot fire. This is the half of the

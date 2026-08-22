@@ -157,28 +157,25 @@ class CelEngineTest {
     }
 
     @Test
-    @DisplayName("a condition-rejected match stays in the conflict set, and what that costs")
-    void theConflictSetHoldsWhatAConditionRejects() {
+    @DisplayName("a condition-rejected match leaves the conflict set and the join memory keeps it")
+    void theConflictSetDropsWhatAConditionRejects() {
       /*
-       * §4.3's shape holds the matches that have not fired and drops them when they do, so a
-       * streaming session's conflict set sits near zero however large its join memory grows. A
-       * condition breaks that, and this test exists to make the exception deliberate rather than a
-       * surprise found later.
+       * §4.3's shape holds the matches that have not fired; a condition rejects matches that will
+       * never fire, so keeping them would drive the conflict set back to the size of the join
+       * memory -- rebuilding and re-evaluating an activation per rejected match on every cycle,
+       * which is the cost §4.3 removed for the ordinary case. It did exactly that until the
+       * post-filter learned to report a rejection.
        *
-       * Conditions are applied in RecomputingAgenda.postFilter, on the list matchesOf has already
-       * returned -- the shared base, which is what makes every matcher apply them identically. The
-       * post-filter drops a rejected match from that list and knows nothing about the pending set it
-       * came from, so a match the condition rejects is rebuilt into an activation, re-evaluated and
-       * discarded on every fire cycle the rule is dirty for. For a rule set that rejects most of what
-       * it matches, the conflict set converges on a copy of the join memory and §4.3's win is lost.
+       * Dropping is lossless, and the argument is two facts about the compiler rather than an
+       * intuition. CelExpressions binds only the tuple's aliases and the environment has no clock,
+       * so a condition is a pure function of the payloads it reads; and compileCondition records the
+       * whole payload root of every type such an alias binds as a tested path. So anything that
+       * could flip a condition is an effective update, which §3.4.1 performs as a retract and a
+       * re-assert, which destroys the match and derives it again. aConditionThatBecomesTrueStillFires
+       * below is that path end to end.
        *
-       * It is not a correctness defect: the post-filter runs afresh every cycle, so a match whose
-       * condition starts holding fires. Pruning the pending set on rejection would be the structural
-       * fix, and it is deliberately not built. The argument for it -- that §3.4.1 makes a condition's
-       * payload root a tested path, so anything that could flip a condition re-derives the match --
-       * is exactly the kind of subtle, second-order reasoning that memoryHoldsPreFilterMatches above
-       * warns about, and the failure mode if it is wrong anywhere is a firing that silently never
-       * happens. Not worth it without a workload asking.
+       * Note what is NOT dropped: memoryHoldsPreFilterMatches above still holds, and must -- the
+       * join memory is what completes a tuple, and a condition is evaluated against a complete one.
        */
       final RuleDefinition rule = Rules.rule("big-only")
           .when("o", "Order", pattern -> pattern.gt("total", 0)
@@ -195,10 +192,10 @@ class CelEngineTest {
         }
 
         assertThat(session.stats().pendingMatchCount())
-            .describedAs("every rejected match is still held and re-evaluated on every cycle")
-            .isEqualTo(20);
+            .describedAs("nothing the condition rejected is still waiting to fire")
+            .isZero();
         assertThat(session.stats().materialisedMatchCount())
-            .describedAs("so the conflict set has converged on the join memory")
+            .describedAs("but the join memory holds them, because a condition needs a whole tuple")
             .isEqualTo(20);
       }
     }
@@ -220,6 +217,24 @@ class CelEngineTest {
         session.update(order, Facts.obj("id", 1, "total", 5_000));
         session.fireAllRules();
       }, SessionOptions.builder(), withCel());
+
+      // And the same path with the conflict set watched, since that is what the drop is about: the
+      // rejected match is gone, the update re-derives it, and it is offered again.
+      final CompiledRuleSet rules = RuleCompiler.compile(List.of(rule), withCel());
+      try (RuleSession session = rules.newSession(
+          SessionOptions.builder().matching(MatchingStrategy.RETE).build())) {
+        final FactHandle order = session.insert("Order", Facts.obj("id", 1, "total", 10));
+        session.fireAllRules();
+        assertThat(session.stats().pendingMatchCount())
+            .describedAs("rejected, so dropped").isZero();
+
+        session.update(order, Facts.obj("id", 1, "total", 5_000));
+
+        assertThat(session.stats().pendingMatchCount())
+            .describedAs("re-derived by the update, and now the condition holds")
+            .isEqualTo(1);
+        assertThat(session.fireAllRules().firedCount()).isEqualTo(1);
+      }
     }
   }
 

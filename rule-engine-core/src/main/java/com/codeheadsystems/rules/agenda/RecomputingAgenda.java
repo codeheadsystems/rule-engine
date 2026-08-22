@@ -185,6 +185,35 @@ public abstract class RecomputingAgenda implements Agenda {
   }
 
   /**
+   * Reports that a §6.4 condition rejected a match.
+   *
+   * <p>Default no-op, for the same reason as {@link #onConsumed}: a shape that rebuilds its conflict
+   * set will simply not produce the match next time if the condition still rejects it, and will
+   * produce it if the condition has started holding. A shape that <em>holds</em> its matches would
+   * otherwise keep this one forever -- never firing it, and rebuilding and re-evaluating it on every
+   * cycle -- so its conflict set drifts toward a copy of the whole join memory, which is the cost
+   * §4.3 exists to remove.
+   *
+   * <p><strong>Dropping a rejected match is lossless, and the argument is two facts about the
+   * compiler rather than an intuition about conditions.</strong> A condition is a pure function of
+   * the payloads of the aliases it reads: {@code CelExpressions} binds only the tuple's aliases, and
+   * the standard environment has no clock. And {@code RuleCompiler.compileCondition} records the
+   * whole payload <em>root</em> of every fact type such an alias binds as a tested path. So anything
+   * that could change a condition's answer is a change to a payload at a tested path -- an effective
+   * update, which §3.4.1 implements as a retract and a re-assert, which destroys the match and
+   * derives it again. A shape that dropped it gets it back.
+   *
+   * <p>Note what is <em>not</em> being claimed: the join memory still holds matches a condition
+   * rejects, and must, because a condition is evaluated against a complete tuple and the memory is
+   * what completes it. This is about the conflict set only.
+   *
+   * @param activation the match a condition rejected
+   */
+  protected void onRejected(final Activation activation) {
+    // Nothing to do for a recomputing shape; see the contract above.
+  }
+
+  /**
    * Reports that an activation has been selected and will fire.
    *
    * <p>Called from {@link #nextToFire()} immediately after refraction records it and before the
@@ -359,6 +388,8 @@ public abstract class RecomputingAgenda implements Agenda {
     for (final Activation activation : matches) {
       if (holdsFor(rule, activation)) {
         surviving.add(activation);
+      } else {
+        onRejected(activation);
       }
     }
     return surviving;
