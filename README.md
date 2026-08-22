@@ -61,9 +61,11 @@ scaling curve is measured rather than asserted — see `docs/benchmarks.md`.
 joins as facts arrive instead of recomputing them per fire cycle, for long-lived streaming sessions.
 It is held to the same oracle as the other two — every differential scenario in the suite runs under
 all three. Expect a constant-factor win on a streaming insert-and-fire loop rather than a better
-curve: the join is amortised, the per-fire conflict-set rebuild is not yet. Still to come in the
-phase: differential propagation (§11.2), `fireUntilHalt` and a hardened `SessionActor` (§5.4), and
-session fact-eviction (§4.4), which a streaming session that never retracts needs.
+curve: the join is amortised, the per-fire conflict-set rebuild is not yet. `SessionActor` (§5.4) makes such a session genuinely long-lived: one worker thread owns it, many
+producers feed a bounded inbox, and firing until halt is what the actor does rather than a method
+you call — a blocking fire loop plus inserts from another thread would be a data race. Still to come
+in the phase: differential propagation (§11.2), the Rete agenda shape (§4.3), and session
+fact-eviction (§4.4), which a streaming session that never retracts needs.
 
 **What does not exist:** negation, accumulation, truth maintenance and CEP, which are §1 non-goals
 with documented interim answers.

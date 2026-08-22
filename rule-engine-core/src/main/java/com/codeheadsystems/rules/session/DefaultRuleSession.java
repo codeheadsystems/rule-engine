@@ -48,7 +48,14 @@ public final class DefaultRuleSession implements RuleSession {
   private final RhsExecutor rhs;
 
   private volatile boolean halted;
-  private boolean failed;
+
+  /**
+   * Volatile to match {@code halted}, because {@link #failed()} is published on {@code RuleSession}
+   * and a published accessor invites a read from a monitoring thread. Every shipped caller is the
+   * session's own owner, which also does the write, so this buys nothing today -- and costs nothing
+   * either, on a field written once per session at most.
+   */
+  private volatile boolean failed;
   private boolean closed;
 
   /**
@@ -200,6 +207,11 @@ public final class DefaultRuleSession implements RuleSession {
       }
     }
     return result(fired, why, agenda.size(), startedAt);
+  }
+
+  @Override
+  public boolean failed() {
+    return failed;
   }
 
   @Override

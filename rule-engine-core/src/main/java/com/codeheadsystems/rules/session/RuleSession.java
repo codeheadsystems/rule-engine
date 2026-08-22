@@ -157,6 +157,35 @@ public interface RuleSession extends AutoCloseable {
   boolean halted();
 
   /**
+   * Whether a rule action has failed this session past the point of use.
+   *
+   * <p>Distinct from {@link #halted()}, and the difference is whether anything can be done about
+   * it. A halted session was stopped deliberately and still holds valid state; a failed one threw
+   * out of a right-hand side under the {@code RETHROW} policy (§4.6) and rejects every subsequent
+   * operation, permanently. A limit breach is <em>not</em> a failure -- §4.7 keeps those separate
+   * on purpose, because the work already done is still good.
+   *
+   * <p>Exists because a long-lived session can outlive the caller that started it.
+   * {@code SessionActor} holds one for as long as the process wants it and has no other way to tell
+   * "this batch failed and the next may not" from "this session will never work again" -- and
+   * without the distinction a health check reports a running worker on a session that can never
+   * fire.
+   *
+   * <p><strong>Not a cross-thread call.</strong> {@link #halt()} is the only method §5.1 permits
+   * from another thread; this one reads ordinary session state and is for whoever owns the session
+   * -- which, under {@code SessionActor}, is its worker.
+   *
+   * <p>Abstract rather than {@code default}, unlike {@link #exportFacts()} above it, and
+   * deliberately: a decorator that inherited "not failed" would report a healthy session it knows
+   * nothing about, and this is exactly the question whose wrong answer keeps a dead session in
+   * service.
+   *
+   * @return whether a rule action has failed this session; false for a session that is merely
+   *     closed, which is unusable for a different reason
+   */
+  boolean failed();
+
+  /**
    * Stops a running fire loop.
    *
    * <p><strong>This is the only method on a session that may be called from another thread.</strong>
