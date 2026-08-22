@@ -843,6 +843,101 @@ commit it was 2.1x.
   per-fire cost, and no benchmark here has a condition in it. That is the first workload to measure
   if this shape ever looks slower than these numbers promise.
 
+# §11.2: differential propagation, and a benchmark that had to be thrown away
+
+§11.2 reversed itself once — from (B), differential propagation, to (A'), a gated retract and
+reassert — and named what would reverse it back: *"If profiling on a real rule set shows that cost
+dominating — the honest test is a hot fact type with many mutually-disjoint rules under a high
+update rate — differential propagation goes back in."*
+
+`PropagationBenchmarks` is that test. **The precondition is met.** This section is the measurement,
+and it begins with the version of it that said the opposite.
+
+## The benchmark that measured nothing
+
+The first version built its rules as `eq("watched" + n, "SET")` and wrote payloads whose watched
+fields were only ever `CLEAR` or `OFF`. `Network.insert` files a fact into a pattern memory only when
+`pattern.accepts(evaluation)` — so **no fact ever entered a pattern memory, an index, or a beta
+memory.** Every form of state churn an update performs, and therefore every form (B) exists to skip,
+was zero by construction. What remained on the clock was alpha evaluation and the tested-path diff.
+
+That version reported re-testing at 12.3% of walkable samples against a diff at 12.2%, concluded (B)
+could not be worth its cost, and described the workload as "sized to be maximally favourable to (B)".
+It was close to the one shape where (B) has nothing to win. The conclusion was recorded, reviewed,
+and withdrawn before it was committed.
+
+The fixed version constrains on `in("watched" + n, "CLEAR", "OFF")`, so the facts match, the memories
+and indexes fill, and a `patternsPerRule` parameter adds join tuples for an update to tear down and
+re-derive. Two arms as before: `oneTestedPathChanges` (one field differs — (B)'s case) and
+`everyTestedPathChanges` (all of them — the control, where re-testing everything is correct work).
+
+## Results
+
+Quiesced machine, no JVMs resident. JMH 1.36, JDK 25, `-f 1 -wi 3 -i 3 -w 2s -r 2s -prof gc`.
+One op is 50 updates; the table is per update.
+
+| matcher | patterns | rules | one path | every path | one/every | vs 1 rule |
+|---|---|---|---|---|---|---|
+| TREAT | 1 | 1 | 227ns | 227ns | 1.00 | 1.0x |
+| TREAT | 1 | 8 | 742ns | 991ns | 0.75 | 3.3x |
+| TREAT | 1 | 64 | 5 911ns | 11 556ns | 0.51 | 26.0x |
+| TREAT | 2 | 1 | 386ns | 394ns | 0.98 | 1.0x |
+| TREAT | 2 | 8 | 2 729ns | 2 967ns | 0.92 | 7.1x |
+| TREAT | 2 | 64 | 19 460ns | 24 604ns | 0.79 | 50.4x |
+| Rete | 1 | 64 | 27 889ns | 33 991ns | 0.82 | 43.6x |
+| Rete | 2 | 8 | 24 197ns | 25 400ns | 0.95 | 7.6x |
+| Rete | 2 | 64 | 259 789ns | 284 912ns | 0.91 | 81.8x |
+
+Raw JMH output, with error bars, is in the run log; every score above sits inside 12% relative error
+except `everyTestedPathChanges` at 64/TREAT/1 (20%) and 64/Rete/2 (9%). Where an update spends, at
+64 rules, arity 1, TREAT, one path changed (sampling profiler, 33% of samples unwalkable):
+
+```
+ 8.5%  PatternMemory.remove <- Network.retract        removable by (B)
+ 7.1%  PatternMemory.add    <- Network.insert         removable by (B)
+ 6.7%  AlphaNode.test <- FieldTest.test               removable by (B)
+ 5.1%  PathTrie.walk <- changedTestedPaths            NOT removable — (B) needs the diff too
+ 1.2%  RefractionMemory.invalidateFor                 not removable
+```
+
+## What they say
+
+**Update cost is linear in the number of rules on the hot type.** 227ns → 742ns → 5 911ns for 1, 8
+and 64 single-pattern rules; 64x the rules costs 26x. With joins and the streaming matcher it is 82x
+across the same range. The fact is retracted from and re-asserted into every pattern memory of every
+rule that patterns its type, whichever field changed.
+
+**That is exactly what (B) removes.** Differential propagation touches only the patterns whose
+constraints read a changed path — one rule here, not sixty four. Its floor is therefore the 1-rule
+column plus the diff: roughly 227ns against 5 911ns at arity 1, and 3 177ns against 259 789ns under
+Rete with joins. The profile agrees with the scaling: 22.3% of all samples and 78% of *identified*
+work is memory churn plus re-testing, against 5.1% for the diff that (B) must keep.
+
+**The gate does not save what the broken benchmark suggested.** With state churn present, a
+one-field update costs 0.79 to 0.95 of a whole-fact one at realistic arity — not 0.29. §3.4.1's diff
+decides *whether* to propagate, and once it decides yes the churn is the same either way. The 0.51
+at arity 1 with 64 rules is the most the gate ever recovers here.
+
+**§11.2's precondition is met**, on §11.2's own nominated workload, by a wide margin. That is a
+finding about the measurement, not a decision to build: (B)'s cost is a `dependsOn()` superset
+obligation on every node, where over-declaring loses performance and under-declaring loses an
+activation — a permanent, invisible correctness burden that this file cannot price.
+
+## What this still does not measure
+
+- **A rule set spread across fact types**, which dilutes the effect: the linear term is rules *on
+  the hot type*, so a realistic set moves the finding down. How far is unmeasured.
+- **What (B) would actually cost to run**, as opposed to what (A') costs now. The floor quoted above
+  is the 1-rule column, which assumes (B) adds nothing per unaffected pattern. Its own bookkeeping
+  is unmeasured because it does not exist.
+- **Whether a cheaper fix gets most of it.** `PatternMemory` is a `TreeSet` and 15.6% of samples are
+  its `add`/`remove`; an update that re-asserts an unchanged membership might be made to skip the
+  index churn without the full `dependsOn()` machinery. Unexplored.
+- **The `JoinPlan` finding from the broken run still stands** and is independent: `JoinEnumerator`
+  builds a plan per pattern site per insert, including for single-pattern rules with no join. That
+  is part of why the Rete column is so much larger, and it is a local fix with no correctness
+  obligation attached.
+
 ## A note on this file's own history
 
 Three versions of the join benchmark: the first measured right-hand sides, the second measured

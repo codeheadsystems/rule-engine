@@ -126,8 +126,13 @@ found. Keeping the divergence-capable code in one place is what makes the two ma
   `BetaMemory`, instead of recomputed per fire. Selected with `MatchingStrategy.RETE`, for
   long-lived streaming sessions. Shares the join walk with `NetworkAgenda` via `JoinEnumerator` —
   a pinned position makes the incremental result a subset of the full one *by construction*, which
-  is what §9's "TREAT and Rete produce identical firing sequences" rests on. It is a constant-factor
-  win, not a better curve, until §11.2's differential propagation lands.
+  is what §9's "TREAT and Rete produce identical firing sequences" rests on. Its conflict set is
+  **pushed and pulled** rather than rebuilt (§4.3): a match enters when derived, leaves when it
+  fires, and a fire cycle ranks what is waiting rather than everything held. That is what makes it a
+  better curve and not merely a constant — the fire cycle stopped growing with the working set — and
+  it is why `pendingByRule` must never be allowed to hold a match that has fired. A §6.4 `condition`
+  is the exception: rejected matches are never fired, so they are never pulled, and the set drifts
+  toward the join memory. See `docs/benchmarks.md`.
 - **`NetworkAgenda`** (`network/`, Phases 1–2) — the default. `EntryNode` (per fact type) →
   shared `AlphaNode`s (one per *distinct* constraint) → `PatternNode` + its `PatternMemory` →
   indexed joins ordered per fire cycle by `JoinPlan` (smallest memory first, connected before

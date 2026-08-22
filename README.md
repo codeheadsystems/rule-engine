@@ -60,8 +60,9 @@ scaling curve is measured rather than asserted — see `docs/benchmarks.md`.
 **Phase 3 has started.** `SessionOptions.matching(RETE)` selects a third matcher that materialises
 joins as facts arrive instead of recomputing them per fire cycle, for long-lived streaming sessions.
 It is held to the same oracle as the other two — every differential scenario in the suite runs under
-all three. Expect a constant-factor win on a streaming insert-and-fire loop rather than a better
-curve: the join is amortised, the per-fire conflict-set rebuild is not yet. `SessionActor` (§5.4) makes such a session genuinely long-lived: one worker thread owns it, many
+all three. Both halves of a streaming session's cost are now amortised: the join as facts arrive,
+and — since §4.3 — the fire cycle, which ranks the matches waiting to fire rather than every match
+held. `SessionActor` (§5.4) makes such a session genuinely long-lived: one worker thread owns it, many
 producers feed a bounded inbox, and firing until halt is what the actor does rather than a method
 you call — a blocking fire loop plus inserts from another thread would be a data race.
 
@@ -86,8 +87,19 @@ growing with the working set: 0.77µs, 1.02µs, 1.12µs across a sixteenfold ran
 [`docs/benchmarks.md`](docs/benchmarks.md) for both columns, the profile that decided the scope, and
 what it still does not show.
 
-Still to come in the phase: differential propagation (§11.2), which §11.2 itself says to build only
-if profiling shows constraint re-testing dominating.
+**Phase 3's deliverables are all built.** Its last item, §11.2's differential propagation, is
+measured but not decided: §11.2 says to build it only if profiling shows constraint re-testing
+dominating, and on the workload §11.2 itself names — a hot fact type, up to sixty four
+mutually-disjoint rules, one field changing — **it does.** Update cost is linear in the number of
+rules patterning the hot type (227ns, 742ns, 5 911ns per update at 1, 8, 64 rules), because the fact
+is retracted from and re-asserted into every one of their pattern memories whichever field changed.
+Differential propagation touches only the patterns reading a changed path, so its floor is the
+one-rule column: 26x at single-pattern rules, 82x under the streaming matcher with joins.
+
+What that does not settle is whether it is worth its price — a `dependsOn()` obligation on every
+node where under-declaring silently loses a firing — or whether a narrower fix gets most of it, since
+15% of the cost is index churn re-inserting memberships that did not change. See
+[`docs/benchmarks.md`](docs/benchmarks.md).
 
 **What does not exist:** negation, accumulation, truth maintenance and CEP, which are §1 non-goals
 with documented interim answers.

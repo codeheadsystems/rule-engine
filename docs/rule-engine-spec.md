@@ -1787,6 +1787,18 @@ Build **TREAT-style joins** (§3.1) as the v1 default, targeting one-shot/batch 
 
 **One thing that did *not* change: tuples still bind handles, never facts** (invariant 3, §3.2.2). Under (B) that was a hard structural precondition — leaving a token untouched is the entire point, and a token carrying a payload would serve pre-update data. Under (A′) every token is rebuilt, so the invariant is no longer load-bearing *for update semantics*. Keep it anyway: it costs nothing, it makes "there is exactly one place a payload lives" structurally true, §3.2.2's worked example is a real bug class the moment anyone hand-optimizes a propagation path, and it is the precondition that keeps (B) available in Phase 3. §0's statement of the invariant has been reworded so it stands on its own rather than on this decision.
 
+> **Amendment (Phase 3, as measured).** The condition this section sets for putting (B) back **is met**, on the workload this section nominates. Whether to build it is open; the measurement is not.
+>
+> `PropagationBenchmarks` is that workload — a hot fact type, up to sixty four mutually-disjoint rules, an update changing exactly one tested path. Update cost is **linear in the number of rules patterning the type**: 227ns, 742ns and 5 911ns per update at 1, 8 and 64 single-pattern rules, and 3 177ns to 259 789ns under the streaming matcher with two-pattern rules. The fact is retracted from and re-asserted into every pattern memory of every rule that patterns its type, whichever field changed — and (B) touches only the patterns reading a changed path, so its floor is the one-rule column. 26x to 82x, depending on arity and matcher. Profiling agrees: 78% of identified work is pattern-memory churn plus alpha re-testing, against 5.1% for the tested-path diff, which (B) needs and keeps.
+>
+> **Two things this section says are not borne out.** The gate recovers much less than assumed: with state churn present a one-field update costs 0.79-0.95 of a whole-fact one at realistic arity, because the diff decides *whether* to propagate and the churn afterwards is identical either way. And "re-tests every constraint on the fact" understates it — the re-testing is 6.7% of samples, while the memory and index maintenance that accompanies it is 15.6%.
+>
+> **What has not changed is (B)'s price**, which this section states and no benchmark can: a `dependsOn()` superset obligation on every node, binding every contributor, invisible in code review, where under-declaring loses an activation that surfaces hours later. The measurement says the prize is real and large. It does not say the obligation is affordable, and that is a scope decision rather than a measured one.
+>
+> **A cheaper partial fix is unexplored and should be, first.** 15.6% of samples are `TreeSet` add and remove inside `PatternMemory`, re-inserting a membership that did not change. Skipping index churn for a pattern whose membership is unaffected may recover a large share of this without the full affected-subgraph machinery.
+>
+> **Recorded also because of how it was nearly recorded wrongly.** The first version of this benchmark constrained on a value its payloads never carried, so no fact ever entered a pattern memory and every form of churn (B) removes was absent. It measured alpha evaluation and the diff alone, reported that re-testing did not dominate, and called that workload maximally favourable to (B). It was the one shape where (B) has nothing to win. See `docs/benchmarks.md`.
+
 ### 11.3 RHS action vocabulary — **Decided: (A) fixed closed set**
 
 | Option | Shape | Pros | Cons |
