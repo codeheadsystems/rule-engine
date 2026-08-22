@@ -263,6 +263,14 @@ concurrently" an extra artifact to discover.
 - **`RuleSetHolder`** — §5.6's hot reload. One volatile field, no locks. Two contracts worth knowing
   before changing it: `publish` takes a *compiled* rule set so a bad rule file cannot take the engine
   out of service, and a swap affects new sessions only.
+- **`SessionEvictor`** (in `session/`, with the policy SPI in `evict/`) — §4.4's fact eviction, which
+  bounds every structure a long-lived session grows because they are all keyed on handles. Two things
+  to know before touching it: an eviction is an ordinary `retract` and must stay one — reaching into
+  the memories by hand makes it a fifth place they are removed from — and **it may only run at
+  quiescence**. The policy is consulted after a caller's insert and at the top of a fire cycle, never
+  between §4.6's staging and commit, where it could retract a fact the firing activation binds. A
+  policy must also be a pure function of what it is shown; strict mode calls it twice and compares,
+  because a clock or a `HashMap` in there is a §7.3 violation that only shows on another host.
 - **`SessionDrain`** — drain-and-restart for a session already running when the rules changed. Two
   things it must keep doing: replay in handle-id order (§7.3's guarantee is stated in terms of
   insertion order) and skip `Origin.DERIVED` facts (the new session re-derives them; replaying would

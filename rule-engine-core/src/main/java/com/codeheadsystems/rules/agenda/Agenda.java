@@ -139,4 +139,33 @@ public interface Agenda {
   default void factRetracted(Fact fact) {
     // Nothing to do for a recomputing shape; see the contract above.
   }
+
+  /**
+   * How many complete matches this agenda is holding between fire cycles.
+   *
+   * <p>Zero for the recomputing shapes, and the default is the honest answer rather than an
+   * unimplemented one: under TREAT nothing is materialised between fires, so there is nothing to
+   * count. Only the Rete shape holds matches, and §9's steady-state criterion for Phase 3 is a
+   * claim about exactly that number.
+   *
+   * @return the held match count; zero when nothing is materialised
+   */
+  default int materialisedMatchCount() {
+    return 0;
+  }
+
+  /**
+   * How many handles this agenda's reverse index still tracks.
+   *
+   * <p>Reported separately from {@link #materialisedMatchCount()} because a leak hides here rather
+   * than there: an index retaining an entry per fact ever inserted grows without bound while the
+   * match count looks healthy. Zero for the recomputing shapes, which keep no such index -- §4.3
+   * declines to maintain one for pending activations, and the beta memory's exists for a different
+   * purpose.
+   *
+   * @return the indexed handle count; zero when no reverse index is held
+   */
+  default int materialisedHandleCount() {
+    return 0;
+  }
 }

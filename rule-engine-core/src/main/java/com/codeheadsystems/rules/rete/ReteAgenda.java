@@ -196,6 +196,38 @@ public final class ReteAgenda extends RecomputingAgenda {
   }
 
   /**
+   * {@inheritDoc}
+   *
+   * <p>Summed across rules rather than held as a counter, because this is a diagnostic read once
+   * per assertion or per health check, and a counter would be one more thing every add and remove
+   * had to keep honest.
+   */
+  @Override
+  public int materialisedMatchCount() {
+    int total = 0;
+    for (final BetaMemory beta : betaByRule) {
+      total += beta.size();
+    }
+    return total;
+  }
+
+  /**
+   * {@inheritDoc}
+   *
+   * <p>Summed across rules, so a handle bound by matches of two rules counts twice. That is the
+   * number a leak shows up in -- the question is whether any index still tracks a fact that is
+   * gone, not how many distinct facts are tracked.
+   */
+  @Override
+  public int materialisedHandleCount() {
+    int total = 0;
+    for (final BetaMemory beta : betaByRule) {
+      total += beta.indexedHandles();
+    }
+    return total;
+  }
+
+  /**
    * The position of a rule in compilation order.
    *
    * @param rule the rule

@@ -63,9 +63,20 @@ It is held to the same oracle as the other two — every differential scenario i
 all three. Expect a constant-factor win on a streaming insert-and-fire loop rather than a better
 curve: the join is amortised, the per-fire conflict-set rebuild is not yet. `SessionActor` (§5.4) makes such a session genuinely long-lived: one worker thread owns it, many
 producers feed a bounded inbox, and firing until halt is what the actor does rather than a method
-you call — a blocking fire loop plus inserts from another thread would be a data race. Still to come
-in the phase: differential propagation (§11.2), the Rete agenda shape (§4.3), and session
-fact-eviction (§4.4), which a streaming session that never retracts needs.
+you call — a blocking fire loop plus inserts from another thread would be a data race.
+
+**Session fact-eviction (§4.4) is what makes a long-lived session survive**, and it is the phase's
+steady-state exit criterion: a streaming session under sustained insert-without-retract load must
+reach a steady heap, not a rising one. `SessionOptions.eviction(...)` takes a policy — a total cap,
+or a cap per fact type so a bounded stream can flow past unbounded reference data — and evicting a
+fact runs the **full retract path**, so working memory, the node memories and their indexes, the
+refraction memory and the beta memory are all bounded by one mechanism rather than four. The policy
+is consulted only between operations, never inside a right-hand side. `RuleSession.stats()` is how
+that steady state is observed, and asserted: two thousand inserts through a `SessionActor` against a
+cap of twenty-five leave twenty-five facts held, with the beta memory, its reverse index and the
+refraction memory flat between the thousandth insert and the two-thousandth.
+
+Still to come in the phase: differential propagation (§11.2) and the Rete agenda shape (§4.3).
 
 **What does not exist:** negation, accumulation, truth maintenance and CEP, which are §1 non-goals
 with documented interim answers.

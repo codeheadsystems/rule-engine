@@ -91,6 +91,22 @@ public interface RuleEngineListener {
   }
 
   /**
+   * A fact was evicted by the session's eviction policy (§4.4).
+   *
+   * <p>Dispatched immediately before the fact is retracted, so {@link #onRetract} follows for the
+   * same fact. Both, rather than one or the other: eviction <em>is</em> a retract -- §4.4 requires
+   * it to run the full retract path -- so a listener that knows only about retracts stays correct,
+   * and one that wants to distinguish "the caller removed this" from "the session let it go" now
+   * can. That distinction is worth having, because a rule that stops matching because its facts
+   * were evicted looks exactly like a rule that never matched.
+   *
+   * @param fact the fact as it was when evicted
+   */
+  default void onEvicted(Fact fact) {
+    // no-op by default
+  }
+
+  /**
    * A complete match was found and became eligible.
    *
    * @param activation the match

@@ -150,6 +150,31 @@ public interface RuleSession extends AutoCloseable {
   }
 
   /**
+   * What this session is currently holding (§4.4's growth surfaces).
+   *
+   * <p>The window a long-lived session needs and a batch session never asks for: whether the
+   * structures that accumulate are still accumulating. §9 makes a steady-state heap an exit
+   * criterion for streaming sessions, and before this there was no way to observe three of the four
+   * structures that criterion is about from outside the engine.
+   *
+   * <p>Read-only and consuming nothing, like {@link #firedAt}. Cheap enough to poll from a health
+   * check: the counts are held, not computed, except the beta memory's, which is a sum over rules.
+   *
+   * <p><strong>{@code default}, unlike {@link #failed()} directly below, and the trade is worth
+   * stating.</strong> An implementor who does not override this reports an empty session -- which is
+   * the same kind of untruth {@code failed()} refuses to risk by staying abstract. The difference is
+   * what the wrong answer costs: a decorator wrongly reporting "not failed" keeps a dead session in
+   * service, while one wrongly reporting "holding nothing" misleads a diagnostic. Given that, this
+   * is additive for anyone outside this repository implementing the interface, and that is worth
+   * more than the accuracy an abstract method would force.
+   *
+   * @return the counts, taken now; all zero unless overridden
+   */
+  default SessionStats stats() {
+    return SessionStats.empty();
+  }
+
+  /**
    * Whether {@link #halt()} has been called.
    *
    * @return the halt flag

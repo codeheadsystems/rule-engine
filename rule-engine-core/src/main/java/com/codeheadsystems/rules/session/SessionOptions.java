@@ -2,6 +2,7 @@ package com.codeheadsystems.rules.session;
 
 import com.codeheadsystems.rules.agenda.ConflictResolutionStrategy;
 import com.codeheadsystems.rules.agenda.DefaultConflictResolution;
+import com.codeheadsystems.rules.evict.EvictionPolicy;
 import com.codeheadsystems.rules.listener.RuleEngineListener;
 import com.codeheadsystems.rules.rhs.HostFunction;
 import com.codeheadsystems.rules.rhs.RhsErrorHandler;
@@ -72,6 +73,7 @@ public final class SessionOptions {
   private final boolean dryRun;
   private final int runnersUpLimit;
   private final MatchingStrategy matching;
+  private final EvictionPolicy eviction;   // null when the caller configured none
 
   private SessionOptions(final Builder builder) {
     this.limits = builder.limits;
@@ -84,6 +86,7 @@ public final class SessionOptions {
     this.dryRun = builder.dryRun;
     this.runnersUpLimit = builder.runnersUpLimit;
     this.matching = builder.matching;
+    this.eviction = builder.eviction;
   }
 
   /**
@@ -216,6 +219,29 @@ public final class SessionOptions {
   }
 
   /**
+   * How this session bounds its own memory, if the caller chose (§4.4).
+   *
+   * <p>Empty is the default and means no eviction, which is right for the one-shot and batch
+   * sessions §11.1 targets: they are discarded before anything accumulates. It is wrong for a
+   * long-lived streaming session, where §4.4 names eviction as the one mechanism that bounds every
+   * structure a session grows -- they are all keyed on handles, and a retract removes a handle from
+   * all of them.
+   *
+   * <p>Empty rather than a do-nothing policy, so a session that configured none pays a null check
+   * per insert rather than a virtual call returning an empty list.
+   *
+   * <p>A policy the caller supplies is shared if they share the options, like everything else
+   * reachable from here. The built-in policies are immutable and stateless, so sharing them is
+   * safe; a policy that accumulates state across sessions is the caller's decision to make and to
+   * make thread-safe.
+   *
+   * @return the configured policy, or empty to evict nothing
+   */
+  public Optional<EvictionPolicy> eviction() {
+    return Optional.ofNullable(eviction);
+  }
+
+  /**
    * A builder pre-populated with this configuration.
    *
    * <p>For "the same session setup, one thing different", which is otherwise unexpressible once the
@@ -245,6 +271,9 @@ public final class SessionOptions {
         .matching(matching);
     if (events != null) {
       builder.events(events);
+    }
+    if (eviction != null) {
+      builder.eviction(eviction);
     }
     listeners.forEach(builder::listener);
     functions.forEach(builder::function);
@@ -276,6 +305,7 @@ public final class SessionOptions {
     private boolean dryRun;
     private int runnersUpLimit = DEFAULT_RUNNERS_UP_LIMIT;
     private MatchingStrategy matching = MatchingStrategy.NETWORK;
+    private EvictionPolicy eviction;
 
     /** Creates a builder carrying the defaults. */
     private Builder() {
@@ -409,6 +439,25 @@ public final class SessionOptions {
      */
     public Builder matching(final MatchingStrategy value) {
       this.matching = Objects.requireNonNull(value, "matching");
+      return this;
+    }
+
+    /**
+     * Bounds the session's memory with an eviction policy (§4.4).
+     *
+     * <p>Evicting a fact runs the full retract path, so this bounds working memory, the node
+     * memories and their indexes, the refraction memory and the streaming matcher's beta memory
+     * together. Not setting it is right for a session that is created, filled, fired and discarded;
+     * setting it is what makes a session that runs for days survive.
+     *
+     * <p>The policy must be a deterministic function of what it is shown -- see
+     * {@link EvictionPolicy}, which explains why, and strict mode, which checks.
+     *
+     * @param value the policy
+     * @return this builder
+     */
+    public Builder eviction(final EvictionPolicy value) {
+      this.eviction = Objects.requireNonNull(value, "eviction");
       return this;
     }
 

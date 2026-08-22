@@ -47,6 +47,9 @@ public final class DefaultRuleSession implements RuleSession {
   private final EventSink events;
   private final RhsExecutor rhs;
 
+  /** Null when no eviction policy is configured, which is the default and the common case. */
+  private final SessionEvictor evictor;
+
   private volatile boolean halted;
 
   /**
@@ -57,6 +60,28 @@ public final class DefaultRuleSession implements RuleSession {
    */
   private volatile boolean failed;
   private boolean closed;
+
+  /**
+   * Set for the duration of one firing, so eviction cannot run inside it.
+   *
+   * <p>§4.4's quiescence rule is that the policy is consulted between operations and never during
+   * one, and the two consultation points are chosen so that holds. This makes it hold rather than
+   * happen to hold. A listener that captured this session and calls {@code insert} on it reaches
+   * the hook in that method from inside a firing, which is precisely the case the consultation
+   * points were placed to avoid. No shipped SPI hands a listener the session, so a caller has to go
+   * out of their way; this makes going out of their way safe.
+   *
+   * <p><strong>The whole firing, not just the right-hand side</strong>, and the difference is a
+   * window that was open when this flag was first written to cover {@code rhs.execute} alone. An
+   * activation is <em>consumed</em> by {@code nextToFire()} before {@code onBeforeFire} is
+   * dispatched, so a listener inserting from there evicts under an activation that is already
+   * selected and refracted. The two symptoms differ, which is worth knowing when one of them turns
+   * up: an eviction during the commit is silent, because {@code RhsExecutor}'s staged update
+   * returns quietly when its fact has gone, while one before the right-hand side is loud, because
+   * {@code setField} throws at staging and the default error policy then fails the session on input
+   * that was valid.
+   */
+  private boolean firing;
 
   /**
    * Creates a session over a compiled rule set.
@@ -87,6 +112,10 @@ public final class DefaultRuleSession implements RuleSession {
     this.events = options.events().orElseGet(EventSink::discarding);
     this.rhs = new RhsExecutor(workingMemory, options.functions(), events,
         options.listeners(), sessionId, ruleSet.version(), options.dryRun());
+    this.evictor = options.eviction()
+        .map(policy -> new SessionEvictor(policy, workingMemory, options.listeners(),
+            options.strict()))
+        .orElse(null);
   }
 
   @Override
@@ -94,16 +123,29 @@ public final class DefaultRuleSession implements RuleSession {
     return sessionId;
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>An insert is one of §4.4's two quiescence points, so a configured eviction policy is
+   * consulted here, after the fact has landed. The handle returned is still the caller's -- a
+   * policy that immediately evicts what was just inserted is a policy with a cap of nothing, not a
+   * case to defend against -- and every other fact the eviction removed is gone by the time this
+   * returns, listeners notified.
+   */
   @Override
   public FactHandle insert(final String type, final JsonNode payload) {
     requireUsable();
-    return workingMemory.insert(type, payload);
+    final FactHandle handle = workingMemory.insert(type, payload);
+    evictIfNeeded();
+    return handle;
   }
 
   @Override
   public FactHandle insertOwned(final String type, final JsonNode payload) {
     requireUsable();
-    return workingMemory.insertOwned(type, payload);
+    final FactHandle handle = workingMemory.insertOwned(type, payload);
+    evictIfNeeded();
+    return handle;
   }
 
   @Override
@@ -182,6 +224,18 @@ public final class DefaultRuleSession implements RuleSession {
         why = TerminationReason.HALTED;
         break;
       }
+      /*
+       * §4.4's second quiescence point, and the one that catches derived growth: a right-hand side
+       * inserts through RhsExecutor's staging protocol rather than through this class, so the hook
+       * on insert above never sees those facts. Here rather than inside the staging protocol
+       * because a cycle boundary is the only place in a fire loop where nothing is half-applied --
+       * §4.6 stages every effect and then commits it, and an eviction landing in between could
+       * retract a fact the firing activation binds.
+       *
+       * Before the maxFacts check below, so a configured policy prevents that breach rather than
+       * racing it.
+       */
+      evictIfNeeded();
       if (agenda.isEmpty()) {
         break;
       }
@@ -210,6 +264,13 @@ public final class DefaultRuleSession implements RuleSession {
   }
 
   @Override
+  public SessionStats stats() {
+    return new SessionStats(workingMemory.size(), refraction.size(),
+        agenda.materialisedMatchCount(), agenda.materialisedHandleCount(),
+        evictor == null ? 0L : evictor.evictedCount());
+  }
+
+  @Override
   public boolean failed() {
     return failed;
   }
@@ -230,12 +291,38 @@ public final class DefaultRuleSession implements RuleSession {
   }
 
   /**
+   * Runs the eviction policy, if one is configured.
+   *
+   * <p>A null check on the overwhelming majority of sessions, which configure none.
+   */
+  private void evictIfNeeded() {
+    if (evictor != null && !firing) {
+      evictor.evictIfNeeded();
+    }
+  }
+
+  /**
    * Executes one activation's right-hand side and turns the outcome into a record.
    *
    * @param activation the match to fire
    * @return the record, and what the error policy decided if it failed
    */
   private Fired fire(final Activation activation) {
+    firing = true;
+    try {
+      return fireSelected(activation);
+    } finally {
+      firing = false;
+    }
+  }
+
+  /**
+   * The body of one firing, run with eviction suppressed.
+   *
+   * @param activation the match to fire
+   * @return the record, and what the error policy decided if it failed
+   */
+  private Fired fireSelected(final Activation activation) {
     final long startedAt = System.nanoTime();
     for (final RuleEngineListener listener : options.listeners()) {
       listener.onBeforeFire(activation);
@@ -368,6 +455,13 @@ public final class DefaultRuleSession implements RuleSession {
 
     @Override
     public void factInserted(final Fact fact) {
+      if (evictor != null) {
+        // Every insert, not just the caller's: this is where a right-hand side's derived facts and
+        // an update's reassert become visible, and the recency order eviction selects over has to
+        // account for all three. See SessionEvictor for why the order is kept here rather than in
+        // working memory.
+        evictor.factInserted(fact);
+      }
       ruleSet.network().insert(fact.type(), fact.handle().id(), fact.payload(), memories);
       // After the alpha network, before markDirty: the Rete shape walks the join for this fact and
       // needs the pattern memberships to already include it (§4.3's activate half). The recomputing
@@ -381,6 +475,9 @@ public final class DefaultRuleSession implements RuleSession {
 
     @Override
     public void factRetracted(final Fact fact) {
+      if (evictor != null) {
+        evictor.factRetracted(fact);
+      }
       // Against the payload the fact had when it was asserted, which is what `fact` carries here.
       // Computing removal keys from anything else leaves orphaned index entries (§3.4.1 step 3).
       ruleSet.network().retract(fact.type(), fact.handle().id(), fact.payload(), memories);
