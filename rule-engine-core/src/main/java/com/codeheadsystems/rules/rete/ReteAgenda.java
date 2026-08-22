@@ -7,6 +7,7 @@ import com.codeheadsystems.rules.fact.Fact;
 import com.codeheadsystems.rules.fact.WorkingMemory;
 import com.codeheadsystems.rules.listener.RuleEngineListener;
 import com.codeheadsystems.rules.match.Activation;
+import com.codeheadsystems.rules.match.ActivationKey;
 import com.codeheadsystems.rules.match.Tuple;
 import com.codeheadsystems.rules.network.JoinEnumerator;
 import com.codeheadsystems.rules.network.Network;
@@ -17,9 +18,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * The streaming matcher: joins are materialised as facts arrive, not recomputed per fire (§11.1).
@@ -28,23 +31,23 @@ import java.util.Objects;
  * once per arriving fact -- with that fact's position pinned -- and keeps the completions. A fire
  * cycle then reads a memory instead of re-joining.
  *
- * <p><strong>That amortises the join and not the fire cycle, and the split has now been
- * measured.</strong> {@code StreamingBenchmarks} holds the working set fixed with §4.4's eviction --
- * which is what makes the two separable at all -- and inserts with and without a fire. The fire
- * cycle is 99.5% of the operation at a working set of 4000 and grows about 5x for each 4x of that
- * set; this shape costs 0.44-0.51 of what TREAT costs there, across three sizes and two independent
- * runs. A constant factor of about 2x, no change in exponent. Note what that measurement does
- * <em>not</em> establish, since the obvious reading is wrong: the maintenance column is flat by
- * construction, because the population this joins against is fixed at 8 facts and does not scale
- * with the cap.
+ * <p><strong>It amortises the fire cycle too, and only since §4.3's shape landed.</strong> Until
+ * then this class held its matches and then rebuilt an activation for every one of them on every
+ * fire, ranked them, and discarded all but one to refraction -- so a session holding four thousand
+ * matches paid four thousand allocations to fire one, measured at 1.5MB of garbage per firing and
+ * 99.5% of the operation. The join was amortised and the thing reading it was not.
  *
- * <p>The reason is {@code RecomputingAgenda.materialise}, which still replaces a dirty rule's whole
- * conflict-set slice per fire cycle: an activation is constructed for every held match every time
- * the rule is dirty, though at most one can fire and refraction discards the rest at selection.
- * <strong>§4.3's {@code activate}/{@code deactivate} interface is what removes that</strong>, by
- * touching the matches that changed rather than all of them. An earlier version of this paragraph
- * named §11.2's differential propagation instead; that is about update semantics and this workload
- * performs no updates, so it would not have moved the number. See {@code docs/benchmarks.md}.
+ * <p>Now the conflict set is <em>pushed and pulled</em>: {@link #pendingByRule} holds the matches
+ * that have not fired, a match enters when it is derived and leaves when it fires or when one of
+ * its facts goes, and a fire cycle ranks what is waiting instead of what is held. On the streaming
+ * benchmark at a working set of four thousand that took an insert-and-fire from 554us to 3.8us and
+ * its allocation from 1.5MB to 8.3KB per operation, and -- the part that matters more than either
+ * number -- the fire cycle stopped growing with the working set at all: 0.77us, 1.02us, 1.12us
+ * across a sixteenfold range where it had been 19.9us, 100.5us, 551.4us.
+ *
+ * <p><strong>TREAT is untouched by this and that is expected</strong>, not a failed optimisation:
+ * §4.3's push-and-pull interface is the Rete one, and the recomputing shapes have nothing to push.
+ * See {@code docs/benchmarks.md} for both columns and for what the measurement does not establish.
  *
  * <p><strong>The same join walk, not an agreeing one.</strong> Both matchers call
  * {@link JoinEnumerator}; this one passes a pinned position. That makes an incremental result a
@@ -70,6 +73,30 @@ public final class ReteAgenda extends RecomputingAgenda {
   private final JoinEnumerator joins;
   private final List<BetaMemory> betaByRule;
   private final List<List<String>> aliasesByRule;
+
+  /**
+   * Per rule, the held matches that have not fired yet -- §4.3's conflict set, pushed and pulled.
+   *
+   * <p><strong>This is the whole of Phase 3's last slice, and it is worth being precise about what
+   * it changes.</strong> The beta memory holds every match; this holds the ones that could still
+   * fire. Before it existed, a fire cycle asked the beta memory for everything and built an
+   * activation per held match -- so a session holding four thousand matches allocated four thousand
+   * activations, ranked them, and discarded all but one to refraction, on every single firing. That
+   * was measured at 1.5MB of garbage per fire and about 138ns per held match, and it is why §9's
+   * streaming workload was not served at the complexity a reader would assume.
+   *
+   * <p>Maintained by the two callbacks the shape already receives: a match enters when it is
+   * derived and leaves when it fires or when one of its facts goes. §4.3 describes the interface as
+   * {@code activate}/{@code deactivate}/{@code deactivateAllInvolving}; those are not public methods
+   * here, for §4.3's own stated reason -- it declined to specify methods no code path invokes, and
+   * nothing outside this class would call them. {@code factInserted} activates,
+   * {@code onConsumed} deactivates, and {@code factRetracted} deactivates everything involving a
+   * handle, which is that trio under the names the {@code Agenda} interface already had.
+   *
+   * <p>A {@code LinkedHashSet} in derivation order, because {@link #matchesOf} reads it and §7.3
+   * covers any path to the agenda.
+   */
+  private final List<Set<Tuple>> pendingByRule;
 
   /**
    * Which rules have a pattern of a given fact type, and at which positions.
@@ -104,8 +131,10 @@ public final class ReteAgenda extends RecomputingAgenda {
     this.joins = new JoinEnumerator(Objects.requireNonNull(network, "network"),
         Objects.requireNonNull(memories, "memories"), workingMemory);
     this.betaByRule = new ArrayList<>(this.rules.size());
+    this.pendingByRule = new ArrayList<>(this.rules.size());
     for (int index = 0; index < this.rules.size(); index++) {
       this.betaByRule.add(new BetaMemory());
+      this.pendingByRule.add(new LinkedHashSet<>());
     }
     this.sitesByFactType = indexPatternSites(this.rules);
     this.ruleIndices = new IdentityHashMap<>(this.rules.size());
@@ -120,17 +149,24 @@ public final class ReteAgenda extends RecomputingAgenda {
   /**
    * Reads the materialised matches rather than walking the join.
    *
-   * <p>Activations are rebuilt on every call rather than cached alongside the tuples, and that is
-   * deliberate: {@code buildActivation} notifies listeners, so caching them would make
-   * {@code onActivationCreated} fire a different number of times here than under TREAT, and
-   * {@code MatcherEquivalence} compares emitted events as well as firings. The join is what this
-   * class exists to avoid repeating; constructing an activation per held match is not.
+   * <p>Activations are rebuilt on every call rather than cached alongside the tuples, and the reason
+   * is {@code Activation.recency}: it is a snapshot taken in the constructor, so an activation
+   * cached beside a tuple that outlived an update to its facts would carry a stale recency into
+   * conflict resolution, which is a firing-order defect rather than a trace one. An earlier version
+   * of this paragraph gave listener-callback counts as the reason; that reason expired when the
+   * conflict set stopped being rebuilt from every held match, and the decision it defended is right
+   * for the better reason.
    *
-   * <p>The callback <em>count</em> matches the recomputing shapes; the <em>order</em> does not, and
-   * nothing asserts that it should. Matches are notified in derivation order here and in plan order
-   * there, so a {@code TracingListener} attached to two strategies sees the same events in
-   * different sequences. Firing order is unaffected -- conflict resolution is a total order -- so
-   * this shows up in a trace rather than in behaviour.
+   * <p><strong>Two trace differences from the recomputing shapes, neither of which reaches
+   * behaviour.</strong> {@code onActivationCreated} fires a different number of times -- once per
+   * pending match per cycle here, once per held match per cycle there -- and in derivation rather
+   * than plan order. And {@code onActivationSuppressed} with {@code REFRACTED} is effectively
+   * TREAT-only: a refracted match is declined at {@link #factInserted} or pulled at
+   * {@code onConsumed}, so selection never meets one to report. §4.3's "selection still checks, for
+   * every shape" is about the check, not about that callback. {@code FiringSequence} compares
+   * firings and emitted events rather than listener traffic, so {@code MatcherEquivalence} is
+   * unaffected -- but a listener counting either callback across matchers is comparing different
+   * things, and nothing in the engine will tell it so.
    *
    * @param rule the rule
    * @param aliases the rule's aliases
@@ -138,10 +174,13 @@ public final class ReteAgenda extends RecomputingAgenda {
    */
   @Override
   protected List<Activation> matchesOf(final CompiledRule rule, final List<String> aliases) {
-    final BetaMemory beta = betaByRule.get(indexOf(rule));
-    final List<Activation> matches = new ArrayList<>(beta.size());
-    for (final Tuple tuple : beta.tuples()) {
-      matches.add(buildActivation(rule, tuple.boundFacts(), aliases));
+    final Set<Tuple> pending = pendingByRule.get(indexOf(rule));
+    if (pending.isEmpty()) {
+      return List.of();
+    }
+    final List<Activation> matches = new ArrayList<>(pending.size());
+    for (final Tuple tuple : pending) {
+      matches.add(buildActivation(rule, tuple));
     }
     return matches;
   }
@@ -181,8 +220,28 @@ public final class ReteAgenda extends RecomputingAgenda {
     for (final PatternSite site : sitesByFactType.getOrDefault(fact.type(), List.of())) {
       final CompiledRule rule = rules.get(site.ruleIndex());
       final BetaMemory beta = betaByRule.get(site.ruleIndex());
-      joins.enumerate(rule, site.position(), fact.handle().id(),
-          bound -> beta.add(new Tuple(bound, aliasesByRule.get(site.ruleIndex()))));
+      final Set<Tuple> pending = pendingByRule.get(site.ruleIndex());
+      joins.enumerate(rule, site.position(), fact.handle().id(), bound -> {
+        final Tuple tuple = new Tuple(bound, aliasesByRule.get(site.ruleIndex()));
+        // §4.3's activate. Only a match that is new to the beta memory is new to the agenda: the
+        // same completion can be reached from either end of a join, and adding it twice would put
+        // one tuple in the conflict set twice.
+        if (!beta.add(tuple)) {
+          return;
+        }
+        /*
+         * §4.4's suppression at creation, and it is a cost measure rather than a correctness one --
+         * selection checks refraction for every shape, always. A match arrives already refracted by
+         * exactly one route: §3.4.1's effective update destroys and re-derives every match binding
+         * the fact but clears refraction only for the rules testing a changed path, so a rule that
+         * tests nothing that changed gets its match handed straight back. Holding it would let the
+         * conflict set drift back toward a copy of the whole join memory, which is the cost this
+         * shape exists to remove.
+         */
+        if (!isRefracted(new ActivationKey(rule.id(), tuple.boundFacts()))) {
+          pending.add(tuple);
+        }
+      });
     }
   }
 
@@ -198,8 +257,31 @@ public final class ReteAgenda extends RecomputingAgenda {
   @Override
   public void factRetracted(final Fact fact) {
     for (final PatternSite site : sitesByFactType.getOrDefault(fact.type(), List.of())) {
-      betaByRule.get(site.ruleIndex()).removeInvolving(fact.handle().id());
+      // §4.3's deactivateAllInvolving, and the reason BetaMemory.removeInvolving returns what it
+      // removed rather than a count: the matches that leave the join memory are exactly the ones
+      // that must leave the conflict set, and the reverse index has already found them.
+      final List<Tuple> removed = betaByRule.get(site.ruleIndex()).removeInvolving(
+          fact.handle().id());
+      if (!removed.isEmpty()) {
+        pendingByRule.get(site.ruleIndex()).removeAll(removed);
+      }
     }
+  }
+
+  /**
+   * {@inheritDoc}
+   *
+   * <p>§4.3's {@code deactivate}. A held match that has fired is out of the conflict set for good
+   * unless something re-derives it -- refraction would suppress it at every selection anyway, so
+   * keeping it would be a scan per fire over matches that cannot fire. This is the half of the
+   * shape that turns "an activation per held match, per firing" into "an activation per match, once".
+   */
+  @Override
+  protected void onConsumed(final Activation activation) {
+    // indexOf, not a null-tolerant lookup: a rule this agenda does not know is the same engine
+    // invariant violation it refuses to scan harder for, and swallowing it here would leave a fired
+    // match pending for good -- the one failure pendingMatchCount is advertised as revealing.
+    pendingByRule.get(indexOf(activation.rule())).remove(activation.tuple());
   }
 
   /**
@@ -214,6 +296,33 @@ public final class ReteAgenda extends RecomputingAgenda {
     int total = 0;
     for (final BetaMemory beta : betaByRule) {
       total += beta.size();
+    }
+    return total;
+  }
+
+  /**
+   * {@inheritDoc}
+   *
+   * <p>The number a fire cycle is proportional to under this shape, and the one that would reveal a
+   * match this class failed to pull back out after firing. In a streaming session at a steady state
+   * it sits near zero however many matches the beta memory holds -- which is the whole claim of
+   * §4.3, stated as something a test can assert.
+   *
+   * <p><strong>With one exception, and it is the one an operator reading this number needs to
+   * know.</strong> A §6.4 {@code condition} is applied in {@code RecomputingAgenda.postFilter},
+   * after {@link #matchesOf} has returned, so a match the condition rejects is never fired and
+   * therefore never pulled back out -- it stays here and is rebuilt and re-evaluated on every cycle
+   * the rule is dirty for. A rule set that rejects most of what it matches drives this number toward
+   * the beta memory's, and §4.3's win is lost for it. That is a cost rather than a defect, since the
+   * post-filter re-runs every cycle and a match whose condition starts holding fires; it is pinned
+   * by {@code CelEngineTest.theConflictSetHoldsWhatAConditionRejects}, which also records why
+   * pruning on rejection was not built.
+   */
+  @Override
+  public int pendingMatchCount() {
+    int total = 0;
+    for (final Set<Tuple> pending : pendingByRule) {
+      total += pending.size();
     }
     return total;
   }

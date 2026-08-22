@@ -76,15 +76,18 @@ that steady state is observed, and asserted: two thousand inserts through a `Ses
 cap of twenty-five leave twenty-five facts held, with the beta memory, its reverse index and the
 refraction memory flat between the thousandth insert and the two-thousandth.
 
-Still to come in the phase: the Rete agenda shape (§4.3) and differential propagation (§11.2), in
-that order and for a measured reason. `StreamingBenchmarks` holds the working set fixed with an
-eviction cap and inserts with and without a fire, which is what makes the two separable: the fire
-cycle is 99.5% of the operation at a working set of 4000 and grows about 5x for each 4x of that set,
-while the streaming matcher buys a constant factor of about 2x and no change in exponent. Its
-conflict set is still rebuilt wholesale on every fire, one activation per held match, and §4.3 is
-what addresses that — for the Rete shape specifically, since §4.3's push-and-pull interface is not
-available to TREAT. See [`docs/benchmarks.md`](docs/benchmarks.md), including what it does *not*
-show.
+**§4.3's agenda shape has landed, and it is the one change in this project that moved a curve rather
+than a constant.** The streaming matcher's conflict set is now pushed and pulled — a match enters
+when it is derived and leaves when it fires — instead of being rebuilt from every held match on
+every fire. On the streaming benchmark at a working set of 4000 that took an insert-and-fire from
+554µs to 3.8µs and its allocation from 1.5MB to 8.3KB per operation, and the fire cycle stopped
+growing with the working set: 0.77µs, 1.02µs, 1.12µs across a sixteenfold range where it had been
+19.9µs, 100.5µs, 551.4µs. TREAT is unchanged, as predicted — §4.3's interface is the Rete one. See
+[`docs/benchmarks.md`](docs/benchmarks.md) for both columns, the profile that decided the scope, and
+what it still does not show.
+
+Still to come in the phase: differential propagation (§11.2), which §11.2 itself says to build only
+if profiling shows constraint re-testing dominating.
 
 **What does not exist:** negation, accumulation, truth maintenance and CEP, which are §1 non-goals
 with documented interim answers.

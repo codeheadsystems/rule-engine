@@ -6,11 +6,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.codeheadsystems.rules.compiler.CompilerOptions;
 import com.codeheadsystems.rules.compiler.RuleCompilationException;
 import com.codeheadsystems.rules.compiler.RuleCompiler;
+import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.report.CompilerReport;
 import com.codeheadsystems.rules.rule.ExpressionConstraint;
 import com.codeheadsystems.rules.rule.ExpressionValue;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
+import com.codeheadsystems.rules.session.MatchingStrategy;
 import com.codeheadsystems.rules.session.RuleSession;
 import com.codeheadsystems.rules.session.SessionOptions;
 import com.codeheadsystems.rules.testkit.Engine;
@@ -152,6 +154,72 @@ class CelEngineTest {
             session.insert("Order", Facts.obj("id", 4, "total", 50));
           },
           SessionOptions.builder(), withCel());
+    }
+
+    @Test
+    @DisplayName("a condition-rejected match stays in the conflict set, and what that costs")
+    void theConflictSetHoldsWhatAConditionRejects() {
+      /*
+       * §4.3's shape holds the matches that have not fired and drops them when they do, so a
+       * streaming session's conflict set sits near zero however large its join memory grows. A
+       * condition breaks that, and this test exists to make the exception deliberate rather than a
+       * surprise found later.
+       *
+       * Conditions are applied in RecomputingAgenda.postFilter, on the list matchesOf has already
+       * returned -- the shared base, which is what makes every matcher apply them identically. The
+       * post-filter drops a rejected match from that list and knows nothing about the pending set it
+       * came from, so a match the condition rejects is rebuilt into an activation, re-evaluated and
+       * discarded on every fire cycle the rule is dirty for. For a rule set that rejects most of what
+       * it matches, the conflict set converges on a copy of the join memory and §4.3's win is lost.
+       *
+       * It is not a correctness defect: the post-filter runs afresh every cycle, so a match whose
+       * condition starts holding fires. Pruning the pending set on rejection would be the structural
+       * fix, and it is deliberately not built. The argument for it -- that §3.4.1 makes a condition's
+       * payload root a tested path, so anything that could flip a condition re-derives the match --
+       * is exactly the kind of subtle, second-order reasoning that memoryHoldsPreFilterMatches above
+       * warns about, and the failure mode if it is wrong anywhere is a firing that silently never
+       * happens. Not worth it without a workload asking.
+       */
+      final RuleDefinition rule = Rules.rule("big-only")
+          .when("o", "Order", pattern -> pattern.gt("total", 0)
+              .constraint(new ExpressionConstraint("o.total > 1000", Set.of("o"))))
+          .then(actions -> actions.emit("big", "id", Rules.ref("o.id")))
+          .build();
+
+      final CompiledRuleSet rules = RuleCompiler.compile(List.of(rule), withCel());
+      try (RuleSession session = rules.newSession(
+          SessionOptions.builder().matching(MatchingStrategy.RETE).build())) {
+        for (int id = 0; id < 20; id++) {
+          session.insert("Order", Facts.obj("id", id, "total", 10));
+          session.fireAllRules();
+        }
+
+        assertThat(session.stats().pendingMatchCount())
+            .describedAs("every rejected match is still held and re-evaluated on every cycle")
+            .isEqualTo(20);
+        assertThat(session.stats().materialisedMatchCount())
+            .describedAs("so the conflict set has converged on the join memory")
+            .isEqualTo(20);
+      }
+    }
+
+    @Test
+    @DisplayName("a match whose condition starts holding still fires")
+    void aConditionThatBecomesTrueStillFires() {
+      // The other half, and the reason the above is a cost rather than a defect: the post-filter is
+      // re-run per cycle, so nothing about being rejected once is permanent.
+      final RuleDefinition rule = Rules.rule("big-only")
+          .when("o", "Order", pattern -> pattern.gt("total", 0)
+              .constraint(new ExpressionConstraint("o.total > 1000", Set.of("o"))))
+          .then(actions -> actions.emit("big", "id", Rules.ref("o.id")))
+          .build();
+
+      MatcherEquivalence.assertEquivalent(List.of(rule), session -> {
+        final FactHandle order = session.insert("Order", Facts.obj("id", 1, "total", 10));
+        session.fireAllRules();
+        session.update(order, Facts.obj("id", 1, "total", 5_000));
+        session.fireAllRules();
+      }, SessionOptions.builder(), withCel());
     }
   }
 

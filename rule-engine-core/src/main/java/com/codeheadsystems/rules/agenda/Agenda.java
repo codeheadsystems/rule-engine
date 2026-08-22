@@ -25,11 +25,15 @@ import java.util.Optional;
  *       would spin until the cycle limit.
  * </ul>
  *
- * <p><strong>Four methods, because the other three would have no caller.</strong> An
- * {@code activate}/{@code deactivate}/{@code deactivateAllInvolving} trio is the <em>Rete</em>
- * interface: it exists so propagation can push activations in and pull them out as tokens arrive.
- * Under TREAT nothing pushes and nothing pulls. Those methods arrive in Phase 3 with the shape that
- * needs them.
+ * <p><strong>Four methods, because the other three would have no caller -- and that is still true
+ * now that the shape needing them exists.</strong> §4.3 names an
+ * {@code activate}/{@code deactivate}/{@code deactivateAllInvolving} trio as the <em>Rete</em>
+ * interface, for pushing activations in and pulling them out as tokens arrive. The streaming
+ * matcher now does exactly that, and it does it through {@link #factInserted},
+ * {@code RecomputingAgenda.onConsumed} and {@link #factRetracted} -- callbacks this interface
+ * already had -- because nothing outside that class would ever call the trio. §4.3's own argument
+ * applies to its own method names: specifying them would mean specifying, testing and maintaining a
+ * public surface no code path invokes.
  *
  * <p>This interface is deliberately not exposed on a session (§5.1). {@link #nextToFire()}
  * consumes, so an outside call would silently delete a firing the running loop would otherwise have
@@ -110,11 +114,11 @@ public interface Agenda {
    * nothing that {@link #markDirty} has not already bought. Only the Rete shape overrides it, to
    * extend its beta memory with the matches the fact completes.
    *
-   * <p><strong>This is not §4.3's {@code activate}.</strong> That pushes an <em>activation</em>
-   * into the conflict set as a token arrives; this reports a <em>fact</em> so a join memory can be
-   * maintained, and the conflict set is still replaced wholesale at the next recomputation. The
-   * distinction is worth keeping because §9 lists the Rete agenda shape as a deliverable in its own
-   * right, and it is not this one.
+   * <p><strong>This is where §4.3's {@code activate} happens</strong>, though it reports a fact
+   * rather than an activation. An earlier version of this note drew a distinction between the two --
+   * the conflict set was still replaced wholesale then, so reporting a fact really did buy nothing
+   * for the agenda. The streaming matcher now derives the new matches here and pushes the ones that
+   * can fire, so the fact callback is the trigger and the distinction has collapsed.
    *
    * <p>Called after the alpha network has taken the fact, so an implementation may read pattern
    * memberships that already include it.
@@ -151,6 +155,20 @@ public interface Agenda {
    * @return the held match count; zero when nothing is materialised
    */
   default int materialisedMatchCount() {
+    return 0;
+  }
+
+  /**
+   * How many held matches are waiting to fire.
+   *
+   * <p>Zero for the recomputing shapes, which hold nothing between fires. For a shape that pushes
+   * activations in and pulls them out (§4.3) this is the structure that decides its cost: a fire
+   * cycle ranks what is waiting, so this number is what "the fire cycle" is proportional to, and a
+   * shape that failed to pull fired matches back out would show it here and nowhere else.
+   *
+   * @return the count of matches held and not yet fired; zero when nothing is held
+   */
+  default int pendingMatchCount() {
     return 0;
   }
 

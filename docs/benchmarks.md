@@ -688,7 +688,9 @@ fire — one per surviving order here — though at most one can fire and refrac
 at selection. §4.3's `activate`/`deactivate` interface touches the matches that *changed*, which is
 one per insert in this workload. If that is right, Rete's fire cycle stops growing with the working
 set, taking `insertAndFire` at W=4000 from ~554us toward the ~2.7us its maintenance costs. Nothing
-here measures that; the benchmark exists so the claim is falsifiable when the commit lands.
+in *this* section measures that; the benchmark exists so the claim is falsifiable when the commit
+lands. It landed, and the section below is that claim tested — 3.83us against a 2.71us maintenance
+floor, with the fire cycle flat across the whole range.
 
 **§4.3 is not available to TREAT**, and the first version of this section said otherwise. §4.3 is
 explicit: the `activate`/`deactivate`/`deactivateAllInvolving` trio "is the *Rete* interface… Under
@@ -719,6 +721,127 @@ been corrected to §4.3.
   make this worse in production.
 - **Firing less often than every insert.** Real callers batch, the fire cost amortises across the
   batch, and where the crossover sits is the tuning question an operator actually asks.
+
+# Phase 3: the agenda shape (§4.3)
+
+The section above ends with a prediction: that §4.3's push-and-pull conflict set would stop the fire
+cycle growing with the working set, taking Rete's `insertAndFire` at W=4000 "from ~554us toward the
+~2.7us its maintenance costs". This section is that prediction tested, and first the measurement
+that decided what to build.
+
+## What the profile said, and what it changed
+
+The earlier section could say the fire cycle was 99.5% of the operation but not what *inside* it
+was expensive. Two candidates, needing different fixes: constructing an activation per held match,
+and scanning the conflict set to select from it. §4.3 specifies remedies for both — a push interface
+for the first, a heap over rule heads for the second — so the split decided the scope.
+
+JMH's sampling and allocation profilers on `insertAndFire`, RETE, W=4000:
+
+```
+11.0%  RecomputingAgenda.select                     (the scan's own loop)
+ 5.0%  RefractionMemory.shouldFire <- select        (the scan's hash lookup per activation)
+ 5.1%  Arrays.hashCode <- ActivationKey.<init>      (construction)
+ 5.1%  Arrays.hashCode <- Tuple.<init>              (construction)
+ 1.4%  Activation.<init>, WorkingMemory.get         (construction)
+33.3%  <unwalkable frames>
+```
+
+| matcher | W | alloc/op, before §4.3 |
+|---|---|---|
+| RETE | 1000 | 251 KB |
+| RETE | 4000 | 1.51 MB |
+| NETWORK | 1000 | 346 KB |
+| NETWORK | 4000 | 2.70 MB |
+
+**Megabytes of garbage per single firing**, and roughly 16% of samples in the scan against 12% in
+construction. Both terms were real, both had the same cause — the conflict set was rebuilt from
+every held match on every fire — and the allocation grew *faster* than the time (6.0x and 7.8x per
+4x of working set), which corroborates the memory-system reading of the residual the earlier section
+argued about.
+
+**It also removed a step from the plan.** The heap was scoped for a conflict set that stays large,
+which is what a rebuilding agenda has. If the set instead holds only the matches that have not
+fired, a streaming steady state leaves it near-empty and a heap over nothing buys nothing. So §4.3
+was built as the push interface alone, and `SessionStats.pendingMatchCount` exists so that "is the
+conflict set actually small?" has an answer rather than an opinion.
+
+## Results
+
+Same benchmark, same sizing, same machine, nothing else running.
+
+```
+Benchmark                          (matcher)  (workingSet)  Mode  Cnt      Score      Error  Units
+StreamingBenchmarks.insertOnly          RETE           250  avgt    3      1.730 ±    0.178  us/op
+StreamingBenchmarks.insertOnly          RETE          1000  avgt    3      2.084 ±    0.119  us/op
+StreamingBenchmarks.insertOnly          RETE          4000  avgt    3      2.710 ±    0.189  us/op
+StreamingBenchmarks.insertAndFire       RETE           250  avgt    3      2.499 ±    0.126  us/op
+StreamingBenchmarks.insertAndFire       RETE          1000  avgt    3      3.101 ±    0.025  us/op
+StreamingBenchmarks.insertAndFire       RETE          4000  avgt    3      3.829 ±    0.422  us/op
+StreamingBenchmarks.insertAndFire    NETWORK           250  avgt    3     44.211 ±    4.663  us/op
+StreamingBenchmarks.insertAndFire    NETWORK          1000  avgt    3    218.840 ±   10.434  us/op
+StreamingBenchmarks.insertAndFire    NETWORK          4000  avgt    3   1085.766 ±   66.751  us/op
+   :gc.alloc.rate.norm                  RETE           250  avgt    3   8211.173 ±   10.912   B/op
+   :gc.alloc.rate.norm                  RETE          1000  avgt    3   8171.758 ±    0.093   B/op
+   :gc.alloc.rate.norm                  RETE          4000  avgt    3   8288.065 ±   12.475   B/op
+   :gc.alloc.rate.norm               NETWORK          4000  avgt    3 2673886.710 ± 85340.347 B/op
+```
+
+The fire cost, which is what changed:
+
+| Working set | Rete fire, before | Rete fire, after | |
+|---|---|---|---|
+| 250 | 19.9us | 0.77us | 26x |
+| 1000 | 100.5us | 1.02us | 99x |
+| 4000 | 551.4us | **1.12us** | **492x** |
+
+## What they say
+
+**The prediction held, quantitatively.** `insertAndFire` at W=4000 went from 554us to 3.83us, and
+the predicted floor was "toward the ~2.7us its maintenance costs" — maintenance measures 2.71us and
+the fire cycle now adds 1.12us on top of it.
+
+**The fire cycle no longer grows with the working set.** 0.77 → 1.02 → 1.12us across a sixteenfold
+range, where it had been 19.9 → 100.5 → 551.4us. That is the exponent change §4.3 was for, and it
+is the only result on this page that is a change in shape rather than in constant.
+
+**For rule sets without a §6.4 condition.** A condition is applied after the conflict set has been
+read, so a match it rejects is never fired and therefore never pulled back out: it stays pending and
+is rebuilt and re-evaluated every cycle its rule is dirty for. A rule set that rejects most of what
+it matches keeps the old O(held matches) fire cycle and gets none of the result above. That is a
+cost rather than a defect — the filter re-runs, so a match whose condition starts holding fires —
+and it is pinned by `CelEngineTest.theConflictSetHoldsWhatAConditionRejects`, which records why
+pruning on rejection was not built. Nothing here measures how much it costs.
+
+**Allocation is flat and roughly two orders of magnitude smaller**: 8211, 8172, 8288 B/op against
+251KB and 1.51MB. A fire cycle allocates what the *change* costs rather than what the *memory*
+holds, which is the same sentence as the timing result from the other side.
+
+**TREAT is unchanged, and that was predicted rather than observed after the fact**: 44.2, 218.8,
+1085.8us against 42.8, 230.2, 1143.5 before, and its allocation within 1% (2.674MB against 2.703MB
+at W=4000). The timing halves of that comparison sit inside the before-run's error bars rather than
+outside them, so read it as "nothing moved" rather than as a measurement of no movement. §4.3's interface is the Rete one; the recomputing shapes have nothing to push. Anyone
+reading a flat NETWORK column as a failed optimisation is reading it wrong.
+
+**Between the two shapes it is now 284x** at W=4000 — 3.83us against 1085.8us — where before this
+commit it was 2.1x.
+
+## What this still does not measure
+
+- **A workload with many simultaneously-eligible matches.** Everything above fires each match as
+  soon as it is derived, so the conflict set is near-empty and selection is trivial. A rule set with
+  salience tiers, or a session that inserts a great deal before firing, holds many eligible matches
+  at once — and that is the shape where §4.3's heap over rule heads would start to matter. It was
+  deliberately not built; `pendingMatchCount` is the number that would say when it should be.
+- **§9's "amortizes join cost"**, still. The joined-against population does not scale here, which
+  the section above explains at length. Unchanged by this commit.
+- **More than one rule.** One rule means one slice. Unchanged by this commit, and still the shape
+  most likely to make the remaining cost worse in production.
+- **Whether the maintenance term is now worth attacking.** It is 71% of what is left at W=4000, and
+  nothing here breaks it down.
+- **What a condition costs the new shape.** Per the caveat above, a conditioned rule keeps the old
+  per-fire cost, and no benchmark here has a condition in it. That is the first workload to measure
+  if this shape ever looks slower than these numbers promise.
 
 ## A note on this file's own history
 

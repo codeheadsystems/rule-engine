@@ -30,6 +30,12 @@ import java.util.Objects;
  *     under the recomputing matchers. Reported separately from the match count because a leak hides
  *     here rather than there: a session can hold no matches at all while retaining an index entry
  *     for every fact it has ever seen
+ * @param pendingMatchCount matches held and waiting to fire, and zero under the recomputing
+ *     matchers, which hold none between fire cycles. Under the streaming matcher this is what a
+ *     fire cycle costs, so a session whose beta memory is large and whose pending count is small is
+ *     the steady state §4.3 exists to produce. A rule with a §6.4 {@code condition} is the
+ *     exception: a match the condition rejects is never fired, so it is never pulled back out and
+ *     this count rises toward the held-match count -- see {@code ReteAgenda.pendingMatchCount}
  * @param evictedCount facts this session has evicted (§4.4); zero when no policy is configured
  * @param evictedByType the same count split by fact type, holding an entry only for a type that has
  *     had something evicted. Split because the total cannot answer the question it is needed for:
@@ -41,11 +47,12 @@ public record SessionStats(
     int refractedMatchCount,
     int materialisedMatchCount,
     int materialisedHandleCount,
+    int pendingMatchCount,
     long evictedCount,
     Map<String, Long> evictedByType) {
 
   /** A session holding nothing. */
-  private static final SessionStats EMPTY = new SessionStats(0, 0, 0, 0, 0L, Map.of());
+  private static final SessionStats EMPTY = new SessionStats(0, 0, 0, 0, 0, 0L, Map.of());
 
   /**
    * Copies the per-type counts, keeping their order.

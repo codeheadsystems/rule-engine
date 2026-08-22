@@ -1,12 +1,15 @@
 package com.codeheadsystems.rules.testkit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.codeheadsystems.rules.compiler.RuleCompiler;
 import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
+import com.codeheadsystems.rules.session.FireOptions;
 import com.codeheadsystems.rules.session.MatchingStrategy;
+import com.codeheadsystems.rules.session.RuleEngineLimitExceeded;
 import com.codeheadsystems.rules.session.RuleSession;
 import com.codeheadsystems.rules.session.SessionOptions;
 import java.util.ArrayList;
@@ -157,6 +160,220 @@ class ReteMatcherTest {
             // matches it now forms must appear.
             session.update(moved, Facts.obj("id", 1, "total", 10, "customerId", 2));
           });
+    }
+  }
+
+  @Nested
+  @DisplayName("the conflict set is pushed and pulled, not rebuilt (§4.3)")
+  class PushedConflictSet {
+
+    @Test
+    @DisplayName("a fired match leaves the conflict set and the held memory keeps it")
+    void firingRemovesTheMatchFromTheConflictSet() {
+      /*
+       * The distinction the shape is built on. The beta memory holds every match; the conflict set
+       * holds the ones that could still fire. Before §4.3 they were the same thing at fire time --
+       * every held match was rebuilt into an activation on every cycle and all but one discarded to
+       * refraction, which is what made a fire cycle cost the size of the memory rather than the size
+       * of the change.
+       */
+      final CompiledRuleSet rules = selfJoin();
+      try (RuleSession session = streaming(rules)) {
+        for (int id = 0; id < 4; id++) {
+          session.insert("Order", Facts.obj("id", id, "total", 10, "customerId", 0));
+        }
+        assertThat(session.stats().pendingMatchCount())
+            .describedAs("derived and waiting: four facts give twelve ordered pairs")
+            .isEqualTo(12);
+
+        session.fireAllRules();
+
+        assertThat(session.stats().materialisedMatchCount())
+            .describedAs("the matches are still held; the facts have not gone anywhere")
+            .isEqualTo(12);
+        assertThat(session.stats().pendingMatchCount())
+            .describedAs("but none of them can fire again, so none is still in the conflict set")
+            .isZero();
+      }
+    }
+
+    @Test
+    @DisplayName("a streaming session's conflict set stays flat while its memory grows")
+    void theConflictSetDoesNotGrowWithTheMemory() {
+      // §4.3's claim as something a test can assert: what a fire cycle ranks is the size of the
+      // change, not the size of what is held.
+      final CompiledRuleSet rules = selfJoin();
+      try (RuleSession session = streaming(rules)) {
+        for (int id = 0; id < 60; id++) {
+          session.insert("Order", Facts.obj("id", id, "total", 10, "customerId", 0));
+          session.fireAllRules();
+          assertThat(session.stats().pendingMatchCount())
+              .describedAs("after inserting and firing on order %d", id)
+              .isZero();
+        }
+
+        assertThat(session.stats().materialisedMatchCount())
+            .describedAs("while the held memory is quadratic in the facts, as it must be")
+            .isEqualTo(60 * 59);
+      }
+    }
+
+    @Test
+    @DisplayName("clearing refraction re-offers the match, because the update re-derives it")
+    void refractionClearedByAnUpdateReOffersTheMatch() {
+      /*
+       * §11.5's recorded hazard, and the reason this shape can drop a firing that TREAT performs:
+       *
+       *   "Rete's terminal-side refraction check would suppress an activation that the subsequent
+       *    invalidation then made eligible -- with no further token to recreate it -- silently
+       *    dropping a firing TREAT performs."
+       *
+       * This shape declines to hold a match that is already refracted, so it is safe only because
+       * §3.4.1 clears refraction at step 5 and re-derives at step 6, in that order. Swap those two
+       * and the re-derived match arrives while still refracted, is dropped, and nothing ever offers
+       * it again. That ordering was incidental while both shapes rebuilt; it is load-bearing now.
+       */
+      final CompiledRuleSet rules = RuleCompiler.compile(List.of(Rules.rule("watch")
+          .when("o", "Order", pattern -> pattern.gt("total", 0))
+          .then(actions -> actions.emit("seen", "id", Rules.ref("o.id")))
+          .build()));
+      try (RuleSession session = streaming(rules)) {
+        final FactHandle order = session.insert("Order", Facts.obj("id", 1, "total", 10));
+        assertThat(session.fireAllRules().firedCount()).isEqualTo(1);
+        assertThat(session.stats().pendingMatchCount()).isZero();
+
+        // A tested path, so §3.4.1 propagates: refraction is cleared and the match re-derived.
+        session.update(order, Facts.obj("id", 1, "total", 20));
+
+        assertThat(session.stats().pendingMatchCount())
+            .describedAs("the re-derived match is eligible again and back in the conflict set")
+            .isEqualTo(1);
+        assertThat(session.fireAllRules().firedCount())
+            .describedAs("a firing TREAT performs, and this shape must not drop")
+            .isEqualTo(1);
+      }
+    }
+
+    @Test
+    @DisplayName("an update a rule does not test leaves its match refracted and unoffered")
+    void anUntestedUpdateDoesNotReOfferTheMatch() {
+      // The other side of the same ordering. The match is destroyed and re-derived by the update,
+      // but refraction is cleared only for rules testing a changed path -- so this one arrives
+      // already refracted and must not be offered, or the rule fires twice on unchanged data.
+      final CompiledRuleSet rules = RuleCompiler.compile(List.of(Rules.rule("watch")
+          .when("o", "Order", pattern -> pattern.gt("total", 0))
+          .then(actions -> actions.emit("seen", "id", Rules.ref("o.id")))
+          .build()));
+      try (RuleSession session = streaming(rules)) {
+        final FactHandle order = session.insert("Order", Facts.obj("id", 1, "total", 10));
+        assertThat(session.fireAllRules().firedCount()).isEqualTo(1);
+
+        // `note` is tested by nothing, so §3.4.1 step 2 replaces the payload and propagates nothing.
+        session.update(order, Facts.obj("id", 1, "total", 10, "note", "untested"));
+
+        assertThat(session.fireAllRules().firedCount())
+            .describedAs("nothing a rule tests changed, so nothing may fire again")
+            .isZero();
+        assertThat(session.stats().pendingMatchCount()).isZero();
+      }
+    }
+
+    @Test
+    @DisplayName("a partially drained conflict set survives the next rebuild intact")
+    void aPartiallyDrainedConflictSetSurvivesARebuild() {
+      /*
+       * The case the other tests here cannot see, and the reason this one exists: every one of them
+       * drains the conflict set completely, so "nothing pending" is the right answer whether the
+       * shape removes the fired match or removes everything. Within a single fire call the
+       * difference is invisible anyway -- materialise only rebuilds a DIRTY rule, so a slice that
+       * was over-emptied still carries the rest of the cycle. The damage appears one rebuild later.
+       *
+       * So: stop the loop mid-drain with a cycle limit, then dirty the rule and force a rebuild.
+       * An over-eager pull shows up as eleven matches that quietly stopped existing.
+       */
+      final CompiledRuleSet rules = selfJoin();
+      try (RuleSession session = streaming(rules)) {
+        for (int id = 0; id < 4; id++) {
+          session.insert("Order", Facts.obj("id", id, "total", 10, "customerId", 0));
+        }
+        assertThat(session.stats().pendingMatchCount()).isEqualTo(12);
+
+        assertThatThrownBy(() -> session.fireAllRules(FireOptions.builder().maxCycles(1).build()))
+            .isInstanceOf(RuleEngineLimitExceeded.CycleLimit.class);
+
+        assertThat(session.stats().pendingMatchCount())
+            .describedAs("one fired; the other eleven are still waiting")
+            .isEqualTo(11);
+
+        // Dirties the rule, so the next selection rebuilds the slice from the pending set.
+        session.insert("Order", Facts.obj("id", 99, "total", 10, "customerId", 1));
+
+        assertThat(session.stats().pendingMatchCount())
+            .describedAs("and the rebuild finds them, rather than a set something over-emptied")
+            .isEqualTo(11);
+      }
+    }
+
+    @Test
+    @DisplayName("a match re-derived while still refracted is not put back in the conflict set")
+    void aReDerivedRefractedMatchIsNotHeld() {
+      /*
+       * Needs two rules, which is why it was nearly missed. §3.4.1's effective update destroys and
+       * re-derives every match binding the fact, but clears refraction only for the rules testing a
+       * changed path -- so a rule that tests nothing that changed gets its match handed back while
+       * still refracted. It must not be held: it cannot fire until something re-derives it again,
+       * and keeping it would let the conflict set drift back toward a copy of the whole join memory,
+       * which is the cost §4.3 was built to remove.
+       *
+       * Nothing about the firing sequence changes either way -- selection filters refracted matches
+       * for every shape -- so this is asserted on what is held rather than on what fires. A test
+       * written against firings passes with the suppression removed.
+       */
+      final CompiledRuleSet rules = RuleCompiler.compile(List.of(
+          Rules.rule("tests-total")
+              .when("o", "Order", pattern -> pattern.gt("total", 0))
+              .then(actions -> actions.emit("a", "id", Rules.ref("o.id")))
+              .build(),
+          Rules.rule("tests-status")
+              .when("o", "Order", pattern -> pattern.eq("status", "OPEN"))
+              .then(actions -> actions.emit("b", "id", Rules.ref("o.id")))
+              .build()));
+      try (RuleSession session = streaming(rules)) {
+        final FactHandle order =
+            session.insert("Order", Facts.obj("id", 1, "total", 10, "status", "OPEN"));
+        assertThat(session.fireAllRules().firedCount()).isEqualTo(2);
+        assertThat(session.stats().pendingMatchCount()).isZero();
+
+        // Changes /total only: tests-total is un-refracted, tests-status is not.
+        session.update(order, Facts.obj("id", 1, "total", 20, "status", "OPEN"));
+
+        assertThat(session.stats().pendingMatchCount())
+            .describedAs("only the rule whose tested path changed is offered again")
+            .isEqualTo(1);
+        assertThat(session.fireAllRules().firedCount()).isEqualTo(1);
+      }
+    }
+
+    @Test
+    @DisplayName("a retracted fact's matches leave the conflict set as well as the memory")
+    void retractPullsPendingMatchesToo() {
+      // §4.3's deactivateAllInvolving. A match left in the conflict set after its fact has gone is
+      // a phantom firing -- the activation binds a handle working memory can no longer resolve.
+      final CompiledRuleSet rules = selfJoin();
+      try (RuleSession session = streaming(rules)) {
+        final List<FactHandle> handles = new ArrayList<>();
+        for (int id = 0; id < 3; id++) {
+          handles.add(session.insert("Order", Facts.obj("id", id, "total", 10, "customerId", 0)));
+        }
+        assertThat(session.stats().pendingMatchCount()).isEqualTo(6);
+
+        session.retract(handles.get(0));
+
+        assertThat(session.stats().pendingMatchCount())
+            .describedAs("the four pairs binding the retracted fact are gone, unfired")
+            .isEqualTo(2);
+        assertThat(session.stats().materialisedMatchCount()).isEqualTo(2);
+      }
     }
   }
 

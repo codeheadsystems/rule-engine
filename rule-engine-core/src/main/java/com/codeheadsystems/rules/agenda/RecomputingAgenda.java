@@ -6,6 +6,7 @@ import com.codeheadsystems.rules.fact.WorkingMemory;
 import com.codeheadsystems.rules.listener.RuleEngineListener;
 import com.codeheadsystems.rules.listener.SuppressReason;
 import com.codeheadsystems.rules.match.Activation;
+import com.codeheadsystems.rules.match.ActivationKey;
 import com.codeheadsystems.rules.match.Tuple;
 import com.codeheadsystems.rules.rule.CompiledPattern;
 import com.codeheadsystems.rules.rule.CompiledRule;
@@ -143,6 +144,61 @@ public abstract class RecomputingAgenda implements Agenda {
   }
 
   /**
+   * Builds an activation over a tuple that already exists, and notifies listeners.
+   *
+   * <p>For a shape that holds its tuples rather than deriving them per fire: building the
+   * activation from the tuple it already has avoids constructing a second identical one.
+   *
+   * @param rule the rule that matched
+   * @param tuple the match
+   * @return the activation
+   */
+  protected final Activation buildActivation(final CompiledRule rule, final Tuple tuple) {
+    final Activation activation = new Activation(rule, tuple, workingMemory);
+    for (final RuleEngineListener listener : listeners) {
+      listener.onActivationCreated(activation);
+    }
+    return activation;
+  }
+
+  /**
+   * Whether a match has already fired.
+   *
+   * <p>§4.4 permits a Phase 3 shape to suppress an activation at <em>creation</em> as well as at
+   * selection, and is equally clear that this is "an optimization on top of the selection-time
+   * check, never a replacement for it" -- {@link #select} still checks, for every shape.
+   *
+   * <p><strong>Suppressing at creation is only safe because of when refraction is cleared.</strong>
+   * A shape that declines to hold a refracted match must be sure that anything clearing that
+   * refraction will also cause the match to be offered again, or the firing is lost with nothing
+   * left to recreate it -- which is §11.5's recorded hazard, the one that made two agenda shapes
+   * expensive to keep in agreement. It holds here because refraction is cleared in exactly two
+   * places and both destroy the matches they clear: a retract, after which the match does not exist,
+   * and §3.4.1's effective update, which clears at step 5 and re-derives at step 6. That step
+   * ordering stops being incidental the moment a shape suppresses at creation.
+   *
+   * @param key the match's identity
+   * @return whether this rule has already fired on these facts
+   */
+  protected final boolean isRefracted(final ActivationKey key) {
+    return !refraction.shouldFire(key);
+  }
+
+  /**
+   * Reports that an activation has been selected and will fire.
+   *
+   * <p>Called from {@link #nextToFire()} immediately after refraction records it and before the
+   * right-hand side runs. Default no-op: a shape that rebuilds its conflict set does not need to
+   * know, because the next recomputation simply will not produce it. A shape that <em>holds</em>
+   * its matches does need to know, because nothing else will take the fired one out.
+   *
+   * @param activation the activation about to fire
+   */
+  protected void onConsumed(final Activation activation) {
+    // Nothing to do for a recomputing shape; see the contract above.
+  }
+
+  /**
    * The session's working memory, for subclasses that dereference handles.
    *
    * @return the working memory
@@ -242,6 +298,7 @@ public abstract class RecomputingAgenda implements Agenda {
       // Recorded on consumption, before the RHS runs. Recording on success only would let a rule
       // whose RHS throws under a skip-and-continue policy be re-selected and throw again, forever.
       refraction.record(best.key(), best.recency());
+      onConsumed(best);
     }
     return Optional.of(best);
   }

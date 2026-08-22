@@ -77,9 +77,9 @@ final class BetaMemory {
    * indefinitely must not accumulate, so the index entry goes too, not merely the tuples.
    *
    * @param handle the retracted fact's handle id
-   * @return the matches that were removed. Nothing in the engine reads this yet; it is what
-   *     §4.3's {@code deactivateAllInvolving} will need when the agenda starts holding activations
-   *     rather than rebuilding them, and returning it now costs a list that is already built
+   * @return the matches that were removed, which {@code ReteAgenda.factRetracted} uses as §4.3's
+   *     {@code deactivateAllInvolving}: the matches leaving the join memory are exactly the ones
+   *     that must leave the conflict set, and the reverse index has already found them
    */
   List<Tuple> removeInvolving(final long handle) {
     final Set<Tuple> affected = byHandle.remove(handle);
@@ -110,12 +110,11 @@ final class BetaMemory {
   /**
    * The materialised matches, in the order they were derived.
    *
-   * <p>Unmodifiable rather than the live set, because of who iterates it: {@code matchesOf} walks
-   * this while {@code buildActivation} notifies listeners, and a listener that inserts or retracts
-   * would otherwise reach {@code add}/{@code removeInvolving} mid-iteration and get a
-   * {@code ConcurrentModificationException} the recomputing shapes do not produce. The wrapper does
-   * not make that safe -- it makes it a clear failure at the mutation rather than a confusing one
-   * at the next read.
+   * <p><strong>Nothing in main source calls this since §4.3.</strong> {@code matchesOf} reads the
+   * pending set instead, so this is a test and diagnostic accessor now. It is kept unmodifiable for
+   * the reason it always was -- a caller iterating it while something mutates the memory gets a
+   * clear failure at the mutation rather than a confusing one at the next read -- though the wrapper
+   * never made that safe, since it wraps a live set.
    *
    * @return the tuples, in derivation order
    */
