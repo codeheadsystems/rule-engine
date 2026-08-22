@@ -826,6 +826,36 @@ reading a flat NETWORK column as a failed optimisation is reading it wrong.
 **Between the two shapes it is now 284x** at W=4000 — 3.83us against 1085.8us — where before this
 commit it was 2.1x.
 
+## The narrower fix, scoped and not built
+
+The profile's largest single line is `PatternMemory`'s `TreeSet` add and remove — 15.6% of samples,
+re-inserting a membership that did not change — and skipping it looked like a contained win with
+none of (B)'s obligation. It is not contained, and the reason is where the churn happens.
+
+An update reaches the network as two independent callbacks, `factRetracted(before)` and then
+`factInserted(after)`. Neither knows it is half of an update, so neither can compare the two
+payloads. Making the churn skippable needs one of two things:
+
+- **Declare, per pattern, the paths it depends on** — its alpha test paths, its indexed paths, and
+  the paths its joins read — and skip patterns none of whose paths changed. This is (B)'s mechanism
+  at a smaller scale and inherits (B)'s failure mode, with an extra trap: declaring only the alpha
+  paths is the obvious version and is wrong, because the beta memory would keep tuples whose *join
+  key* changed. That is silent wrong output rather than a lost firing, which is worse.
+- **Compare values rather than declaring them** — evaluate acceptance and the index keys against
+  both the old and the new payload and skip when they agree. This cannot under-declare, because it
+  reads what the pattern actually computes. It costs a second alpha evaluation, which the profile
+  puts at 6.7% of samples against the 15.6% it saves: **of order 9% net**, and still requires a
+  combined update path through the network in place of the retract-and-reassert observer pair that
+  the agenda, refraction, eviction and beta maintenance all depend on.
+
+Both are recorded as measured and not built. The 9% is arithmetic on profile shares rather than a
+measurement, and a third of the samples in that profile were unwalkable, so treat it as an order of
+magnitude for a decision rather than a number for a table.
+
+What that leaves is the finding this section opened with: the cost is linear in the rules patterning
+the hot type, and (B) is the only mechanism measured here that changes the exponent rather than the
+constant.
+
 ## What this still does not measure
 
 - **A workload with many simultaneously-eligible matches.** Everything above fires each match as

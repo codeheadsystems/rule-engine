@@ -97,8 +97,11 @@ Differential propagation touches only the patterns reading a changed path, so it
 one-rule column: 26x at single-pattern rules, 82x under the streaming matcher with joins.
 
 What that does not settle is whether it is worth its price — a `dependsOn()` obligation on every
-node where under-declaring silently loses a firing — or whether a narrower fix gets most of it, since
-15% of the cost is index churn re-inserting memberships that did not change. See
+node where under-declaring silently loses a firing. The narrower fix that might have avoided that
+question was scoped and is not cheap: skipping the index churn needs either the same per-pattern
+dependency declaration, or a value-based comparison costing a second alpha evaluation for an
+estimated 9% net, and either way a combined update path in place of the retract-and-reassert the
+agenda, refraction and eviction all hang off. Both are recorded as measured and not built. See
 [`docs/benchmarks.md`](docs/benchmarks.md).
 
 **What does not exist:** negation, accumulation, truth maintenance and CEP, which are §1 non-goals
