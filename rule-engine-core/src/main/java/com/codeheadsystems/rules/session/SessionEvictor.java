@@ -71,6 +71,9 @@ final class SessionEvictor implements EvictionView {
   private final Map<String, Set<Long>> byRecencyOfType = new LinkedHashMap<>();
 
   private long evicted;
+
+  /** The same total, split by fact type, so a diagnostic can name the type that lost facts. */
+  private final Map<String, Long> evictedByType = new LinkedHashMap<>();
   private int insertsSinceCheck;
   private boolean evicting;
 
@@ -175,6 +178,7 @@ final class SessionEvictor implements EvictionView {
         // none of which this class knows about or should.
         workingMemory.retract(victim);
         evicted++;
+        evictedByType.merge(fact.type(), 1L, Long::sum);
       }
     } finally {
       evicting = false;
@@ -188,6 +192,15 @@ final class SessionEvictor implements EvictionView {
    */
   long evictedCount() {
     return evicted;
+  }
+
+  /**
+   * How many facts of each type this session has evicted.
+   *
+   * @return the counts, holding an entry only for a type something was evicted from
+   */
+  Map<String, Long> evictedByType() {
+    return evictedByType;
   }
 
   @Override

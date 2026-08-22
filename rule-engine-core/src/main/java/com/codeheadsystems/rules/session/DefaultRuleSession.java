@@ -22,6 +22,7 @@ import com.codeheadsystems.rules.rule.ActionDefinition;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -267,7 +268,8 @@ public final class DefaultRuleSession implements RuleSession {
   public SessionStats stats() {
     return new SessionStats(workingMemory.size(), refraction.size(),
         agenda.materialisedMatchCount(), agenda.materialisedHandleCount(),
-        evictor == null ? 0L : evictor.evictedCount());
+        evictor == null ? 0L : evictor.evictedCount(),
+        evictor == null ? Map.of() : evictor.evictedByType());
   }
 
   @Override

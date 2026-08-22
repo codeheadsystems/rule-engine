@@ -1,5 +1,10 @@
 package com.codeheadsystems.rules.session;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Objects;
+
 /**
  * What a session is currently holding (spec §4.4's growth surfaces).
  *
@@ -26,16 +31,41 @@ package com.codeheadsystems.rules.session;
  *     here rather than there: a session can hold no matches at all while retaining an index entry
  *     for every fact it has ever seen
  * @param evictedCount facts this session has evicted (§4.4); zero when no policy is configured
+ * @param evictedByType the same count split by fact type, holding an entry only for a type that has
+ *     had something evicted. Split because the total cannot answer the question it is needed for:
+ *     a rule that stops matching because its facts were let go looks exactly like a rule that never
+ *     matched, and telling those apart means knowing about <em>that</em> type
  */
 public record SessionStats(
     int factCount,
     int refractedMatchCount,
     int materialisedMatchCount,
     int materialisedHandleCount,
-    long evictedCount) {
+    long evictedCount,
+    Map<String, Long> evictedByType) {
 
   /** A session holding nothing. */
-  private static final SessionStats EMPTY = new SessionStats(0, 0, 0, 0, 0L);
+  private static final SessionStats EMPTY = new SessionStats(0, 0, 0, 0, 0L, Map.of());
+
+  /**
+   * Copies the per-type counts, keeping their order.
+   *
+   * <p>A {@code LinkedHashMap} rather than {@code Map.copyOf}, whose iteration order is salted per
+   * JVM. Nothing here reaches the agenda, so this is not a §7.3 obligation -- but it does reach an
+   * explanation an author reads and a test asserts on, and a diagnostic that lists fact types in a
+   * different order on a different host is a diagnostic somebody eventually distrusts.
+   *
+   * <p><strong>A copy, not a wrapper, and the difference is the whole point of taking one.</strong>
+   * The session hands over its live counter map; wrapping it unmodifiable would make this record a
+   * live view of a session that keeps evicting, so a caller holding two of these to compare would
+   * find both agreeing and a record's {@code equals} changing under it. {@code SessionStatsTest}
+   * pins the snapshot, because removing the {@code new LinkedHashMap<>} leaves every other test in
+   * the suite green.
+   */
+  public SessionStats {
+    Objects.requireNonNull(evictedByType, "evictedByType");
+    evictedByType = Collections.unmodifiableMap(new LinkedHashMap<>(evictedByType));
+  }
 
   /**
    * Counts for a session holding nothing.

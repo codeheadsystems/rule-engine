@@ -3,10 +3,12 @@ package com.codeheadsystems.rules.observability;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.codeheadsystems.rules.evict.EvictionPolicy;
 import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
 import com.codeheadsystems.rules.session.RuleSession;
+import com.codeheadsystems.rules.session.SessionOptions;
 import com.codeheadsystems.rules.testkit.Engine;
 import com.codeheadsystems.rules.testkit.Facts;
 import com.codeheadsystems.rules.testkit.Rules;
@@ -42,6 +44,139 @@ class MatchExplainerTest {
       final Explanation explanation = new MatchExplainer(rules, session).explain(REVIEW.id());
 
       assertThat(explanation.verdict()).contains("no Customer fact exists");
+    }
+  }
+
+  @Test
+  @DisplayName("a type whose facts were evicted says so, rather than reading as never-inserted")
+  void evictedFactsAreNamed() {
+    /*
+     * The blind spot §4.4's eviction opens. "no Order fact exists" is true and complete and sends
+     * an author to look at their rule, when the answer is their eviction cap -- and the two states
+     * are indistinguishable from working memory alone, because the facts really are gone. §7.2's
+     * whole claim is that this class answers "why did R not fire" better than a trace can, and
+     * without this it answered a whole category of that question misleadingly.
+     */
+    final CompiledRuleSet rules = Engine.compile(REVIEW);
+    try (RuleSession session = rules.newSession(SessionOptions.builder()
+        .eviction(EvictionPolicy.perType(Map.of("Order", 2)))
+        .build())) {
+      session.insert("Customer", Facts.obj("id", 7, "riskTier", "HIGH"));
+      for (int id = 0; id < 5; id++) {
+        // Below the threshold, so the surviving orders fail their own alpha test. Eviction is NOT
+        // why this rule is silent here, and the clause is deliberately still shown: it is a neutral
+        // count of what the session let go of, not a claim about causation. A clause that appeared
+        // only when the explainer judged eviction to blame would be a judgement it cannot make --
+        // the evicted facts are gone, so whether they would have matched is unknowable.
+        session.insert("Order",
+            Facts.obj("id", id, "total", 10, "status", "PENDING", "customerId", 7));
+      }
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain(REVIEW.id());
+
+      assertThat(explanation.verdict().orElseThrow())
+          .describedAs("the surviving candidates AND what the session let go of")
+          .contains("none matched o")
+          .contains("3 Order fact(s) evicted this session");
+    }
+  }
+
+  @Test
+  @DisplayName("a type evicted down to nothing is not reported as never inserted")
+  void fullyEvictedTypeIsNamed() {
+    final RuleDefinition ordersOnly = Rules.rule("orders-only")
+        .when("o", "Order", pattern -> pattern.gt("total", 0))
+        .then(actions -> actions.emit("seen", "id", Rules.ref("o.id")))
+        .build();
+    final CompiledRuleSet rules = Engine.compile(ordersOnly);
+    try (RuleSession session = rules.newSession(SessionOptions.builder()
+        .eviction(EvictionPolicy.perType(Map.of("Order", 1)))
+        .build())) {
+      for (int id = 0; id < 4; id++) {
+        session.insert("Order", Facts.obj("id", id, "total", 100));
+      }
+      session.retract(session.workingMemory().factsOfType("Order").findFirst().orElseThrow()
+          .handle());
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain("orders-only");
+
+      assertThat(explanation.verdict().orElseThrow())
+          .describedAs("empty for two different reasons, and only one of them is the author's")
+          .contains("no Order fact exists")
+          .contains("3 Order fact(s) evicted this session");
+    }
+  }
+
+  @Test
+  @DisplayName("the join verdict names an evicted type, which is where streaming actually lands")
+  void evictionIsNamedOnTheJoinVerdict() {
+    /*
+     * The case a per-type cap produces in practice, and the one the first version of this note
+     * missed. Cap the reference type, stream the other: an order whose customer has aged out still
+     * passes its own alpha tests, so the pattern has survivors and the verdict is about the join --
+     * which is correct, and which sends an author to inspect a join that has nothing wrong with it.
+     */
+    final CompiledRuleSet rules = Engine.compile(REVIEW);
+    try (RuleSession session = rules.newSession(SessionOptions.builder()
+        .eviction(EvictionPolicy.perType(Map.of("Customer", 1)))
+        .build())) {
+      session.insert("Customer", Facts.obj("id", 7, "riskTier", "HIGH"));
+      session.insert("Order",
+          Facts.obj("id", 1, "total", 25_000, "status", "PENDING", "customerId", 7));
+      // Ages customer 7 out. The order still matches its own pattern; nothing joins it any more.
+      session.insert("Customer", Facts.obj("id", 8, "riskTier", "HIGH"));
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain(REVIEW.id());
+
+      assertThat(explanation.verdict().orElseThrow())
+          .describedAs("the join is correct; what changed is that a fact was let go")
+          .contains("1 Customer fact(s) evicted");
+    }
+  }
+
+  @Test
+  @DisplayName("a rule that fired is not told about eviction")
+  void aWorkingRuleIsNotToldAboutEviction() {
+    /*
+     * The over-shoot the first version of this note had. "matched, but refracted -- all already
+     * fired" is a rule working exactly as intended, and a capped session's evicted count is
+     * permanently non-zero, so appending the clause there puts it on every explanation of every
+     * rule for the rest of the session's life. That is the failure noPolicyMeansNoNote below is
+     * named for, recreated in the sessions where the note is supposed to earn its place.
+     */
+    final CompiledRuleSet rules = Engine.compile(REVIEW);
+    try (RuleSession session = rules.newSession(SessionOptions.builder()
+        .eviction(EvictionPolicy.perType(Map.of("Order", 2)))
+        .build())) {
+      session.insert("Customer", Facts.obj("id", 7, "riskTier", "HIGH"));
+      for (int id = 0; id < 5; id++) {
+        session.insert("Order",
+            Facts.obj("id", id, "total", 25_000, "status", "PENDING", "customerId", 7));
+      }
+      session.fireAllRules();
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain(REVIEW.id());
+
+      assertThat(explanation.verdict().orElseThrow())
+          .describedAs("three orders were evicted, and none of that explains a rule that fired")
+          .contains("already fired")
+          .doesNotContain("evicted");
+    }
+  }
+
+  @Test
+  @DisplayName("a session with no eviction policy says nothing about eviction")
+  void noPolicyMeansNoNote() {
+    final CompiledRuleSet rules = Engine.compile(REVIEW);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("Order",
+          Facts.obj("id", 1, "total", 25_000, "status", "PENDING", "customerId", 7));
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain(REVIEW.id());
+
+      assertThat(explanation.verdict().orElseThrow())
+          .describedAs("a clause that is always there stops being read")
+          .doesNotContain("evicted");
     }
   }
 

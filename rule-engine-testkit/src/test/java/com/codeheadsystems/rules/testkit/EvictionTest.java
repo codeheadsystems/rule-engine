@@ -187,6 +187,67 @@ class EvictionTest {
     }
 
     @Test
+    @DisplayName("the count is split by fact type, because the total cannot answer the question")
+    void evictionsAreCountedPerType() {
+      /*
+       * The total says a session let go of 97 facts; it cannot say whether any of them were the
+       * type the rule that stopped firing is waiting on. That is the question MatchExplainer asks,
+       * and answering it is the difference between "no Order fact exists" -- true, complete, and
+       * pointing an author at their rule -- and the same sentence with the reason attached.
+       */
+      final CompiledRuleSet rules = RuleCompiler.compile(joinRules());
+      try (RuleSession session = rules.newSession(
+          streaming(EvictionPolicy.perType(Map.of("Order", 2, "Customer", 1))).build())) {
+        for (int id = 0; id < 4; id++) {
+          session.insert("Customer", Facts.obj("id", id));
+        }
+        for (int id = 0; id < 5; id++) {
+          session.insert("Order", Facts.obj("id", id, "total", 10, "customerId", 0));
+        }
+
+        final SessionStats stats = session.stats();
+        assertThat(stats.evictedCount()).isEqualTo(6L);
+        assertThat(stats.evictedByType())
+            .describedAs("three customers over a cap of one, three orders over a cap of two")
+            .containsExactlyInAnyOrderEntriesOf(Map.of("Customer", 3L, "Order", 3L));
+      }
+    }
+
+    @Test
+    @DisplayName("a type nothing was evicted from has no entry at all")
+    void untouchedTypesAreAbsent() {
+      // Absent rather than zero, so a reader of the map cannot mistake "never lost anything" for
+      // "lost nothing recently", and so the map is bounded by types actually evicted from.
+      final CompiledRuleSet rules = RuleCompiler.compile(joinRules());
+      try (RuleSession session =
+          rules.newSession(streaming(EvictionPolicy.perType(Map.of("Order", 2))).build())) {
+        session.insert("Customer", Facts.obj("id", 0));
+        for (int id = 0; id < 4; id++) {
+          session.insert("Order", Facts.obj("id", id, "total", 10, "customerId", 0));
+        }
+
+        assertThat(session.stats().evictedByType()).containsOnlyKeys("Order");
+      }
+    }
+
+    @Test
+    @DisplayName("the per-type map is not writable through the stats it came from")
+    void perTypeCountsAreNotWritable() {
+      final CompiledRuleSet rules = RuleCompiler.compile(singleFactRules());
+      try (RuleSession session =
+          rules.newSession(streaming(EvictionPolicy.leastRecentlyUsed(1)).build())) {
+        session.insert("Order", Facts.obj("id", 0, "total", 10));
+        session.insert("Order", Facts.obj("id", 1, "total", 10));
+
+        final Map<String, Long> counts = session.stats().evictedByType();
+
+        assertThatThrownBy(() -> counts.put("Order", 999L))
+            .describedAs("a diagnostic a caller can edit is a diagnostic nobody can trust")
+            .isInstanceOf(UnsupportedOperationException.class);
+      }
+    }
+
+    @Test
     @DisplayName("a listener sees the eviction and the retract it performs")
     void listenerSeesBoth() {
       final List<String> seen = new ArrayList<>();

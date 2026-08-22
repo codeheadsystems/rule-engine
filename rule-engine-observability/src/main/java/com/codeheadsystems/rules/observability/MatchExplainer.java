@@ -13,11 +13,13 @@ import com.codeheadsystems.rules.session.CompiledRuleSet;
 import com.codeheadsystems.rules.session.RuleSession;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.MissingNode;
 
@@ -536,14 +538,16 @@ public final class MatchExplainer {
     }
     for (final PatternResult result : results) {
       if (result.considered() == 0) {
-        return Optional.of("no " + result.factType() + " fact exists");
+        return Optional.of("no " + result.factType() + " fact exists"
+            + evictionNote(result.factType()));
       }
     }
     for (final PatternResult result : results) {
       if (result.survivors().isEmpty()) {
         return Optional.of(result.considered() + " " + result.factType()
             + "(s) considered; none matched " + result.alias()
-            + result.firstFailure().map(failure -> " — " + failure.describe()).orElse(""));
+            + result.firstFailure().map(failure -> " — " + failure.describe()).orElse("")
+            + evictionNote(result.factType()));
       }
     }
     /*
@@ -556,10 +560,75 @@ public final class MatchExplainer {
     }
     for (final PatternResult result : results) {
       if (result.joinNote().isPresent()) {
-        return result.joinNote();
+        // The verdict a streaming eviction most often lands on, and the one this note was missing.
+        // Cap a type, let a fact age out, and the facts that joined to it still pass their own
+        // alpha tests -- so the pattern has survivors and the answer is the join, which is correct
+        // and which the author will now go and inspect for a defect that is not there.
+        return result.joinNote().map(note -> note + evictionNote(rule));
       }
     }
     return refractionVerdict(rule, matches);
+  }
+
+  /**
+   * What the session has evicted of one fact type, phrased for the end of a verdict.
+   *
+   * <p><strong>The blind spot §4.4's eviction opens, and the reason this method exists.</strong> A
+   * rule that stops matching because its facts were let go reads exactly like a rule that never
+   * matched: "no Order fact exists" is true, complete, and sends an author to look at their rule
+   * when the answer is their cap. This class exists to answer "why did R not fire", and after
+   * eviction landed there was a whole category of that question it answered misleadingly.
+   *
+   * <p>The evicted facts themselves are gone, so a count is all there is to say -- but the count is
+   * the part that changes what the reader does next. Empty when nothing of this type was evicted,
+   * which is every session that configured no policy.
+   *
+   * @param factType the type the verdict is about
+   * @return a trailing clause, or empty text when this type has lost nothing
+   */
+  private String evictionNote(final String factType) {
+    final long evicted = evictedByType().getOrDefault(factType, 0L);
+    return evicted == 0L ? "" : " (" + evicted + " " + factType + " fact(s) evicted this session)";
+  }
+
+  /**
+   * The same clause for a verdict that is about a whole rule rather than one pattern.
+   *
+   * <p>A join or cross-fact verdict says no <em>combination</em> works, which is not a statement
+   * about one fact type, so this names every patterned type that has lost facts. Ordered by the
+   * rule's own patterns rather than by the map, so two rules over the same session read
+   * consistently.
+   *
+   * @param rule the rule being explained
+   * @return a trailing clause, or empty text when nothing the rule patterns has lost facts
+   */
+  private String evictionNote(final CompiledRule rule) {
+    final Map<String, Long> evicted = evictedByType();
+    final StringBuilder text = new StringBuilder();
+    final Set<String> named = new LinkedHashSet<>();
+    for (final CompiledPattern pattern : rule.patterns()) {
+      final long count = evicted.getOrDefault(pattern.factType(), 0L);
+      if (count == 0L || !named.add(pattern.factType())) {
+        continue;
+      }
+      text.append(text.isEmpty() ? " (" : ", ")
+          .append(count).append(' ').append(pattern.factType()).append(" fact(s) evicted");
+    }
+    return text.isEmpty() ? "" : text.append(" this session)").toString();
+  }
+
+  /**
+   * This session's per-type eviction counts.
+   *
+   * <p>{@link RuleSession#stats()} assembles a record and copies this map to answer, so it is worth
+   * calling once and holding the result -- which is what {@link #evictionNote(CompiledRule)} does,
+   * turning one call per pattern into one per verdict. The per-pattern overload calls it once and
+   * only ever runs on one branch, so it was never the cost here.
+   *
+   * @return the counts, empty when no eviction policy is configured
+   */
+  private Map<String, Long> evictedByType() {
+    return session.stats().evictedByType();
   }
 
   /**
@@ -581,9 +650,21 @@ public final class MatchExplainer {
    */
   private Optional<String> refractionVerdict(final CompiledRule rule, final Matches matches) {
     if (matches.found().isEmpty()) {
+      /*
+       * The eviction clause belongs to THIS branch and to none of the others, and an earlier
+       * version of it was appended to all five. The four below say the rule matched -- "all already
+       * fired" is a rule working exactly as intended -- and a session with a cap has a permanently
+       * non-zero evicted count, so gluing the clause onto them puts it on every explanation of
+       * every rule for the rest of that session's life. "A clause that is always there stops being
+       * read" is the reason it is empty when nothing was evicted; appending it to the success paths
+       * recreates that failure precisely where the note matters most.
+       *
+       * Not on the budget-exhausted case either: the search did not finish, so what the session let
+       * go of is not the story. There may well be a match.
+       */
       return Optional.of(matches.complete()
           ? "every pattern matched individually, but no combination of them satisfies the rule's"
-              + " cross-fact constraints"
+              + " cross-fact constraints" + evictionNote(rule)
           : "no match found before the search budget ran out; there may be one");
     }
     final List<String> fired = new ArrayList<>();
