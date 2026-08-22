@@ -381,7 +381,8 @@ public final class SessionActor implements AutoCloseable {
   }
 
   /**
-   * Applies commands until the inbox is momentarily empty, so a burst costs one fire cycle.
+   * Applies commands until the inbox is momentarily empty <em>or one inbox-full has been
+   * applied</em>, so a burst costs one fire cycle and a stream cannot cost none.
    *
    * <p><strong>One at a time, never into a list.</strong> {@code drainTo} is the obvious way to
    * batch and is wrong here: it removes submissions from the queue before any of them runs, and
@@ -393,10 +394,31 @@ public final class SessionActor implements AutoCloseable {
    * <p>Polling one at a time means the only submission outside the queue is the one being applied,
    * and that one's future is completed by {@link Submission#applyTo} whatever it throws.
    *
+   * <p><strong>The bound is what keeps the fire loop reachable, and "momentarily empty" alone is
+   * not.</strong> Producers that submit in a loop refill the inbox as fast as the worker drains it,
+   * so it is never momentarily empty and {@link #run} never gets back to {@link #fireOnce}. That is
+   * not a slow fire loop, it is no fire loop: measured on six producers against a 256-deep inbox,
+   * 41,925 commands were applied and <em>one</em> fire cycle ran in three seconds, while working
+   * memory grew by every one of those inserts. Two things follow from it, and both are worse than
+   * they look. A streaming session accumulates facts and fires nothing, which is the exact opposite
+   * of what an actor is for -- and §4.7's {@code maxFacts} cannot save it, because that bound is
+   * checked inside a fire call that never happens. And an actor whose session fails on a rule
+   * action never learns it, because {@link #run}'s loop condition only re-reads
+   * {@code session.failed()} after a fire: {@code running()} stays green forever on a session that
+   * can no longer do anything, and any producer looping on it never stops.
+   *
+   * <p>The bound is the inbox capacity rather than a new option, because that is the number that
+   * already means "one burst". A burst that fits in the inbox is still one batch and still costs
+   * one fire cycle, which is the property this method was written for; what changes is that the
+   * worker now reaches {@link #fireOnce} after at most that many commands no matter how hard
+   * producers push. What is left stays in the queue, reachable and completable, and the next loop
+   * iteration picks it up.
+   *
    * @param first the submission that woke the worker
    */
   private void applyBatch(final Submission<?> first) {
     Submission<?> next = first;
+    int applied = 0;
     while (next != null) {
       next.applyTo(session);
       /*
@@ -423,6 +445,11 @@ public final class SessionActor implements AutoCloseable {
          * is the idiom every style guide requires -- so a well-behaved command silently killed a
          * long-lived actor.
          */
+        return;
+      }
+      if (++applied >= options.inboxCapacity()) {
+        // One inbox-full is a burst. Anything past it is a stream, and a stream has to be
+        // interleaved with firing rather than absorbed ahead of it -- see the bound above.
         return;
       }
       next = inbox.poll();

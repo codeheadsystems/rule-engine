@@ -36,6 +36,15 @@ import org.junit.jupiter.api.Test;
  */
 class SessionActorTest {
 
+  /**
+   * How many futures the stranding probe will retain before it stops on its own.
+   *
+   * <p>Comfortably above what the probe needs -- the actor it waits on fails on its first fire
+   * cycle, so a healthy run issues a few hundred -- and far below what exhausts a test worker's
+   * default heap. See the loop that reads it.
+   */
+  private static final int STRANDING_PROBE_CEILING = 50_000;
+
   private static CompiledRuleSet rules() {
     return RuleCompiler.compile(List.of(Rules.rule("seen")
         .noLoop()
@@ -672,7 +681,15 @@ class SessionActorTest {
                 // Until the actor dies, not a fixed count: offers have to keep landing throughout
                 // the shutdown drain, which is the window being probed. A fixed count finishes
                 // early and mostly misses it.
-                while (actor.running()) {
+                //
+                // The ceiling is a safety valve, not part of the probe. This loop retains a future
+                // per iteration and exits only on an exit the actor performs for itself, so a
+                // liveness regression in the worker -- the fire loop starving, which is what
+                // sustainedSubmissionCannotStarveTheFireLoop now guards -- does not surface here as
+                // a failure. It surfaces as this list growing at fourteen thousand futures a second
+                // until the heap is gone, twelve minutes later, with no test named. Stopping lets
+                // the assertion below run and say something.
+                while (actor.running() && issued.size() < STRANDING_PROBE_CEILING) {
                   issued.add(actor.submit(session -> {
                     session.insert("Order", Facts.obj("total", 10));
                     return null;
@@ -698,6 +715,61 @@ class SessionActorTest {
             .describedAs("round %d: every future must be completed by someone", round)
             .isEmpty();
       }
+    }
+
+    @Test
+    @DisplayName("producers that never stop submitting cannot starve the fire loop")
+    void sustainedSubmissionCannotStarveTheFireLoop() throws Exception {
+      /*
+       * The fourth hazard, found by the third one hanging. applyBatch drained "until the inbox is
+       * momentarily empty", and six producers submitting in a loop never leave it momentarily
+       * empty: the worker applied 41,925 commands and reached fireOnce ONCE in three seconds.
+       *
+       * Both consequences are silent. A streaming session accumulates facts and fires nothing --
+       * and maxFacts (§4.7) cannot catch it, because that bound is checked inside a fire call that
+       * never happens. And run()'s loop condition re-reads session.failed() only after a fire, so
+       * an actor whose session died on a rule action reports running() green forever. That second
+       * one is what hung nothingIsStrandedWhenTheWorkerStopsByItself above: it waits for exactly
+       * that internal exit, so its producers looped until the heap was gone rather than failing.
+       *
+       * Asserted as a ratio rather than a count, because the bound is one inbox-full per fire
+       * cycle and the absolute numbers are a scheduling detail. Halved as slack for the partial
+       * batches at either end. Before the bound this was 1, which no slack reaches.
+       */
+      final AtomicInteger fires = new AtomicInteger();
+      final AtomicInteger applied = new AtomicInteger();
+      final AtomicBoolean keepGoing = new AtomicBoolean(true);
+      final int inboxCapacity = 256;
+
+      try (SessionActor actor = SessionActor.start(rules(), streaming(),
+          ActorOptions.builder()
+              .inboxCapacity(inboxCapacity)
+              .offerTimeout(Duration.ofMillis(200))
+              .onFire(result -> fires.incrementAndGet())
+              .build())) {
+        try (ExecutorService producers = Executors.newVirtualThreadPerTaskExecutor()) {
+          for (int producer = 0; producer < 6; producer++) {
+            producers.submit(() -> {
+              while (keepGoing.get() && actor.running()) {
+                // The future is deliberately dropped. Retaining one per iteration is what turned
+                // the starvation into an out-of-memory error rather than a failed assertion.
+                actor.submit(session -> {
+                  session.insert("Order", Facts.obj("id", applied.incrementAndGet(), "total", 10));
+                  return null;
+                });
+              }
+              return null;
+            });
+          }
+          Thread.sleep(2_000);
+          keepGoing.set(false);
+        }
+      }
+
+      assertThat(fires.get())
+          .describedAs("applied %d commands in one fire cycle's worth of batches",
+              applied.get())
+          .isGreaterThan(applied.get() / (2 * inboxCapacity));
     }
 
     @Test
