@@ -76,7 +76,15 @@ that steady state is observed, and asserted: two thousand inserts through a `Ses
 cap of twenty-five leave twenty-five facts held, with the beta memory, its reverse index and the
 refraction memory flat between the thousandth insert and the two-thousandth.
 
-Still to come in the phase: differential propagation (§11.2) and the Rete agenda shape (§4.3).
+Still to come in the phase: the Rete agenda shape (§4.3) and differential propagation (§11.2), in
+that order and for a measured reason. `StreamingBenchmarks` holds the working set fixed with an
+eviction cap and inserts with and without a fire, which is what makes the two separable: the fire
+cycle is 99.5% of the operation at a working set of 4000 and grows about 5x for each 4x of that set,
+while the streaming matcher buys a constant factor of about 2x and no change in exponent. Its
+conflict set is still rebuilt wholesale on every fire, one activation per held match, and §4.3 is
+what addresses that — for the Rete shape specifically, since §4.3's push-and-pull interface is not
+available to TREAT. See [`docs/benchmarks.md`](docs/benchmarks.md), including what it does *not*
+show.
 
 **What does not exist:** negation, accumulation, truth maintenance and CEP, which are §1 non-goals
 with documented interim answers.

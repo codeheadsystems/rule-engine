@@ -536,6 +536,190 @@ itself. That is the reason to have the number rather than assume it.
   once per candidate, so this is expected to be invisible — but "expected" is what this file exists
   to replace.
 
+# Phase 3: where the streaming cost actually is
+
+`StreamingBenchmarks`, added with §4.4's eviction and the first benchmark here with the shape Phase
+3 exists for: insert-then-fire, repeated, against a working memory that stays the same size.
+`EngineBenchmarks` says plainly that it does not have this shape — it inserts a batch and fires
+once, which is what §11.1 chose TREAT for and what the streaming matcher is worst at.
+
+## Why this could not be written before eviction
+
+Insert continuously and working memory grows, so the join walk grows, so the conflict set grows —
+and a rising per-operation cost could be any of them. §4.4's eviction fixes the working set, which
+makes the terms separable at all.
+
+Two benchmarks over one steady-state session, differing by one statement. `insertOnly` inserts a
+fact: the alpha network, the pattern memories and their indexes, the beta memory under the streaming
+shape, and the eviction that insert triggers. `insertAndFire` inserts the same fact and fires to
+quiescence. The difference between the columns is the fire cycle.
+
+**What is in the fire cycle is not the same on both matchers, and the write-up originally got this
+wrong.** Under Rete the join is already materialised, so the fire is the conflict-set rebuild. Under
+TREAT the join happens *inside* the fire (`NetworkAgenda`: "Nothing pinned: TREAT re-joins the whole
+working memory at fire time"), so the difference there is join walk **plus** rebuild. Every
+conclusion below is scoped accordingly.
+
+## Results
+
+Two-pattern join, 8 uncapped `Customer` facts, `Order` capped at the working set, JDK 25, shared JMH
+sizing (3×2s warmup, 3×2s measurement, one fork).
+
+```
+Benchmark                          (matcher)  (workingSet)  Mode  Cnt     Score       Error  Units
+StreamingBenchmarks.insertOnly       NETWORK           250  avgt    3     0.736 ±     0.159  us/op
+StreamingBenchmarks.insertOnly       NETWORK          1000  avgt    3     0.762 ±     0.037  us/op
+StreamingBenchmarks.insertOnly       NETWORK          4000  avgt    3     1.133 ±     0.327  us/op
+StreamingBenchmarks.insertOnly          RETE           250  avgt    3     1.780 ±     2.183  us/op
+StreamingBenchmarks.insertOnly          RETE          1000  avgt    3     2.152 ±     1.604  us/op
+StreamingBenchmarks.insertOnly          RETE          4000  avgt    3     2.668 ±     0.171  us/op
+StreamingBenchmarks.insertAndFire    NETWORK           250  avgt    3    42.844 ±     3.097  us/op
+StreamingBenchmarks.insertAndFire    NETWORK          1000  avgt    3   230.246 ±   301.785  us/op
+StreamingBenchmarks.insertAndFire    NETWORK          4000  avgt    3  1143.529 ±   623.450  us/op
+StreamingBenchmarks.insertAndFire       RETE           250  avgt    3    21.637 ±     1.118  us/op
+StreamingBenchmarks.insertAndFire       RETE          1000  avgt    3   102.647 ±    12.018  us/op
+StreamingBenchmarks.insertAndFire       RETE          4000  avgt    3   554.038 ±   198.192  us/op
+```
+
+**Three of those intervals are wider than any conclusion could survive** — 230 ± 302 and
+1144 ± 623 are the worst. The fix used here is replication rather than a longer run, for a reason
+recorded in the class: annotating it `@Fork(2) @Measurement(iterations = 10)` does nothing, because
+the Gradle JMH plugin passes `-f/-wi/-i` from its own `jmh` block and command-line options beat
+annotations. Two alternatives exist and both were declined for this run: raising the shared sizing, which makes
+the whole suite slow enough that it stops being run, or registering a `JavaExec` on
+`org.openjdk.jmh.Main` over the jmh runtime classpath with its own `-f/-wi/-i`, which is about eight
+lines and buys per-class sizing without touching the shared block. The second is the right answer if
+this section is ever regenerated. For this one the class was simply run a second time, in a fresh
+JVM:
+
+Run 2's scores, so the comparison below can be checked rather than taken:
+
+```
+StreamingBenchmarks.insertOnly       NETWORK           250  avgt    3     0.732 ±     0.153  us/op
+StreamingBenchmarks.insertOnly       NETWORK          1000  avgt    3     0.797 ±     0.100  us/op
+StreamingBenchmarks.insertOnly       NETWORK          4000  avgt    3     1.149 ±     0.159  us/op
+StreamingBenchmarks.insertOnly          RETE           250  avgt    3     1.711 ±     0.168  us/op
+StreamingBenchmarks.insertOnly          RETE          1000  avgt    3     2.047 ±     0.206  us/op
+StreamingBenchmarks.insertOnly          RETE          4000  avgt    3     2.711 ±     0.199  us/op
+StreamingBenchmarks.insertAndFire    NETWORK           250  avgt    3    46.034 ±    15.951  us/op
+StreamingBenchmarks.insertAndFire    NETWORK          1000  avgt    3   236.981 ±    56.730  us/op
+StreamingBenchmarks.insertAndFire    NETWORK          4000  avgt    3  1140.535 ±   178.935  us/op
+StreamingBenchmarks.insertAndFire       RETE           250  avgt    3    22.160 ±     1.156  us/op
+StreamingBenchmarks.insertAndFire       RETE          1000  avgt    3   111.549 ±    17.539  us/op
+StreamingBenchmarks.insertAndFire       RETE          4000  avgt    3   578.095 ±   293.948  us/op
+```
+
+| Fire cost (score minus maintenance) | run 1 | run 2 | difference |
+|---|---|---|---|
+| NETWORK, W=250 | 42.1us | 45.3us | +7.6% |
+| NETWORK, W=1000 | 229.5us | 236.2us | +2.9% |
+| NETWORK, W=4000 | 1142.4us | 1139.4us | −0.3% |
+| RETE, W=250 | 19.9us | 20.4us | +3.0% |
+| RETE, W=1000 | 100.5us | 109.5us | +9.0% |
+| RETE, W=4000 | 551.4us | 575.4us | +4.4% |
+
+Six independent comparisons agreeing to within 9% across fresh JVMs says the *means* are
+reproducible even where a single run's interval is not, and every derived number quoted below is
+given for both runs. That is the claim this section rests on; the within-run intervals are not.
+
+Two limits on it, since it is doing a lot of work here. **n = 2 establishes reproducibility, not a
+distribution** — it says the mean is stable, not what its spread is. And **both runs are the same
+machine**, so it controls for JVM seeding and for nothing systematic about the host.
+
+## What they say
+
+**The fire cycle is essentially the whole operation.** At W=4000 it is 99.9% of `insertAndFire`
+under TREAT and 99.5% under Rete, and it is 100–400x maintenance at every size in both runs. This is
+the most robust thing on the page: it survives the widest error bar, because the maintenance term is
+both tiny and tightly measured. **Any optimisation that does not touch the fire cycle is rounding
+error on this workload.**
+
+**Maintenance is flat, and that is by construction rather than a discovery.** Across a 16x working
+set: 0.736→1.133us then 0.732→1.149us (TREAT, run 1 then run 2), and 1.780→2.668us then
+1.711→2.711us (Rete). Before reading anything into it: the only population
+that scales here is the *pinned* one. `Customer` is fixed at 8 and uncapped, so an arriving `Order`
+probes 8 facts whatever the cap is, and under TREAT the insert does no join work at all. A flat
+column was guaranteed by the rule shape. What it shows is that maintenance is O(1) in the streamed
+type's working set, as designed — it is **not** evidence for §9's "amortizes join cost", and an
+earlier version of this section wrongly cited it as exactly that. The shape that would test §9's
+criterion is one where the counterpart population also scales: a second capped type, or the
+self-join §4.4's amendment names as the O(N²) surface Rete introduces. Unmeasured.
+
+**Fire cost grows about 5x for each 4x of working set, on both shapes.** Run 1: 5.45, 4.98 (TREAT)
+and 5.06, 5.49 (Rete). Run 2: 5.21, 4.82 and 5.35, 5.25. Modestly super-linear, and the same shape
+on both.
+
+**Rete's fire is 0.44–0.51 of TREAT's**, across three sizes and two runs — a constant factor of
+roughly 2x, with no change in exponent. Some of that gap is the join walk TREAT redoes and Rete
+does not, which is the thing Rete is for; the rest is a cheaper rebuild. This benchmark does not
+separate those two, and that separation is what would size §4.3's payoff exactly rather than
+approximately.
+
+**The per-activation residual.** Held matches equal the working set exactly here — 8 customers, each
+order joining one of them, no fan-out — so fire cost divided by W is what one activation costs:
+
+| Working set | ns per activation, TREAT (run 1 / run 2) | ns per activation, Rete (run 1 / run 2) |
+|---|---|---|
+| 250 | 168 / 181 | 79 / 82 |
+| 1000 | 230 / 236 | 100 / 110 |
+| 4000 | 286 / 285 | 138 / 144 |
+
+**This table is an identity transform and proves nothing on its own** — dividing by W assumes the
+linearity it appears to show. The evidence that the term is linear in held matches is
+`RecomputingAgenda.materialise` replacing a dirty rule's slice wholesale, which is reading the code.
+What the table adds is the size and shape of what linearity leaves over: a per-activation cost that
+degrades across a 16x working set by 1.70x then 1.57x (TREAT, run 1 then run 2) and 1.74x then 1.76x
+(Rete). Rete's figure replicates; TREAT's moves by 8%, which is a reminder that this residual is the
+least well-measured thing here. All four sit in 1.5-1.8, and that band is the claim.
+
+Two candidate explanations, and this benchmark does not choose between them. The memory system —
+allocation and cache pressure from an ever-larger array of short-lived activations — is the obvious
+one, and a genuine O(log W) term would give 2.77x across 16x rather than 1.7x. But the two matchers
+**share** `RecomputingAgenda`, which owns `materialise`, the refraction check at selection and the
+conflict-resolution comparator; a super-linear term living there would also degrade both columns
+alike. What the agreement does rule out is a term hiding in one matcher's `matchesOf` and not the
+other's. `-prof gc` would separate the rest and was not run.
+
+## What this decides
+
+**For the Rete shape, §4.3 is the lever, and the prediction is specific.** Its conflict set is
+replaced wholesale at recomputation, so an activation is constructed for every held match on every
+fire — one per surviving order here — though at most one can fire and refraction discards the rest
+at selection. §4.3's `activate`/`deactivate` interface touches the matches that *changed*, which is
+one per insert in this workload. If that is right, Rete's fire cycle stops growing with the working
+set, taking `insertAndFire` at W=4000 from ~554us toward the ~2.7us its maintenance costs. Nothing
+here measures that; the benchmark exists so the claim is falsifiable when the commit lands.
+
+**§4.3 is not available to TREAT**, and the first version of this section said otherwise. §4.3 is
+explicit: the `activate`/`deactivate`/`deactivateAllInvolving` trio "is the *Rete* interface… Under
+TREAT nothing pushes and nothing pulls — the conflict set for a dirty rule is replaced wholesale at
+recomputation." The NETWORK column is expected to be largely unmoved by that commit, and anyone
+reading a flat TREAT result as a failed optimisation would be reading it wrong.
+
+**§11.2 could not have moved anything on this page.** Differential propagation is about update
+semantics — re-propagating only through the subgraph an update affects — and this workload performs
+no updates. `ReteAgenda`'s class documentation named it as "the commit that changes it"; that has
+been corrected to §4.3.
+
+## What Phase 3 still does not measure
+
+- **§9's "amortizes join cost".** See the maintenance paragraph: the joined-against population does
+  not scale here, so the criterion is untested by this benchmark despite an earlier draft claiming
+  it as met.
+- **How much of Rete's 2x is the join and how much is the rebuild.** That split is what sizes §4.3's
+  payoff, and this benchmark reports only their sum.
+- **The §4.3 prediction itself**, by construction — it has not been built.
+- **Whether the residual is allocation.** `-prof gc`, not run, and `RecomputingAgenda` is a live
+  alternative explanation.
+- **The eviction itself.** One eviction per operation is inside both columns and cancels in the
+  subtraction; the flat maintenance column bounds it under a microsecond, which is enough to know it
+  is not a term in this argument and not enough to quote.
+- **More than one rule.** One rule means one dirty slice per fire. Many rules sharing a fact type
+  rebuild each of their slices, which should multiply the dominant term — the shape most likely to
+  make this worse in production.
+- **Firing less often than every insert.** Real callers batch, the fire cost amortises across the
+  batch, and where the crossover sits is the tuning question an operator actually asks.
+
 ## A note on this file's own history
 
 Three versions of the join benchmark: the first measured right-hand sides, the second measured

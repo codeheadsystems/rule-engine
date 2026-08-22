@@ -28,16 +28,23 @@ import java.util.Objects;
  * once per arriving fact -- with that fact's position pinned -- and keeps the completions. A fire
  * cycle then reads a memory instead of re-joining.
  *
- * <p><strong>That amortises the join and not yet the fire cycle, and the difference is measurable
- * rather than a caveat.</strong> Streaming 1000 then 3000 orders against 200 preloaded customers,
- * firing after each insert: 333ms then 1245ms under TREAT, 92ms then 545ms here. Roughly a 2-3x
- * constant, and <em>both</em> curves are super-linear -- three times the facts costs this shape
- * about six times the time. The join really is paid once per fact, but
- * {@code RecomputingAgenda.materialise} still replaces a dirty rule's whole conflict-set slice per
- * fire cycle, so an activation is constructed for every held match every time the rule is dirty.
- * §9's "amortizes join cost" is met; §9's streaming workload is not yet served at the complexity a
- * reader would assume from that phrase, and §11.2's differential propagation is the commit that
- * changes it.
+ * <p><strong>That amortises the join and not the fire cycle, and the split has now been
+ * measured.</strong> {@code StreamingBenchmarks} holds the working set fixed with §4.4's eviction --
+ * which is what makes the two separable at all -- and inserts with and without a fire. The fire
+ * cycle is 99.5% of the operation at a working set of 4000 and grows about 5x for each 4x of that
+ * set; this shape costs 0.44-0.51 of what TREAT costs there, across three sizes and two independent
+ * runs. A constant factor of about 2x, no change in exponent. Note what that measurement does
+ * <em>not</em> establish, since the obvious reading is wrong: the maintenance column is flat by
+ * construction, because the population this joins against is fixed at 8 facts and does not scale
+ * with the cap.
+ *
+ * <p>The reason is {@code RecomputingAgenda.materialise}, which still replaces a dirty rule's whole
+ * conflict-set slice per fire cycle: an activation is constructed for every held match every time
+ * the rule is dirty, though at most one can fire and refraction discards the rest at selection.
+ * <strong>§4.3's {@code activate}/{@code deactivate} interface is what removes that</strong>, by
+ * touching the matches that changed rather than all of them. An earlier version of this paragraph
+ * named §11.2's differential propagation instead; that is about update semantics and this workload
+ * performs no updates, so it would not have moved the number. See {@code docs/benchmarks.md}.
  *
  * <p><strong>The same join walk, not an agreeing one.</strong> Both matchers call
  * {@link JoinEnumerator}; this one passes a pinned position. That makes an incremental result a

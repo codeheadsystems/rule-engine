@@ -46,8 +46,10 @@ import tools.jackson.databind.node.ObjectNode;
  * These benchmarks insert a batch and fire once, which is the shape §11.1 chose TREAT for and the
  * one the streaming matcher is worst at -- it maintains a beta memory it then reads exactly once.
  * A column that loses here is the expected result, not a regression. The workload Phase 3 exists
- * for is insert-then-fire repeated against a large working memory, and no benchmark in this class
- * has that shape yet; §9's "amortizes join cost" stays unmeasured until one does.
+ * for is insert-then-fire repeated against a working memory that stays one size, which is
+ * {@code StreamingBenchmarks} rather than anything in this class -- and it needed §4.4's eviction
+ * before it could be written, because an unbounded working set grows the join and the conflict set
+ * together and separates neither.
  *
  * <p>Run with {@code ./gradlew :rule-engine-testkit:jmh}; see {@code docs/benchmarks.md}.
  */
