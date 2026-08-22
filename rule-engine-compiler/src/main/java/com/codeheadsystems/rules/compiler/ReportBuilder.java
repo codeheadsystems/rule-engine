@@ -595,7 +595,7 @@ final class ReportBuilder {
       while (grew) {
         grew = false;
         for (final CompiledRule rule : rules) {
-          if (!reachable.containsAll(rule.factTypes())) {
+          if (!reachable.containsAll(rule.boundFactTypes())) {
             continue;
           }
           for (final ActionDefinition action : rule.source().then()) {
@@ -606,7 +606,11 @@ final class ReportBuilder {
         }
       }
       return rules.stream()
-          .filter(rule -> !reachable.containsAll(rule.factTypes()))
+          // boundFactTypes, not factTypes: a negated type is one this rule must be DIRTIED by, not
+          // one it needs a fact of. Asking the dirty question here reports a rule that fires on
+          // every Order as dead because nobody ever inserts the Payment whose absence it asserts --
+          // and §7.4's guide recommends failing a build on this list.
+          .filter(rule -> !reachable.containsAll(rule.boundFactTypes()))
           .map(CompiledRule::id)
           .toList();
     }).orElseGet(List::of);

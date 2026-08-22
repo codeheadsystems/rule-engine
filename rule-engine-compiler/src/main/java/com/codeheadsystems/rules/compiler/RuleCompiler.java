@@ -199,23 +199,84 @@ public final class RuleCompiler {
     // rather than one that says the alias does not exist when it plainly does.
     final Map<String, Integer> aliasPositions = new LinkedHashMap<>();
     final List<String> aliasTypes = new ArrayList<>();
-    for (int position = 0; position < rule.when().size(); position++) {
-      final PatternDefinition pattern = rule.when().get(position);
-      if (pattern.quantifier() != Quantifier.EXISTS_AT_LEAST_ONE) {
+    /** Aliases a {@code NOT_EXISTS} pattern names. They bind nothing, so nothing may reference one. */
+    final Set<String> negatedAliases = new LinkedHashSet<>();
+    /*
+     * Positions are assigned to POSITIVE patterns only, and that is the whole trick that keeps
+     * negation from touching the rest of the engine. A NOT_EXISTS pattern binds no alias into the
+     * tuple, so giving it a position would make every downstream consumer -- the join planner, the
+     * join walk, the streaming matcher's pattern sites, the explainer -- have to know to skip it.
+     * Instead they read `patterns`, which contains only the ones that produce bindings, and the
+     * negated ones are compiled separately against these same positions.
+     */
+    int position = 0;
+    for (final PatternDefinition pattern : rule.when()) {
+      if (pattern.quantifier() != Quantifier.EXISTS_AT_LEAST_ONE
+          && pattern.quantifier() != Quantifier.NOT_EXISTS) {
         diagnostics.add(rule.id() + ": quantifier " + pattern.quantifier()
-            + " on alias '" + pattern.alias() + "' is not implemented in v1. See spec section 1"
+            + " on alias '" + pattern.alias() + "' is not implemented. See spec section 1"
             + " for the interim answer");
+      }
+      if (pattern.quantifier() == Quantifier.NOT_EXISTS) {
+        /*
+         * A negated alias is still checked for duplication, because "bound twice" would be just as
+         * confusing here -- but it is recorded in a separate set, since nothing may reference it.
+         * The pattern itself is compiled after this loop, when every positive position is known: a
+         * negation may join against any positive alias, including ones declared after it.
+         */
+        if (!negatedAliases.add(pattern.alias()) || aliasPositions.containsKey(pattern.alias())) {
+          diagnostics.add(rule.id() + ": alias '" + pattern.alias() + "' is bound twice");
+        }
+        /*
+         * A §6.4 condition on a negated pattern is refused rather than ignored. It would compile --
+         * ExpressionConstraint is a Constraint like any other -- and then never run, because the
+         * post-filter that evaluates conditions walks the rule's POSITIVE patterns and the negation
+         * is answered by its alpha and join tests alone. The negation would silently be broader than
+         * written, which loses a firing quietly. Refusing costs little: such a condition cannot
+         * reference the negated alias anyway, since only bound aliases are declared to the
+         * expression compiler.
+         */
+        for (final Constraint constraint : pattern.constraints()) {
+          if (constraint instanceof ExpressionConstraint) {
+            diagnostics.add(rule.id() + ": alias '" + pattern.alias() + "': a condition on a"
+                + " NOT_EXISTS pattern is not supported. Express it with the pattern's own"
+                + " constraints, which are what decide whether the fact exists");
+          }
+        }
+        continue;
       }
       if (aliasPositions.putIfAbsent(pattern.alias(), position) != null) {
         diagnostics.add(rule.id() + ": alias '" + pattern.alias() + "' is bound twice");
       }
       aliasTypes.add(pattern.factType());
+      position++;
     }
 
-    final List<CompiledPattern> patterns = new ArrayList<>(rule.when().size());
-    for (int position = 0; position < rule.when().size(); position++) {
-      patterns.add(
-          compilePattern(rule, rule.when().get(position), position, aliasPositions, aliasTypes));
+    final List<CompiledPattern> patterns = new ArrayList<>(aliasTypes.size());
+    final List<CompiledPattern> negations = new ArrayList<>();
+    int positive = 0;
+    for (final PatternDefinition pattern : rule.when()) {
+      if (pattern.quantifier() == Quantifier.NOT_EXISTS) {
+        /*
+         * Compiled at a notional position AFTER every positive one, which is not a trick: the third
+         * argument only decides which earlier same-type positions this pattern's fact must differ
+         * from, and a negated candidate must differ from all of them. "No OTHER order for this
+         * customer" is what an author means by a negated pattern of a type the rule already binds,
+         * and it is the same rule §1 states for two positive aliases.
+         */
+        negations.add(compilePattern(rule, pattern, aliasTypes.size(), aliasPositions, aliasTypes,
+            negatedAliases));
+      } else {
+        patterns.add(compilePattern(rule, pattern, positive, aliasPositions, aliasTypes,
+            negatedAliases));
+        positive++;
+      }
+    }
+    if (patterns.isEmpty()) {
+      // A rule that is nothing but negations has no tuple to attach them to. It would "match" once,
+      // against the empty binding, which is a semantics nobody asked for and §2.5 does not define.
+      diagnostics.add(rule.id() + ": every pattern is NOT_EXISTS; a rule needs at least one pattern"
+          + " that binds a fact");
     }
 
     validateActions(rule, aliasPositions.keySet());
@@ -232,7 +293,8 @@ public final class RuleCompiler {
       return Optional.empty();
     }
     return Optional.of(new CompiledRule(
-        rule.id(), rule.salience(), rule.noLoop(), rule.agendaGroup(), patterns, rule.then(),
+        rule.id(), rule.salience(), rule.noLoop(), rule.agendaGroup(), patterns, negations,
+        rule.then(),
         pathsByRule.getOrDefault(rule.id(), Map.of()),
         valueExpressions, rule));
   }
@@ -245,11 +307,13 @@ public final class RuleCompiler {
    * @param position the pattern's position in the rule
    * @param aliasPositions every alias the rule binds, mapped to its position
    * @param aliasTypes every fact type the rule binds, indexed by position
+   * @param negatedAliases the aliases naming a negated pattern, which bind nothing
    * @return the compiled pattern
    */
   private CompiledPattern compilePattern(final RuleDefinition rule,
       final PatternDefinition pattern, final int position,
-      final Map<String, Integer> aliasPositions, final List<String> aliasTypes) {
+      final Map<String, Integer> aliasPositions, final List<String> aliasTypes,
+      final Set<String> negatedAliases) {
     final List<AlphaTest> alphaTests = new ArrayList<>();
     final List<JoinTest> joinTests = new ArrayList<>();
     final List<ExpressionTest> expressionTests = new ArrayList<>();
@@ -257,7 +321,8 @@ public final class RuleCompiler {
     for (final Constraint constraint : pattern.constraints()) {
       switch (constraint) {
         case JoinConstraint join ->
-            compileJoin(rule, pattern, join, aliasPositions, aliasTypes).ifPresent(joinTests::add);
+            compileJoin(rule, pattern, position, join, aliasPositions, aliasTypes, negatedAliases)
+                .ifPresent(joinTests::add);
         case ExpressionConstraint expression ->
             compileCondition(rule, pattern, expression, aliasPositions, aliasTypes)
                 .ifPresent(expressionTests::add);
@@ -417,8 +482,9 @@ public final class RuleCompiler {
    * @return the compiled join, or empty if the reference did not resolve
    */
   private Optional<JoinTest> compileJoin(final RuleDefinition rule,
-      final PatternDefinition pattern, final JoinConstraint constraint,
-      final Map<String, Integer> aliasPositions, final List<String> aliasTypes) {
+      final PatternDefinition pattern, final int position, final JoinConstraint constraint,
+      final Map<String, Integer> aliasPositions, final List<String> aliasTypes,
+      final Set<String> negatedAliases) {
     final String where = rule.id() + ": " + pattern.alias() + "." + constraint.field();
     switch (constraint.op()) {
       case MATCHES -> {
@@ -443,11 +509,17 @@ public final class RuleCompiler {
     }
     final Integer other = aliasPositions.get(constraint.otherAlias());
     if (other == null) {
-      diagnostics.add(where + ": $ref names alias '" + constraint.otherAlias()
-          + "', which is not bound by this rule");
+      // Three cases, not two: a NOT_EXISTS alias exists but binds nothing, and saying it is not
+      // bound by the rule sends an author looking for a typo that is not there. Same reasoning as
+      // the "bound later" branch below.
+      diagnostics.add(where + ": $ref names alias '" + constraint.otherAlias() + "', which "
+          + (negatedAliases.contains(constraint.otherAlias())
+              ? "is a NOT_EXISTS pattern. A negated pattern binds no fact, so nothing can reference"
+                  + " it"
+              : "is not bound by this rule"));
       return Optional.empty();
     }
-    if (other >= aliasPositions.get(pattern.alias())) {
+    if (other >= position) {
       diagnostics.add(where + ": $ref names alias '" + constraint.otherAlias()
           + "', which is bound later. Every reference must resolve to an earlier alias, which is"
           + " what keeps the join graph acyclic (spec section 6.5)");

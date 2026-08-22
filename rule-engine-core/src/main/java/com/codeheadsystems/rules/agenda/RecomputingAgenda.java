@@ -8,9 +8,11 @@ import com.codeheadsystems.rules.listener.SuppressReason;
 import com.codeheadsystems.rules.match.Activation;
 import com.codeheadsystems.rules.match.ActivationKey;
 import com.codeheadsystems.rules.match.Tuple;
+import com.codeheadsystems.rules.rule.AlphaTest;
 import com.codeheadsystems.rules.rule.CompiledPattern;
 import com.codeheadsystems.rules.rule.CompiledRule;
 import com.codeheadsystems.rules.rule.ExpressionTest;
+import com.codeheadsystems.rules.rule.JoinTest;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Iterator;
@@ -19,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.MissingNode;
 
 /**
@@ -381,16 +384,123 @@ public abstract class RecomputingAgenda implements Agenda {
    * @return the matches whose conditions all hold, in the order they were found
    */
   private List<Activation> postFilter(final CompiledRule rule, final List<Activation> matches) {
-    if (matches.isEmpty() || !rule.hasExpressionTests()) {
+    if (matches.isEmpty()) {
       return matches;
     }
+    final List<Activation> present = rule.hasNegations() ? absences(rule, matches) : matches;
+    if (present.isEmpty() || !rule.hasExpressionTests()) {
+      return present;
+    }
+    return conditions(rule, present);
+  }
+
+  /**
+   * Drops the matches whose rule asserts an absence that is not absent (§1's {@code NOT_EXISTS}).
+   *
+   * <p><strong>Evaluated here, in the shared base, and that is the design rather than an
+   * expedient.</strong> A negated pattern binds nothing and joins nothing: it is a question asked of
+   * a <em>complete</em> tuple, exactly as a §6.4 condition is. Answering it here means the naive
+   * oracle, the network matcher and the streaming matcher cannot disagree about it, which is the
+   * property §9's exit criterion rests on and the reason CLAUDE.md keeps divergence-capable code in
+   * one place. A {@code NotNode} in the network would be faster and would have to be written twice.
+   *
+   * <p><strong>A rejected match is not reported to {@link #onRejected}</strong>, and the difference
+   * from a condition is the whole reason that hook takes a reason at all. A condition is a pure
+   * function of the payloads the tuple binds, so anything that could flip it re-derives the tuple. A
+   * negation is a question about facts the tuple does <em>not</em> bind: a {@code Payment} arriving
+   * makes it false and a {@code Payment} leaving makes it true again, and neither touches the
+   * {@code Order} the tuple is built from. A shape that dropped the match on a negation would have
+   * nothing to re-offer it with when the absence returned -- §11.5's dropped firing, by a route the
+   * condition case does not have. So negation-rejected matches stay held, and are re-asked on every
+   * cycle the rule is dirty for. {@code CompiledRule.factTypes} includes negated types precisely so
+   * that a change to one makes the rule dirty.
+   *
+   * @param rule the rule
+   * @param matches its complete tuples
+   * @return the tuples whose asserted absences all hold
+   */
+  private List<Activation> absences(final CompiledRule rule, final List<Activation> matches) {
     final List<Activation> surviving = new ArrayList<>(matches.size());
     for (final Activation activation : matches) {
-      if (holdsFor(rule, activation)) {
+      if (rule.negations().stream().noneMatch(negation -> exists(negation, activation))) {
         surviving.add(activation);
-      } else {
-        onRejected(activation);
       }
+    }
+    return surviving;
+  }
+
+  /**
+   * Whether any fact satisfies a negated pattern against one binding.
+   *
+   * <p>Scans working memory for the type rather than probing a pattern memory or an index, which is
+   * deliberate for a first cut: it is the one implementation all three matchers can share, and the
+   * naive oracle has no memories to probe. It is O(facts of the negated type) per match per fire
+   * cycle, which is the same cost profile the naive matcher has always had and is the thing a real
+   * {@code NotNode} would fix.
+   *
+   * @param negation the negated pattern
+   * @param activation the complete positive binding
+   * @return true when the absence does not hold
+   */
+  private boolean exists(final CompiledPattern negation, final Activation activation) {
+    final long[] bound = activation.tuple().boundFacts();
+    final Iterator<com.codeheadsystems.rules.fact.Fact> candidates =
+        workingMemory.factsOfType(negation.factType()).iterator();
+    while (candidates.hasNext()) {
+      final com.codeheadsystems.rules.fact.Fact candidate = candidates.next();
+      if (negation.conflictsWith(bound, candidate.handle().id())) {
+        // §1's implicit inequality: a negated pattern of a type the rule already binds asks about
+        // some OTHER fact, not about the one already bound.
+        continue;
+      }
+      if (matchesNegation(negation, candidate.payload(), bound)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether one candidate satisfies a negated pattern's own tests against a binding.
+   *
+   * @param negation the negated pattern
+   * @param payload the candidate's payload
+   * @param bound the handles bound by the positive tuple
+   * @return whether this candidate is the fact whose absence was asserted
+   */
+  private boolean matchesNegation(final CompiledPattern negation, final JsonNode payload,
+      final long[] bound) {
+    for (final AlphaTest test : negation.alphaTests()) {
+      if (!test.test(payload)) {
+        return false;
+      }
+    }
+    for (final JoinTest test : negation.joinTests()) {
+      final Optional<com.codeheadsystems.rules.fact.Fact> other =
+          workingMemory.get(new com.codeheadsystems.rules.fact.FactHandle(
+              bound[test.otherIndex()]));
+      if (other.isEmpty() || !test.test(payload, other.get().payload())) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Drops the matches a §6.4 condition rejects.
+   *
+   * @param rule the rule
+   * @param matches its complete tuples
+   * @return the tuples every condition holds for
+   */
+  private List<Activation> conditions(final CompiledRule rule, final List<Activation> matches) {
+    final List<Activation> surviving = new ArrayList<>(matches.size());
+    for (final Activation activation : matches) {
+      if (!holdsFor(rule, activation)) {
+        onRejected(activation);
+        continue;
+      }
+      surviving.add(activation);
     }
     return surviving;
   }

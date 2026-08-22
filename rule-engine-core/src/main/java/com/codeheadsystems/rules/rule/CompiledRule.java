@@ -29,7 +29,13 @@ import tools.jackson.core.JsonPointer;
  * @param salience the author-assigned priority
  * @param noLoop whether this rule's own RHS may re-enable this same match (§4.5)
  * @param agendaGroup the optional agenda group; §4.5 defers grouping to v2
- * @param patterns the compiled LHS, in declaration order
+ * @param patterns the compiled positive LHS, in declaration order. A {@code NOT_EXISTS} pattern is
+ *     <em>not</em> here: it binds no alias, contributes no position to a tuple, and joins nothing.
+ *     Keeping it out is what lets the join planner, the join walk, the streaming matcher's pattern
+ *     sites and the explainer go on reading this list as "the patterns that produce bindings"
+ *     without any of them having to know negation exists
+ * @param negations the compiled {@code NOT_EXISTS} patterns, in declaration order. Their join tests
+ *     point at positions in {@code patterns}, and they are evaluated against a complete tuple
  * @param actions the RHS, in declaration order
  * @param testedPaths per fact type, the paths <em>this rule</em> reads. This is
  *     {@link TestedPaths#forRule}'s backing, and its per-rule scoping is what keeps refraction
@@ -43,6 +49,7 @@ public record CompiledRule(
     boolean noLoop,
     Optional<String> agendaGroup,
     java.util.List<CompiledPattern> patterns,
+    java.util.List<CompiledPattern> negations,
     java.util.List<ActionDefinition> actions,
     Map<String, Set<JsonPointer>> testedPaths,
     Map<String, CompiledExpression> valueExpressions,
@@ -55,7 +62,8 @@ public record CompiledRule(
    * @param salience the priority
    * @param noLoop the self-retrigger suppression flag
    * @param agendaGroup the optional agenda group
-   * @param patterns the compiled LHS
+   * @param patterns the compiled positive LHS
+   * @param negations the compiled negated patterns
    * @param actions the RHS
    * @param testedPaths the per-type paths this rule reads
    * @param valueExpressions the compiled §6.4 expressions its actions use, by source text
@@ -66,6 +74,7 @@ public record CompiledRule(
     Objects.requireNonNull(agendaGroup, "agendaGroup");
     Objects.requireNonNull(source, "source");
     patterns = java.util.List.copyOf(patterns);
+    negations = java.util.List.copyOf(negations);
     actions = java.util.List.copyOf(actions);
     // Map.copyOf is shallow: without this the values would remain the compiler's live, mutable
     // sets, leaving state inside the shared rule set that an outside caller could clear.
@@ -97,7 +106,50 @@ public record CompiledRule(
     for (final CompiledPattern pattern : patterns) {
       types.add(pattern.factType());
     }
+    /*
+     * Negated types belong here, and leaving them out is the defect that would be hardest to find.
+     * This set is what §4.1's dirty predicate is built from -- a rule is dirty when a fact of a type
+     * it patterns changes -- so a rule that negates Payment and does not name Payment here would not
+     * be recomputed when a Payment arrived. It would go on firing on an absence that had ended,
+     * silently, until something else made it dirty.
+     */
+    for (final CompiledPattern negation : negations) {
+      types.add(negation.factType());
+    }
     return types;
+  }
+
+  /**
+   * The fact types this rule <em>binds</em>, which is not the same question as {@link #factTypes()}.
+   *
+   * <p>A negated type is one this rule reads and must be dirtied by, but not one it needs anything
+   * of to match -- it needs the opposite. So the two answers must not be confused, and confusing
+   * them inverts a reachability analysis: a rule that negates {@code Payment} is at its <em>most</em>
+   * reachable when no {@code Payment} is ever inserted, while a walk over {@link #factTypes()} would
+   * call it dead for exactly that reason. §7.4's report asks this question; §4.1's dirty predicate
+   * asks the other one.
+   *
+   * @return the types bound by positive patterns, in declaration order
+   */
+  public Set<String> boundFactTypes() {
+    final Set<String> types = new LinkedHashSet<>();
+    for (final CompiledPattern pattern : patterns) {
+      types.add(pattern.factType());
+    }
+    return types;
+  }
+
+  /**
+   * Whether this rule asserts the absence of anything.
+   *
+   * <p>A fast path for the agenda, which evaluates negations against every complete tuple: the
+   * overwhelming majority of rules have none, and checking a boolean is cheaper than entering a
+   * loop over an empty list per match per fire cycle.
+   *
+   * @return whether any {@code NOT_EXISTS} pattern was compiled
+   */
+  public boolean hasNegations() {
+    return !negations.isEmpty();
   }
 
   /**

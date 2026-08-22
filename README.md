@@ -104,7 +104,16 @@ estimated 9% net, and either way a combined update path in place of the retract-
 agenda, refraction and eviction all hang off. Both are recorded as measured and not built. See
 [`docs/benchmarks.md`](docs/benchmarks.md).
 
-**What does not exist:** negation, accumulation, truth maintenance and CEP, which are §1 non-goals
+**Negation (`NOT_EXISTS`) now exists**, as the first slice of §9's Phase 6. A negated pattern binds
+nothing and joins nothing into the tuple, so it is a question asked of a *complete* match — the same
+shape a §6.4 condition has — and it is answered in the shared agenda base, which is what makes the
+three matchers agree about it by construction rather than by testing. Two boundaries ship with it
+and both are documented on `Rules.notExists`: there is no truth maintenance, so a rule that fired
+because something was absent is not undone when that thing arrives; and a negated type must not be
+one a session evicts, because an evicted fact and an absent one are indistinguishable to a negation.
+It is currently reachable from the `Rules` builder, not from a rule file.
+
+**What does not exist:** accumulation, truth maintenance, `FOR_ALL` and CEP, which are §1 non-goals
 with documented interim answers.
 
 ## Modules

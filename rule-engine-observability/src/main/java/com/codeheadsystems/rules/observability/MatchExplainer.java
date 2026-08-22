@@ -46,6 +46,16 @@ import tools.jackson.databind.node.MissingNode;
  * <p>{@link #explain(String)} asks "why did nothing match", and reports per pattern over all
  * candidates. The right tool when a rule is silent.
  *
+ * <p><strong>It does not know about negation, and will answer a negated rule wrongly.</strong> A
+ * {@code NOT_EXISTS} pattern is not in {@code CompiledRule.patterns()} -- deliberately, so that the
+ * planner, the join walk and the streaming matcher's pattern sites need not know it exists -- and
+ * everything here walks that list. So a rule suppressed because the fact whose absence it asserts is
+ * present reports "N match(es); all eligible, none has fired yet", which is the opposite of the
+ * truth, and the offending fact appears nowhere. §7.2's whole claim is that this answers "why did R
+ * not fire" better than a trace can; for a negated rule it currently does not, and that is a known
+ * gap rather than an oversight. Fixing it means evaluating the negations here as the agenda does --
+ * see {@code RecomputingAgenda.absences}.
+ *
  * <p>{@link #explain(String, Map)} asks the sharper and more common question: "I am looking at
  * <em>these specific facts</em> and I expected them to match — what stopped them?" With the bindings
  * pinned, every pattern has exactly one candidate, so the answer is a single chain of constraint

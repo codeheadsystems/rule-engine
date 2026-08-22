@@ -11,6 +11,7 @@ import com.codeheadsystems.rules.rule.JoinConstraint;
 import com.codeheadsystems.rules.rule.Literal;
 import com.codeheadsystems.rules.rule.Operator;
 import com.codeheadsystems.rules.rule.PatternDefinition;
+import com.codeheadsystems.rules.rule.Quantifier;
 import com.codeheadsystems.rules.rule.PayloadField;
 import com.codeheadsystems.rules.rule.RangeConstraint;
 import com.codeheadsystems.rules.rule.RetractFact;
@@ -160,6 +161,45 @@ public final class Rules {
       final PatternBuilder pattern = new PatternBuilder();
       constraints.accept(pattern);
       when.add(PatternDefinition.of(alias, factType, pattern.constraints));
+      return this;
+    }
+
+    /**
+     * Adds a {@code NOT_EXISTS} pattern: the rule matches only when no such fact exists (§1).
+     *
+     * <p>A negated pattern <strong>binds nothing</strong>. Its alias names the fact being looked
+     * for so its own constraints can be written, and nothing else in the rule may reference it --
+     * neither a {@code ref} in another pattern nor a right-hand side. What it contributes is a
+     * question asked of each complete match: "and is there no {@code Payment} whose orderId is this
+     * order's?"
+     *
+     * <p>It may join against the aliases the rule does bind, in either direction of declaration.
+     * Where its fact type is one the rule already binds, §1's implicit inequality applies as it does
+     * between two positive aliases: the question is about some <em>other</em> fact of that type.
+     *
+     * <p><strong>There is no truth maintenance behind this</strong> (§1). A rule that fires because
+     * something was absent is not retracted when that thing arrives; refraction is keyed on the
+     * facts the match binds, and the fact whose absence was asserted is not one of them. The absence
+     * ending makes the match ineligible from then on, which is not the same as undoing what it did.
+     *
+     * <p><strong>Do not negate a type a session evicts</strong> (§4.4), and this one is sharper than
+     * the paragraph above. An evicted fact and an absent fact are indistinguishable to a negation,
+     * so a cap on {@code Payment} makes this rule announce that a paid order is unpaid -- not a
+     * firing missed, but a conclusion asserted that is false. Before negation existed, eviction
+     * could only ever cost a firing; a negated type turns it into wrong output, and §1's licence to
+     * ship without truth maintenance does not extend to that. Cap the types you bind, not the ones
+     * whose absence you assert.
+     *
+     * @param alias a name for the fact being looked for; binds nothing
+     * @param factType the fact type whose absence is asserted
+     * @param constraints the conditions that fact would have to satisfy
+     * @return this builder
+     */
+    public RuleBuilder notExists(final String alias, final String factType,
+        final Consumer<PatternBuilder> constraints) {
+      final PatternBuilder pattern = new PatternBuilder();
+      constraints.accept(pattern);
+      when.add(new PatternDefinition(alias, factType, Quantifier.NOT_EXISTS, pattern.constraints));
       return this;
     }
 

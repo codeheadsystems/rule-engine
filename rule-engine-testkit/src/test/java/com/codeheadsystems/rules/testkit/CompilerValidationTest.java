@@ -178,14 +178,20 @@ class CompilerValidationTest {
   @Test
   @DisplayName("a deferred quantifier is rejected with a pointer to the interim answer")
   void deferredQuantifiersRejected() {
-    final RuleDefinition rule = new RuleDefinition("negated", 0,
-        List.of(new PatternDefinition("p", "Payment", Quantifier.NOT_EXISTS, List.<Constraint>of())),
-        Rules.rule("x").when("o", "Order").then(actions -> actions.emit("a")).build().then(),
-        false, Optional.empty(), Set.of());
+    // NOT_EXISTS is implemented (see NegationTest); FOR_ALL and ACCUMULATE remain §1 deferrals, and
+    // this is the diagnostic that points an author at the interim answer rather than at a stack
+    // trace. It named NOT_EXISTS until negation landed.
+    for (final Quantifier deferred : List.of(Quantifier.FOR_ALL, Quantifier.ACCUMULATE)) {
+      final RuleDefinition rule = new RuleDefinition("quantified", 0,
+          List.of(new PatternDefinition("o", "Order", deferred, List.<Constraint>of())),
+          Rules.rule("x").when("o", "Order").then(actions -> actions.emit("a")).build().then(),
+          false, Optional.empty(), Set.of());
 
-    assertThatThrownBy(() -> RuleCompiler.compile(List.of(rule)))
-        .isInstanceOf(RuleCompilationException.class)
-        .hasMessageContaining("not implemented in v1");
+      assertThatThrownBy(() -> RuleCompiler.compile(List.of(rule)))
+          .describedAs("%s", deferred)
+          .isInstanceOf(RuleCompilationException.class)
+          .hasMessageContaining("not implemented");
+    }
   }
 
   @Test

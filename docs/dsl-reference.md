@@ -689,6 +689,9 @@ time, insert it as a fact.
 
 ## Not implemented yet
 
-Deferred, each with an interim answer in §1 of the spec: negation (`NOT_EXISTS`), accumulation,
+Deferred *in the rule-file DSL*, each with an interim answer in §1 of the spec: negation (`NOT_EXISTS`), accumulation,
+
+> Negation is implemented in the engine (see README) and reachable from the
+> `Rules` builder in `-testkit`. What is deferred is the rule-file surface for it.
 backward chaining, truth maintenance, and temporal operators. The short version of all of them is the
 same: compute it at ingestion and insert the answer as a fact.
