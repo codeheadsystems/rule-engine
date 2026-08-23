@@ -288,6 +288,44 @@ type your session evicts. That last one bites harder here: eviction only ever re
 counterexamples, so a cap makes the requirement *easier* to satisfy, and a cap that empties the
 scope deletes it.
 
+## Putting two facts in order
+
+`after` and `before` relate two facts by a time field, within a bound:
+
+```yaml
+apiVersion: rules.v1
+rules:
+  - id: quick-payment
+    when:
+      - fact: Order
+        as: o
+      - fact: Payment
+        as: p
+        where:
+          orderId: { eq: { $ref: o.id } }
+          paidAt:  { after: { $ref: o.placedAt, within: 86400000 } }
+    then:
+      - action: emit
+        event: order.paid.quickly
+```
+
+"Paid after it was placed, and within a day of it."
+
+Three things to know:
+
+*The engine has no clock.* Every time it uses is a field on a fact you inserted. That is deliberate —
+it means replaying the same facts gives you the same firings, today or next year, on your laptop or
+in CI. It also means the engine cannot help you with "nothing has happened for an hour": no fact
+arriving is the one thing it never hears about.
+
+*`within` is in whatever units your field is in.* `86400000` is a day only because `placedAt` holds
+epoch milliseconds. If it held seconds, a day is `86400`. Nothing checks this, so if there is any
+chance of confusion put the unit in the field name.
+
+*The bound is not optional, and must be more than zero.* If you just want "later than", write
+`gt: { $ref: o.placedAt }` — that already works. `after` exists for the bounded case, which `gt`
+cannot express. A bound of `0` would match nothing at all, so it is refused rather than compiled.
+
 ## Adding things up
 
 `quantifier: accumulate` folds a set of facts into one value and hands it to you.

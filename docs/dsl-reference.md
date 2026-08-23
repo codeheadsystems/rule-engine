@@ -276,6 +276,54 @@ strengthens it, and a cap that empties the scope makes the assertion vacuously t
 it altogether.
 
 
+### Time: `after` and `before`
+
+Two facts, in sequence, within a bound. **Always** a `$ref` carrying a `within` — the relation is
+between two facts, and the bound is required.
+
+```yaml
+apiVersion: rules.v1
+rules:
+  - id: quick-payment
+    when:
+      - fact: Order
+        as: o
+      - fact: Payment
+        as: p
+        where:
+          orderId: { eq: { $ref: o.id } }
+          paidAt:  { after: { $ref: o.placedAt, within: 86400000 } }
+    then:
+      - action: emit
+        event: order.paid.quickly
+```
+
+`after` holds when `other < mine <= other + within`; `before` when `other - within <= mine < other`.
+Strict on the near side, so two facts with the same timestamp are not "after" each other; inclusive
+on the far side, so "within 24 hours" includes the twenty-fourth hour.
+
+**`within` is in the field's own units.** The engine has no idea whether `placedAt` is epoch millis,
+epoch seconds or a sequence number, and it does not guess — `86400000` above is a day only because
+that field holds millis. Get the units wrong and the rule is silently wrong, so keep the unit in the
+field name if there is any doubt: `placedAtMillis`.
+
+**This engine reads no clock**, which is the point. Every time it uses comes from a fact, so
+replaying the same facts gives the same firings on any machine, in any year. That is [§7.3's
+determinism contract](#determinism), and a wall clock would end it.
+
+**The bound is required and must be positive**, because an unbounded ordering is already `gt` or
+`lt` against the same `$ref`, and a bound of `0` is empty by construction — the near edge is strict,
+so `after within 0` is `other < mine <= other`, which nothing satisfies. What `after` adds is the
+bounded form, which no pair of comparisons can express.
+
+**Never index-eligible.** The bound travels with the constraint, and the engine will not reverse the
+relation to probe from the far end, because a reversal that lost the bound would silently widen the
+rule. `CompilerReport` names them like any other unindexable constraint.
+
+**What this is not.** There are no sliding windows and no "nothing happened for 24 hours". Both need
+something to notice that time has passed *with no fact arriving*, and this engine only ever acts when
+a fact moves. Stamp your facts at ingestion and let whatever drives your stream decide what is stale.
+
 ### Aggregates: `quantifier: accumulate`
 
 A pattern with `quantifier: accumulate` folds its scope into a value and **binds it**. Every
@@ -404,6 +452,8 @@ is normative; this one is the syntax.
 | `matches` | `email: { matches: "^[a-z]+@example\\.com$" }` | `FieldConstraint(MATCHES)` | n/a — takes no `$ref` |
 | `hasField` | `couponCode: { hasField: false }` | `FieldConstraint(HAS_FIELD)` | n/a — takes no `$ref` |
 | `isNull` | `closedAt: { isNull: true }` | `FieldConstraint(IS_NULL)` | n/a — takes no `$ref` |
+| `after` | `paidAt: { after: { $ref: o.placedAt, within: 86400000 } }` | `JoinConstraint(AFTER)` | never — see below |
+| `before` | `at: { before: { $ref: p.paidAt, within: 86400000 } }` | `JoinConstraint(BEFORE)` | never — see below |
 
 DSL keys are camelCase; the `Operator` constants they compile to are SCREAMING_SNAKE. `notIn` is
 `NOT_IN`, `hasField` is `HAS_FIELD`.

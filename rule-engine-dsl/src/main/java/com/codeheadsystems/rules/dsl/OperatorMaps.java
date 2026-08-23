@@ -98,6 +98,16 @@ final class OperatorMaps {
         case "isNull" -> literalTest(field, Operator.IS_NULL, key, operand, at, diagnostics)
             .ifPresent(constraints::add);
         /*
+         * Temporal, and routed through `comparison` like eq and ne rather than through `ordered`.
+         * A bounded relation is not a range over one field -- it needs the other fact's value twice
+         * -- so compiling it into a RangeConstraint would lose the window and, worse, would look
+         * index-eligible to §3.3 when nothing can probe it.
+         */
+        case "after" -> comparison(field, Operator.AFTER, operand, at, diagnostics)
+            .ifPresent(constraints::add);
+        case "before" -> comparison(field, Operator.BEFORE, operand, at, diagnostics)
+            .ifPresent(constraints::add);
+        /*
          * Unreachable while the schema gate runs, which states the same closed set. Kept because
          * "the gate ahead of me guarantees this" is how a switch acquires a silent default, and a
          * silently dropped constraint is a rule that matches more than its author wrote.
@@ -151,8 +161,8 @@ final class OperatorMaps {
   private static Optional<Constraint> comparison(final String field, final Operator operator,
       final JsonNode operand, final String pointer, final Diagnostics diagnostics) {
     if (References.isRef(operand)) {
-      return References.readRef(operand, pointer, diagnostics)
-          .map(ref -> new JoinConstraint(field, ref.alias(), ref.field(), operator));
+      return References.readTemporalRef(operand, pointer, diagnostics)
+          .map(ref -> new JoinConstraint(field, ref.alias(), ref.field(), operator, ref.within()));
     }
     return References.readLiteral(operand, pointer, diagnostics)
         .map(literal -> new FieldConstraint(field, operator, literal));
@@ -176,8 +186,8 @@ final class OperatorMaps {
   private static Optional<Constraint> ordered(final String field, final Operator operator,
       final JsonNode operand, final String pointer, final Diagnostics diagnostics) {
     if (References.isRef(operand)) {
-      return References.readRef(operand, pointer, diagnostics)
-          .map(ref -> new JoinConstraint(field, ref.alias(), ref.field(), operator));
+      return References.readTemporalRef(operand, pointer, diagnostics)
+          .map(ref -> new JoinConstraint(field, ref.alias(), ref.field(), operator, ref.within()));
     }
     return References.readLiteral(operand, pointer, diagnostics)
         .map(bound -> RangeConstraint.of(field, operator, bound));

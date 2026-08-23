@@ -180,7 +180,13 @@ final class RuleSetFingerprint {
       case FieldConstraint field -> nodeHash(field.literal());
       case RangeConstraint range -> 31 * range.lower().map(RuleSetFingerprint::nodeHash).orElse(0)
           + range.upper().map(RuleSetFingerprint::nodeHash).orElse(0);
-      // Both hold only strings and enums, which cannot be mutated in place.
+      /*
+       * A JoinConstraint now also holds a JsonNode -- §2.5's temporal `within` -- so "strings and
+       * enums only" stopped being the reason. The record's own hashCode covers it, and the window
+       * is always an immutable DecimalNode by the time a rule set exists: the record constructor
+       * normalises a numeric one, and the compiler rejects the rule for anything else. That is what
+       * makes the identity hash sufficient here where a FieldConstraint's literal needs nodeHash.
+       */
       case JoinConstraint join -> join.hashCode();
       case ExpressionConstraint expression -> expression.hashCode();
     };

@@ -170,9 +170,26 @@ side. Two arithmetic decisions are semantics rather than implementation: an abse
 rather than folded as zero, and an empty scope gives `0` for `count`/`sum` but *absent* for
 `min`/`max`/`average`.
 
-**What does not exist:** `collect`, which answers with a collection and so has no meaningful
-`having`; CEP; and distributed evaluation, which §5's immutability split makes feasible without
-making it built.
+**Bounded temporal sequencing is Phase 6's fifth slice**, and the shape of it is a §7.3 decision
+before it is a feature. `after` and `before` relate two facts by a time field within a required
+bound — `paidAt: { after: { $ref: o.placedAt, within: 86400000 } }` — and **the engine reads no
+clock**. Every time it uses comes from a fact, so replaying the same facts gives the same firings on
+any host in any year; a wall clock would end the determinism contract outright, since a slower
+machine would see different intervals. The bound is in the time field's own units, because only the
+author knows what they are.
+
+The bound is required, and that is the whole of what the operators add: an unbounded ordering is
+`gt` against the same `$ref`, while `other < mine <= other + window` needs the other fact's value
+twice and no pair of comparisons can state it. They ride §6.2.3's reserved `{ $ref: …, extension: … }`
+shape — `within` is the first extension actually implemented — and they are never index-eligible,
+because reversing the relation to probe from the far end would leave the bound behind and silently
+widen the rule.
+
+**What does not exist:** sliding windows and "nothing has happened for 24 hours", both of which need
+something to notice that time passed with *no fact arriving* — the one input an engine that acts on
+fact movement never receives; `collect`, which answers with a collection and so has no meaningful
+`having`; and distributed evaluation, which §5's immutability split makes feasible without making it
+built.
 
 ## Modules
 

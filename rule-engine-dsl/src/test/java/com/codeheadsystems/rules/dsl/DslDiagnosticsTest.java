@@ -49,6 +49,73 @@ class DslDiagnosticsTest {
   }
 
   @Nested
+  @DisplayName("§6.2.3's 'within' extension")
+  class TemporalExtension {
+
+    @Test
+    @DisplayName("is read where it is meant, and refused by name where nothing would read it")
+    void withinIsPositional() {
+      /*
+       * The extension is legal beside a comparison, where OperatorMaps threads it into the
+       * JoinConstraint, and refused in a `between` bound and an action value, where an earlier
+       * version accepted it and dropped it on the floor. In a `between` bound that mattered: the
+       * author wrote a bound and got the unbounded rule.
+       *
+       * The message has to NAME 'within' in the refusing position, which is the half that shipped
+       * broken -- the key list filtered it unconditionally, so the diagnostic read "also carries ."
+       */
+      final List<DslDiagnostic> found = reject("""
+          apiVersion: rules.v1
+          rules:
+            - id: misplaced
+              when:
+                - fact: Order
+                  as: o
+                - fact: Payment
+                  as: p
+                  where:
+                    at: { between: { from: { $ref: o.placedAt, within: 5 } } }
+              then: [{ action: emit, event: e }]
+          """);
+
+      assertThat(found).anySatisfy(diagnostic -> {
+        assertThat(diagnostic.error()).isEqualTo(DslError.MALFORMED_REFERENCE);
+        assertThat(diagnostic.message())
+            .as("the KEY LIST names it -- asserting on \"'within'\" alone passes on the boilerplate"
+                + " further down the same message, which is how the empty-list bug survived once")
+            .contains("also carries 'within'")
+            .contains("not in this position");
+      });
+    }
+
+    @Test
+    @DisplayName("is accepted beside an ordering operator, and the compiler is what refuses it")
+    void withinOnAnOrderingReachesTheCompiler() {
+      // `ordered` threads the window through, so this is not a DSL rejection -- gate 3 owns the
+      // "that operator is not temporal" answer, and this is what proves the value reaches it.
+      final List<DslDiagnostic> found = reject("""
+          apiVersion: rules.v1
+          rules:
+            - id: bounded-gt
+              when:
+                - fact: Order
+                  as: o
+                - fact: Payment
+                  as: p
+                  where:
+                    at: { gt: { $ref: o.placedAt, within: 5 } }
+              then: [{ action: emit, event: e }]
+          """);
+
+      assertThat(found).anySatisfy(diagnostic -> {
+        assertThat(diagnostic.error()).isEqualTo(DslError.SEMANTIC);
+        assertThat(diagnostic.message())
+            .contains("'within' bounds a temporal relation, and GT is not one");
+      });
+    }
+  }
+
+  @Nested
   @DisplayName("the diagnostic catalogue")
   class Catalogue {
 

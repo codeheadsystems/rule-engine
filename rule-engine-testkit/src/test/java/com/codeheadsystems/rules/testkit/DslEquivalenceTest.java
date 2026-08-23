@@ -399,6 +399,97 @@ class DslEquivalenceTest {
     }
 
     @Test
+    @DisplayName("a temporal window survives the round trip, carried on §6.2.3's $ref extension")
+    void temporalWindow() {
+      /*
+       * `within` is the first thing §6.2.3's reserved `{ $ref: …, extension: … }` shape actually
+       * carries. The hash half is what catches a front end that read the $ref and dropped the
+       * bound: JoinConstraint renders the window through its record toString, so an unbounded
+       * "after" and a 24-hour one cannot hash alike. The firing half catches the direction.
+       */
+      final long day = 24L * 60 * 60 * 1000;
+      final FiringSequence fired = DslEquivalence.assertEquivalent(
+          file("""
+                - id: quick-payment
+                  when:
+                    - fact: Order
+                      as: o
+                    - fact: Payment
+                      as: p
+                      where:
+                        orderId: { eq: { $ref: o.id } }
+                        paidAt: { after: { $ref: o.placedAt, within: 86400000 } }
+                  then:
+                    - action: emit
+                      event: order.paid.quickly
+              """),
+          List.of(Rules.rule("quick-payment")
+              .when("o", "Order")
+              .when("p", "Payment", pattern -> pattern
+                  .ref("orderId", "o.id")
+                  .after("paidAt", "o.placedAt", day))
+              .then(actions -> actions.emit("order.paid.quickly"))
+              .build()),
+          session -> {
+            session.insert("Order", Facts.json("""
+                {"id": 1, "placedAt": 1000000}"""));
+            session.insert("Payment", Facts.json("""
+                {"orderId": 1, "paidAt": 1500000}"""));
+            session.insert("Order", Facts.json("""
+                {"id": 2, "placedAt": 1000000}"""));
+            session.insert("Payment", Facts.json("""
+                {"orderId": 2, "paidAt": 99000000}"""));
+          });
+
+      assertThat(fired.steps())
+          .as("order 1 was paid inside the day; order 2 far outside it")
+          .hasSize(1);
+    }
+
+    @Test
+    @DisplayName("and so does before, which is a separate switch arm and a separate mistake")
+    void temporalWindowBefore() {
+      /*
+       * `after` and `before` are two lines of one switch in OperatorMaps, and swapping one for the
+       * other is the classic copy-paste in that shape. It survived the entire suite: nothing else
+       * in the tree writes `before:` in a rule file, so the DSL half of that arm was unreached.
+       */
+      final long day = 24L * 60 * 60 * 1000;
+      final FiringSequence fired = DslEquivalence.assertEquivalent(
+          file("""
+                - id: cancelled-late
+                  when:
+                    - fact: Payment
+                      as: p
+                    - fact: Cancellation
+                      as: c
+                      where:
+                        orderId: { eq: { $ref: p.orderId } }
+                        at: { before: { $ref: p.paidAt, within: 86400000 } }
+                  then:
+                    - action: emit
+                      event: cancelled.before.payment
+              """),
+          List.of(Rules.rule("cancelled-late")
+              .when("p", "Payment")
+              .when("c", "Cancellation", pattern -> pattern
+                  .ref("orderId", "p.orderId")
+                  .before("at", "p.paidAt", day))
+              .then(actions -> actions.emit("cancelled.before.payment"))
+              .build()),
+          session -> {
+            session.insert("Payment", Facts.json("""
+                {"orderId": 1, "paidAt": 90000000}"""));
+            session.insert("Cancellation", Facts.json("""
+                {"orderId": 1, "at": 89000000}"""));
+          });
+
+      assertThat(fired.steps())
+          .as("cancelled shortly before the payment -- which `after` would not match")
+          .hasSize(1);
+    }
+
+    @Test
     @DisplayName("an accumulate's function, field, scope and having all survive the round trip")
     void accumulate() {
       /*

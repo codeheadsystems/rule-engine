@@ -1,6 +1,7 @@
 package com.codeheadsystems.rules.value;
 
 import com.codeheadsystems.rules.rule.Operator;
+import java.math.BigDecimal;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -68,7 +69,64 @@ public final class Comparisons {
       case IS_NULL -> literal.asBoolean() == actual.isNull();
       case MATCHES -> throw new IllegalArgumentException(
           "MATCHES needs a pattern compiled at rule-compile time; see RegexTest");
+      /*
+       * Two values are not enough for a temporal operator: it needs the window as well, which no
+       * two-argument comparison can carry. JoinTest dispatches to `within` below rather than here,
+       * and the compiler refuses AFTER/BEFORE anywhere a single fact is tested -- so reaching this
+       * branch means one of those gates was removed, and saying so is more use than a wrong answer.
+       */
+      case AFTER, BEFORE -> throw new IllegalArgumentException(
+          op + " is a bounded cross-fact relation and needs its window; see Comparisons.within");
     };
+  }
+
+  /**
+   * Whether a time field falls within a bounded window of another fact's (§2.5's third amendment).
+   *
+   * <p><strong>Strict on the near side, inclusive on the far one:</strong> {@code AFTER} holds when
+   * {@code other < value <= other + window}, and {@code BEFORE} when
+   * {@code other - window <= value < other}. The strict end is what stops a fact being "after"
+   * itself when two share a timestamp, which is the reading an author means by a sequence; the
+   * inclusive end is what makes "within 24 hours" include the twenty-fourth hour exactly.
+   *
+   * <p><strong>The window is in the field's own units</strong>, because the engine has no idea what
+   * they are. A field holding epoch millis takes a window in millis and one holding epoch seconds
+   * takes seconds; assuming either would be assuming wrong for half of all rule sets, silently. The
+   * DSL documents this beside the operator, and §2.5's amendment records it as the cost of owning no
+   * clock.
+   *
+   * <p><strong>Numbers only, which is narrower than ordering and worth knowing.</strong> §2.6.1
+   * orders two strings, so {@code gt} on a pair of ISO-8601 timestamps works today -- and this does
+   * not, because a window is arithmetic and there is nothing to add to a string. A textual timestamp
+   * therefore matches nothing here rather than being rejected, which is the one sharp edge in this
+   * operator: convert to an epoch number at ingestion, as §1's flattening advice says to do with
+   * collections and for the same reason.
+   *
+   * <p>Absent, null and non-finite values answer false, as every ordering comparison in §2.6.1 does
+   * -- a value the engine cannot order is not one it should guess at.
+   *
+   * @param op {@link Operator#AFTER} or {@link Operator#BEFORE}
+   * @param value this fact's time field
+   * @param other the already-bound fact's time field
+   * @param window the bound, in the field's own units; the compiler requires it to be positive
+   * @return whether the relation holds
+   */
+  public static boolean within(final Operator op, final JsonNode value, final JsonNode other,
+      final JsonNode window) {
+    // Canonical's predicate, not a copy of it: which values this engine will order is one decision,
+    // and the comparisons, these windows, the bound one carries and Accumulators' folds all have to
+    // make it the same way.
+    final Optional<BigDecimal> here = Canonical.orderable(value);
+    final Optional<BigDecimal> there = Canonical.orderable(other);
+    final Optional<BigDecimal> bound = Canonical.orderable(window);
+    if (here.isEmpty() || there.isEmpty() || bound.isEmpty()) {
+      return false;
+    }
+    final BigDecimal from = op == Operator.AFTER ? there.get() : there.get().subtract(bound.get());
+    final BigDecimal to = op == Operator.AFTER ? there.get().add(bound.get()) : there.get();
+    return op == Operator.AFTER
+        ? here.get().compareTo(from) > 0 && here.get().compareTo(to) <= 0
+        : here.get().compareTo(from) >= 0 && here.get().compareTo(to) < 0;
   }
 
   /**

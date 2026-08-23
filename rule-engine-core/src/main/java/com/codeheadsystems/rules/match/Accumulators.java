@@ -192,39 +192,17 @@ public final class Accumulators {
   }
 
   /**
-   * A value's decimal form, or null when it is not a number.
+   * A value's decimal form, or null when this engine will not order it.
+   *
+   * <p>{@link Canonical#orderable} rather than a hand-copy of it, which is what this was: the same
+   * {@code isNumber} plus finite check, written "letter for letter" from a private method beside
+   * it, in one of three places that had their own. A fourth call site was then added without the
+   * guard and threw on a string -- agreement by copy is agreement until somebody edits one.
    *
    * @param value the field's value
-   * @return the decimal, or null when the field was absent, null, or not numeric
+   * @return the decimal, or null when the field was absent, null, non-numeric or non-finite
    */
   private static BigDecimal decimalOf(final JsonNode value) {
-    /*
-     * isNumber() alone is not enough. A DoubleNode holding NaN or an infinity answers true to it and
-     * throws from decimalValue() -- on the matching path, where the same payload against an
-     * ordinary `gt` constraint answers false, because Canonical rejects exactly these values for
-     * exactly this reason. Skipping them keeps the arithmetic agreeing with the comparison
-     * semantics, which is the same rule that makes an absent field a skip rather than a zero.
-     */
-    if (!value.isNumber()) {
-      return null;
-    }
-    /*
-     * isDouble() || isFloat(), letter for letter what Canonical.decimal tests, and the first
-     * attempt at this guard used isFloatingPointNumber() instead. That answers true for a
-     * DecimalNode as well -- and Jackson 3's DecimalNode.doubleValue() throws rather than
-     * saturating when the value is outside double range, so a payload holding 1E+400 as a decimal
-     * crashed the matching path. Only these two node types can hold a non-finite value; a
-     * BigDecimal never can, however large.
-     *
-     * Matching Canonical is the point rather than a coincidence: a value the comparison semantics
-     * will not order is not one the arithmetic should fold, or the same rule set means two things.
-     */
-    if (value.isDouble() || value.isFloat()) {
-      final double raw = value.doubleValue();
-      if (!Double.isFinite(raw)) {
-        return null;
-      }
-    }
-    return value.decimalValue();
+    return Canonical.orderable(value).orElse(null);
   }
 }

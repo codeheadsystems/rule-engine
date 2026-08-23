@@ -443,6 +443,17 @@ public final class RuleCompiler {
       case GT, GTE, LT, LTE -> compileRange(rule, pattern,
           RangeConstraint.of(constraint.field(), constraint.op(), constraint.literal()));
       case EQ, NE -> Optional.of(new FieldTest(constraint, accessor));
+      /*
+       * Join-only, and refused here rather than quietly ignored. A temporal relation is between two
+       * FACTS -- "this payment within 24 hours after that order" -- and a literal on one side has
+       * no window to be within. Comparing a timestamp to a constant is what gt and lt are for, and
+       * saying so points the author at an operator that exists rather than at a shape that does not.
+       */
+      case AFTER, BEFORE -> {
+        diagnostics.add(where + ": " + constraint.op() + " relates two facts and needs a $ref on"
+            + " the other side; to compare a time against a fixed value, use gt or lt");
+        yield Optional.empty();
+      }
     };
   }
 
@@ -547,6 +558,9 @@ public final class RuleCompiler {
       default -> {
         // Comparisons and membership are all meaningful across two facts.
       }
+    }
+    if (!temporalWindowIsWellFormed(where, constraint)) {
+      return Optional.empty();
     }
     final Integer other = aliasPositions.get(constraint.otherAlias());
     if (other == null) {
@@ -662,6 +676,68 @@ public final class RuleCompiler {
    */
   private static String dotted(final JsonPointer path) {
     return path.toString().replace('/', '.').substring(1);
+  }
+
+  /**
+   * Whether a join's temporal window agrees with its operator.
+   *
+   * <p>Required for {@link Operator#AFTER} and {@link Operator#BEFORE}, refused for everything
+   * else, and both directions matter. An unbounded {@code after} is {@code gt} against a
+   * {@code $ref} and the language already has it, so allowing the window to be omitted would add a
+   * second spelling for an existing operator instead of the one thing no pair of comparisons can
+   * state. A window on a non-temporal operator would be a value the matcher silently never reads.
+   *
+   * <p>The bound must be a <em>positive</em> number. Negative would invert the relation into one
+   * the operator's own name contradicts, and there is a spelling for that already: the other
+   * operator. Zero is empty by construction -- the near edge is strict -- so it compiles a rule
+   * that can never fire and says nothing.
+   *
+   * @param where the diagnostic prefix
+   * @param constraint the join being compiled
+   * @return whether the pairing is legal
+   */
+  private boolean temporalWindowIsWellFormed(final String where, final JoinConstraint constraint) {
+    final boolean temporal =
+        constraint.op() == Operator.AFTER || constraint.op() == Operator.BEFORE;
+    if (!temporal) {
+      if (constraint.within().isPresent()) {
+        diagnostics.add(where + ": 'within' bounds a temporal relation, and " + constraint.op()
+            + " is not one; only after and before take it");
+        return false;
+      }
+      return true;
+    }
+    if (constraint.within().isEmpty()) {
+      diagnostics.add(where + ": " + constraint.op() + " needs a 'within' bound. An unbounded"
+          + " ordering is gt or lt against the same $ref, which this language already has");
+      return false;
+    }
+    final JsonNode window = constraint.within().orElseThrow();
+    if (!window.isNumber() || window.decimalValue().signum() <= 0) {
+      /*
+       * Positive, not merely non-negative. A window of zero is `other < mine <= other` for AFTER
+       * and `other <= mine < other` for BEFORE -- empty by construction, whatever the facts -- so
+       * accepting it compiles a rule that can never fire and says nothing. §7.4's report has
+       * IMPOSSIBLE_RANGE for exactly this shape on a range; refusing outright is the cheaper answer
+       * here, because unlike a range there is no reading under which zero was meant.
+       */
+      /*
+       * Reachable for a non-number, and only for a non-number: JoinConstraint normalises a numeric
+       * window itself and throws for one it cannot represent, but passes anything else through
+       * precisely so this reports it against the author's own line. The two layers own different
+       * failures rather than one shadowing the other.
+       */
+      diagnostics.add(where + ": 'within' is a positive number in the time field's own units, got "
+          // A MissingNode renders as the empty string, so the message would name nothing at all --
+          // the same shape as the reference diagnostic that shipped reading "also carries .". The
+          // node type is what is left to say when the value has no rendering of its own.
+          + (window.toString().isEmpty() ? window.getNodeType() : window)
+          + (window.isNumber() && window.decimalValue().signum() == 0
+              ? ". A window of zero excludes every value: the near edge is strict"
+              : ""));
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -1041,6 +1117,13 @@ public final class RuleCompiler {
        * None of the four can be proved unmatchable by a type, which is all this check may act on.
        */
       case NE, NOT_IN, HAS_FIELD, IS_NULL -> { }
+      /*
+       * Join-only, and never reach a literal. compileField rejects them before a literal can be
+       * meaningful, so there is nothing here to type-check -- named rather than left to a default
+       * because this switch is a complete enumeration and a constant falling silently out of it is
+       * how the next one gets forgotten.
+       */
+      case AFTER, BEFORE -> { }
     }
   }
 

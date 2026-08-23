@@ -37,6 +37,9 @@ final class References {
   /** The reference key. */
   static final String REF = "$ref";
 
+  /** §6.2.3's first implemented extension: the bound on a temporal relation (§2.5's amendment). */
+  static final String WITHIN = "within";
+
   /** The expression key of §6.4, which sits in the same operand position as {@link #REF}. */
   static final String EXPR = "$expr";
 
@@ -48,9 +51,22 @@ final class References {
    * One end of a cross-fact reference.
    *
    * @param alias the alias being referenced
-   * @param field the dotted field path on that alias's fact
+   * @param field the dotted field path on that alias's fact; empty for a whole-alias reference,
+   *     which only an accumulate's answer can satisfy
+   * @param within §6.2.3's bound extension, present only where the position accepts it and the
+   *     author wrote it
    */
-  record Ref(String alias, String field) {
+  record Ref(String alias, String field, Optional<JsonNode> within) {
+
+    /**
+     * Builds a reference with no temporal bound.
+     *
+     * @param alias the alias named
+     * @param field the field named, empty for a whole-alias reference
+     */
+    Ref(final String alias, final String field) {
+      this(alias, field, Optional.empty());
+    }
 
     /**
      * Whether this reference names a whole alias rather than a field of one.
@@ -123,7 +139,20 @@ final class References {
    */
   static Optional<Ref> readRef(final JsonNode operand, final String pointer,
       final Diagnostics diagnostics) {
-    return readRef(operand, pointer, false, diagnostics);
+    return readRef(operand, pointer, false, false, diagnostics);
+  }
+
+  /**
+   * Reads a reference operand in a position that accepts §6.2.3's {@code within} extension.
+   *
+   * @param operand the value, already known to be {@linkplain #isRef reference-shaped}
+   * @param pointer the operand's JSON Pointer, for diagnostics
+   * @param diagnostics collects problems
+   * @return the reference, or empty when it was malformed
+   */
+  static Optional<Ref> readTemporalRef(final JsonNode operand, final String pointer,
+      final Diagnostics diagnostics) {
+    return readRef(operand, pointer, false, true, diagnostics);
   }
 
   /**
@@ -138,15 +167,38 @@ final class References {
    * @param operand the value, already known to be {@linkplain #isRef reference-shaped}
    * @param pointer the operand's JSON Pointer, for diagnostics
    * @param wholeAliasAllowed whether a name with no dot is acceptable here
+   * @param withinAllowed whether §6.2.3's {@code within} extension is read in this position, or
+   *     refused as any other extra key is. Parameterised for the reason {@code wholeAliasAllowed}
+   *     is: an extension accepted where nothing reads it is a key an author writes and the engine
+   *     ignores, which is worse than a rejection -- for a {@code between} bound it silently widens
+   *     the rule to the unbounded form
    * @param diagnostics collects problems
    * @return the reference, or empty when it was malformed
    */
   static Optional<Ref> readRef(final JsonNode operand, final String pointer,
-      final boolean wholeAliasAllowed, final Diagnostics diagnostics) {
-    if (operand.size() > 1) {
+      final boolean wholeAliasAllowed, final boolean withinAllowed,
+      final Diagnostics diagnostics) {
+    /*
+     * §6.2.3 reserves `{ $ref: …, extension: … }` for later use and names `transform` as the
+     * example. `within` is the first extension actually implemented: it bounds a temporal relation
+     * (§2.5's third amendment), and it has to live beside the $ref because it is part of the same
+     * relation rather than a second constraint on the same field. Every other extra key is still
+     * refused, so the reservation stays a reservation.
+     */
+    final JsonNode window = withinAllowed ? operand.get(WITHIN) : null;
+    if (operand.size() > (window == null ? 1 : 2)) {
       diagnostics.error(DslError.MALFORMED_REFERENCE, pointer,
-          "a $ref is the whole operand; this one also carries " + otherKeys(operand, REF)
-              + ". §6.2.3 reserves that shape for later use, and this engine does not implement it");
+          /*
+           * `within` is filtered out of the report only where it is legal. In the position that
+           * refuses it, it IS the offending key -- and an earlier version filtered it always, so
+           * this message named nothing at all when `within` was the sole extra, and named the
+           * wrong key when it was one of two.
+           */
+          "a $ref is the whole operand; this one also carries "
+              + (withinAllowed ? otherKeys(operand, REF, WITHIN) : otherKeys(operand, REF))
+              + ". §6.2.3 reserves that shape for extensions, and the only one this engine"
+              + " implements is 'within', which bounds an 'after' or a 'before'"
+              + (withinAllowed ? "" : " -- and not in this position, where nothing would read it"));
       return Optional.empty();
     }
     final JsonNode target = operand.get(REF);
@@ -161,7 +213,7 @@ final class References {
     if (dot < 0 && wholeAliasAllowed && !text.isEmpty()) {
       // An accumulate's answer. Whether the alias really is one is the compiler's question, not
       // this module's -- it can see the rule's patterns and this cannot.
-      return Optional.of(new Ref(text, ""));
+      return Optional.of(new Ref(text, "", Optional.ofNullable(window)));
     }
     if (dot < 1 || dot == text.length() - 1) {
       diagnostics.error(DslError.MALFORMED_REFERENCE, pointer,
@@ -171,7 +223,8 @@ final class References {
               : "a $ref must be 'alias.field', got '" + text + "'");
       return Optional.empty();
     }
-    return Optional.of(new Ref(text.substring(0, dot), text.substring(dot + 1)));
+    return Optional.of(new Ref(text.substring(0, dot), text.substring(dot + 1),
+        Optional.ofNullable(window)));
   }
 
   /**
@@ -289,13 +342,14 @@ final class References {
    * Names the keys accompanying a {@code $ref}, for the diagnostic that rejects them.
    *
    * @param operand the reference-shaped operand
-   * @param own the key that belongs there, and so is not reported
+   * @param own the keys that belong there, and so are not reported
    * @return the other keys, quoted and comma-separated
    */
-  private static String otherKeys(final JsonNode operand, final String own) {
+  private static String otherKeys(final JsonNode operand, final String... own) {
+    final java.util.Set<String> mine = java.util.Set.of(own);
     return operand.properties().stream()
         .map(Map.Entry::getKey)
-        .filter(key -> !own.equals(key))
+        .filter(key -> !mine.contains(key))
         .map(key -> "'" + key + "'")
         .collect(Collectors.joining(", "));
   }

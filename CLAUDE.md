@@ -300,6 +300,13 @@ concurrently" an extra artifact to discover.
   between same-type aliases — and `JoinPlan` symmetrises it, because either end may be bound first.
 - **Collections are flattened at ingestion**, not matched inside a fact. JSON Pointer has no
   wildcard.
+- **Temporal `after`/`before` read time from the facts; the engine owns no clock** (§2.5's third
+  amendment). That is what keeps §7.3: a wall clock would make the firing sequence depend on when it
+  ran. The `within` bound is required (an unbounded ordering is `gt` against the same `$ref`) and is
+  in the time field's own units, because only the author knows them. `Operator.reversed()` declines
+  for both, so they are never index-eligible — a reversal would leave the bound behind and widen the
+  rule. Sliding windows and "nothing happened for 24h" are NOT built and cannot be without a clock
+  or a caller-driven session time.
 - **`ACCUMULATE` binds a value that is folded at read time, never stored** (§2.5's second
   amendment). That is what keeps "tuples bind handles, never values" true: a stored aggregate goes
   stale the instant any fact in its scope moves, and the streaming matcher holds tuples across

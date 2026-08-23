@@ -72,7 +72,16 @@ public record JoinTest(
    * @return whether the join holds
    */
   public boolean test(final JsonNode payload, final JsonNode otherPayload) {
-    return Comparisons.test(
-        source.op(), accessor.get(payload), otherAccessor.get(otherPayload));
+    /*
+     * The one operator family that needs three values rather than two: a bounded temporal relation
+     * carries its window on the constraint, and Comparisons.test has nowhere to put it. Dispatched
+     * here rather than by widening that signature, so every other call site -- alpha tests, the
+     * having on an accumulate -- stays a two-value comparison.
+     */
+    return source.within()
+        .map(window -> Comparisons.within(source.op(), accessor.get(payload),
+            otherAccessor.get(otherPayload), window))
+        .orElseGet(() -> Comparisons.test(
+            source.op(), accessor.get(payload), otherAccessor.get(otherPayload)));
   }
 }

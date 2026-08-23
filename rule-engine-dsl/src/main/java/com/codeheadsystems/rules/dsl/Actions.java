@@ -165,7 +165,7 @@ final class Actions {
     if (References.isRef(value)) {
       // A value position, so a bare alias is allowed: it names an accumulate's answer, which has
       // no field because it is not a fact (§2.5's second amendment).
-      return References.readRef(value, pointer, true, diagnostics)
+      return References.readRef(value, pointer, true, false, diagnostics)
           .flatMap(ref -> ref.wholeAlias()
               ? Optional.of(new FieldRef(ref.alias(), tools.jackson.core.JsonPointer.empty()))
               : path(ref.field(), pointer, diagnostics)

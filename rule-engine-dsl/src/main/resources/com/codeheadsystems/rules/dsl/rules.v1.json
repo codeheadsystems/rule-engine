@@ -90,8 +90,21 @@
         "notIn": { "type": "array" },
         "matches": { "type": "string" },
         "hasField": { "type": "boolean" },
-        "isNull": { "type": "boolean" }
+        "isNull": { "type": "boolean" },
+        "after": { "$ref": "#/$defs/temporal" },
+        "before": { "$ref": "#/$defs/temporal" }
       }
+    },
+
+    "temporal": {
+      "description": "Section 2.5's bounded temporal relation. Always a $ref carrying section 6.2.3's 'within' extension: the relation is between two facts, and the bound is in the TIME FIELD'S OWN UNITS -- epoch millis, epoch seconds, a sequence number -- because only the author knows which. This engine reads no clock, which is what keeps section 7.3's replay guarantee. An unbounded ordering is gt or lt against the same $ref. The bound must be POSITIVE: zero excludes every value, because the near edge is strict.",
+      "type": "object",
+      "required": ["$ref", "within"],
+      "properties": {
+        "$ref": { "type": "string", "minLength": 1 },
+        "within": { "type": "number", "exclusiveMinimum": 0 }
+      },
+      "additionalProperties": false
     },
 
     "bound": {

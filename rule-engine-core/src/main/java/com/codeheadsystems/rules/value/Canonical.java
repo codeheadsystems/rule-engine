@@ -95,14 +95,42 @@ public final class Canonical {
   }
 
   /**
+   * A value's decimal form when this engine will order it, and empty otherwise.
+   *
+   * <p><strong>The one predicate for "is this a value the engine will order", and the reason it is
+   * public.</strong> Four places have to agree: §2.6.1's comparisons, §2.5's temporal windows, the
+   * bound a temporal constraint carries, and {@code Accumulators}' folds. Two of them had a
+   * hand-copy of {@code isNumber} plus the finite check -- one written "letter for letter" from the
+   * private version beside this -- and a third call site was added with the unguarded half alone
+   * and threw on a string. Agreement by copy is agreement until somebody edits one.
+   *
+   * <p>Rejects a non-number, a NaN and an infinity. That set is not arbitrary: a value the
+   * comparisons will not order is one the arithmetic must not fold, or the same rule set means two
+   * things in two places.
+   *
+   * @param node any value; never {@code null}. {@link #hashKey} and {@link #compare} tolerate a
+   *     Java null because they are reached from paths that may hold one; this is reached only from
+   *     a payload read or a compiled literal, where a missing value is a {@code MissingNode}
+   * @return its decimal form, or empty when it is absent, not a number, or not finite
+   */
+  public static Optional<BigDecimal> orderable(final JsonNode node) {
+    return node.isNumber() ? decimal(node) : Optional.empty();
+  }
+
+  /**
    * Extracts a value's decimal form, rejecting the values {@code BigDecimal} cannot represent.
    *
    * <p>JSON has no NaN or infinity, but a payload built in Java with {@code JsonNodeFactory} can
    * carry a non-finite double, and {@code BigDecimal.valueOf(Double.NaN)} throws. Treating those
    * as "not canonicalisable" makes them fail every comparison rather than fail the engine.
    *
+   * <p><strong>The caller must have established that the node is a number</strong>, which is why
+   * this stays private and {@link #orderable} does not. It guards non-finite values and nothing
+   * else, so calling it with an absent field throws from {@code decimalValue()} rather than
+   * answering empty.
+   *
    * @param node a numeric node
-   * @return its decimal value, or empty if it is not finite
+   * @return its decimal value, or empty if it is not a finite number
    */
   private static Optional<BigDecimal> decimal(final JsonNode node) {
     if (node.isDouble() || node.isFloat()) {

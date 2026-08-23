@@ -216,8 +216,21 @@ public final class JoinEnumerator {
       case GTE -> memory.probeRange(path, Optional.of(value), true, Optional.empty(), false);
       case LT -> memory.probeRange(path, Optional.empty(), false, Optional.of(value), false);
       case LTE -> memory.probeRange(path, Optional.empty(), false, Optional.of(value), true);
-      // NE and NOT_IN are anti-matches: an index cannot narrow "everything except one bucket".
-      // §3.3 names them, along with MATCHES, as unindexable; they fall to the post-filter.
+      /*
+       * NE and NOT_IN are anti-matches: an index cannot narrow "everything except one bucket".
+       * §3.3 names them, along with MATCHES, as unindexable; they fall to the post-filter.
+       *
+       * AFTER and BEFORE land here too. A bounded temporal relation IS a range probe in principle,
+       * but the bound lives on the constraint rather than in the probe value -- so an index
+       * consulted with the timestamp alone would return everything on the right side of it,
+       * unbounded.
+       *
+       * That would be SLOW rather than wrong: `satisfies` re-applies every edge of the step, the
+       * temporal one included, so a too-wide probe costs work and changes no answer. §3.3's
+       * invariant runs the other way -- a probe that cannot prove itself safe must decline rather
+       * than return too FEW candidates, because that is the lost firing. Declining here is
+       * therefore about cost: an unbounded range probe narrows nothing worth the walk.
+       */
       default -> Optional.empty();
     };
   }

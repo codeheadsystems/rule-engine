@@ -371,7 +371,10 @@ public final class MatchExplainer {
     return pattern.joinTests().stream()
         .map(join -> pattern.alias() + "." + join.source().field()
             + " " + join.source().op() + " "
-            + rule.patterns().get(join.otherIndex()).alias() + "." + join.source().otherField())
+            + rule.patterns().get(join.otherIndex()).alias() + "." + join.source().otherField()
+            // The bound is half the relation, so a temporal join reported without it names a
+            // constraint the author did not write and would go looking for.
+            + join.source().within().map(window -> " within " + window).orElse(""))
         .reduce((left, right) -> left + " and " + right)
         .orElse("its joins");
   }

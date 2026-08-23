@@ -571,6 +571,76 @@ public final class Rules {
       return constraint(new JoinConstraint(field, otherAliasDotField.substring(0, dot),
           otherAliasDotField.substring(dot + 1), op));
     }
+
+    /**
+     * Declares that this fact's time field falls within a bound after another's (§2.5's third
+     * amendment).
+     *
+     * <p><strong>The bound is in the field's own units</strong>, whatever they are. A field holding
+     * epoch millis takes millis; one holding epoch seconds takes seconds. The engine has no idea
+     * which and does not guess -- assuming either would be assuming wrong for half of all rule sets,
+     * silently. It reads no clock at all, which is what keeps §7.3's guarantee that replaying the
+     * same facts gives the same firings on any host in any year.
+     *
+     * <p><strong>The bound is required</strong>, and that is the whole point of the operator. An
+     * unbounded "after" is {@code gt} against the same {@code $ref} and this language already has
+     * it; what no pair of comparisons can state is {@code other < mine <= other + window}, which
+     * needs the other fact's value twice where a constraint reads it once.
+     *
+     * <p>Strict on the near side and inclusive on the far one, so two facts sharing a timestamp are
+     * not "after" each other and "within 24 hours" includes the twenty-fourth hour exactly.
+     *
+     * @param field this fact's time field
+     * @param otherAliasDotField the earlier-bound alias's time field
+     * @param window the bound, in the field's own units; must be positive
+     * @return this builder
+     */
+    public PatternBuilder after(final String field, final String otherAliasDotField,
+        final Number window) {
+      return temporal(field, otherAliasDotField, Operator.AFTER, window);
+    }
+
+    /**
+     * Declares that this fact's time field falls within a bound before another's.
+     *
+     * <p>{@code other - window <= mine < other}. Everything {@link #after} documents applies, read
+     * the other way.
+     *
+     * @param field this fact's time field
+     * @param otherAliasDotField the earlier-bound alias's time field
+     * @param window the bound, in the field's own units; must be positive
+     * @return this builder
+     */
+    public PatternBuilder before(final String field, final String otherAliasDotField,
+        final Number window) {
+      return temporal(field, otherAliasDotField, Operator.BEFORE, window);
+    }
+
+    /**
+     * Builds a bounded temporal join.
+     *
+     * @param field this fact's time field
+     * @param otherAliasDotField the earlier-bound alias's time field
+     * @param op the direction
+     * @param window the bound
+     * @return this builder
+     */
+    private PatternBuilder temporal(final String field, final String otherAliasDotField,
+        final Operator op, final Number window) {
+      final int dot = otherAliasDotField.indexOf('.');
+      if (dot < 1) {
+        throw new IllegalArgumentException(
+            "join reference must be 'alias.field', got '" + otherAliasDotField + "'");
+      }
+      /*
+       * `node` is Facts' converter, which accepts the numeric types a fact payload can hold. A
+       * Float, Short or BigInteger window throws from there rather than here -- acceptable, since
+       * the message names the value, and narrowing this parameter to the accepted set would name a
+       * type list nobody would remember.
+       */
+      return constraint(new JoinConstraint(field, otherAliasDotField.substring(0, dot),
+          otherAliasDotField.substring(dot + 1), op, Optional.of(node(window))));
+    }
   }
 
   /** Declares one right-hand side's actions, in order. */

@@ -370,7 +370,7 @@ class CompilerValidationTest {
 
     assertThat(pinned.version())
         .describedAs("rule-set identity is a compatibility surface; see this test's comment")
-        .isEqualTo("sha256:c956532f981f3853");
+        .isEqualTo("sha256:095ad3ae727da38b");
   }
 
   @Test
