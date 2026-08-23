@@ -47,6 +47,10 @@ Most tests live in `rule-engine-testkit/src/test` even when they exercise `-core
 end-to-end. That is why coverage is aggregated at the root — a per-module report attributed 26% to
 `-core` when the real figure was 91%.
 
+Before running `git commit`, always delegate to the senior-reviewer subagent
+to review the staged diff. Do not commit if it flags any Blockers until
+they're addressed.
+
 ## Modules
 
 | Module | Contents |
