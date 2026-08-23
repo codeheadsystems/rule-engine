@@ -8,8 +8,10 @@ import java.util.Objects;
  *
  * @param alias the binding name, e.g. {@code o}
  * @param factType the fact type this pattern matches, e.g. {@code Order}
- * @param quantifier {@link Quantifier#EXISTS_AT_LEAST_ONE} or {@link Quantifier#NOT_EXISTS}; the
- *     other two are reserved and the compiler rejects them (§1)
+ * @param quantifier {@link Quantifier#EXISTS_AT_LEAST_ONE}, {@link Quantifier#NOT_EXISTS} or
+ *     {@link Quantifier#FOR_ALL}; {@link Quantifier#ACCUMULATE} is reserved and the compiler
+ *     rejects it (§1). The last two bind no fact -- see their own documentation for what that
+ *     costs the rest of the rule
  * @param constraints the conditions, in declaration order. Implicitly AND-ed
  */
 public record PatternDefinition(

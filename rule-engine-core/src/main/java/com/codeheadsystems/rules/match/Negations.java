@@ -1,15 +1,10 @@
 package com.codeheadsystems.rules.match;
 
 import com.codeheadsystems.rules.fact.Fact;
-import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.fact.WorkingMemory;
-import com.codeheadsystems.rules.rule.AlphaTest;
 import com.codeheadsystems.rules.rule.CompiledPattern;
-import com.codeheadsystems.rules.rule.JoinTest;
 import java.util.Iterator;
-import java.util.Objects;
 import java.util.Optional;
-import tools.jackson.databind.JsonNode;
 
 /**
  * Whether the absence a {@code NOT_EXISTS} pattern asserts holds for one complete tuple (spec §1's
@@ -28,7 +23,15 @@ import tools.jackson.databind.JsonNode;
  * {@code Payment} exists" tells an author their rule is suppressed; "fact #7 is the {@code Payment}"
  * tells them what to go and look at. The first fact found wins: an author fixes one thing at a time,
  * which is the same reason {@code MatchExplainer.firstFailing} reports one constraint rather than
- * every constraint.
+ * every constraint. {@link #scan} additionally reports how far it got, which only the explainer
+ * needs: it is what lets a diagnostic charge its work budget for what a negation actually cost
+ * rather than for what it might have.
+ *
+ * <p><strong>A negation conjoins the two halves of its pattern</strong>, where {@link Universals}
+ * gives them different jobs. A fact defeats an asserted absence when it satisfies everything written
+ * -- the joins that relate it to the tuple <em>and</em> the constraints on the fact itself. There is
+ * no scope to choose, because the pattern names the thing whose absence is asserted rather than a
+ * population to make an assertion about.
  *
  * <p>Scanning working memory for the type rather than probing a pattern memory or an index is
  * deliberate. It is the one implementation all three matchers and the explainer can share, and the
@@ -52,30 +55,7 @@ public final class Negations {
   public static Optional<Fact> witness(final CompiledPattern negation, final long[] bound,
       final WorkingMemory memory) {
     return scan(negation, bound, () -> memory.factsOfType(negation.factType()).iterator(), memory)
-        .witness();
-  }
-
-  /**
-   * What one scan for a witness found, and how much of the population it had to look at.
-   *
-   * @param witness the first fact satisfying the negated pattern, or empty when the absence holds
-   * @param examined how many candidates the scan pulled from the population before it stopped.
-   *     Reported because a scan short-circuits on the first witness, so the population's size is an
-   *     upper bound on this and not a measure of it. §7.2's explainer charges its work budget with
-   *     this number; charging the upper bound instead made it stop early and report "there may be a
-   *     match" on searches that had already proved there is not
-   */
-  public record Scan(Optional<Fact> witness, int examined) {
-
-    /**
-     * Canonical constructor.
-     *
-     * @param witness the fact that defeats the asserted absence, if one does
-     * @param examined how many candidates were pulled from the population
-     */
-    public Scan {
-      Objects.requireNonNull(witness, "witness");
-    }
+        .found();
   }
 
   /**
@@ -84,7 +64,7 @@ public final class Negations {
    * <p>{@link WorkingMemory#factsOfType} answers with a snapshot -- a copy -- which is the right
    * contract for a matcher asking once per fire cycle and the wrong cost for §7.2's explainer, which
    * asks once per complete tuple it examines. This overload lets that caller take the snapshot once.
-   * The agenda has no use for it and calls the one above.
+   * The agenda has no use for it and calls {@link #witness}.
    *
    * <p>The caller owns what it passes: a population that is not every fact of the negated type
    * answers a narrower question than the engine does, which for a diagnostic would be a wrong
@@ -108,35 +88,19 @@ public final class Negations {
         // some OTHER fact, not about the one already bound.
         continue;
       }
-      if (satisfies(negation, candidate.payload(), bound, memory)) {
+      /*
+       * Alphas first, and the opposite of the order Universals uses -- deliberately, on both
+       * counts. Here the two halves are one conjunction, so either order gives the same answer and
+       * the cheap one should run first: an alpha test is a literal comparison, while a join
+       * allocates a FactHandle and goes back to working memory for the other side. There it is the
+       * semantics: the joins decide what is in scope before anything is required of it. Do not
+       * "unify" the two.
+       */
+      if (PatternTests.alphasHold(negation, candidate.payload())
+          && PatternTests.joinsHold(negation, candidate.payload(), bound, memory)) {
         return new Scan(Optional.of(candidate), examined);
       }
     }
     return new Scan(Optional.empty(), examined);
-  }
-
-  /**
-   * Whether one candidate satisfies a negated pattern's own tests against a binding.
-   *
-   * @param negation the negated pattern
-   * @param payload the candidate's payload
-   * @param bound the handle ids bound by the positive tuple
-   * @param memory the working memory the join tests dereference their other side from
-   * @return whether this candidate is the fact whose absence was asserted
-   */
-  private static boolean satisfies(final CompiledPattern negation, final JsonNode payload,
-      final long[] bound, final WorkingMemory memory) {
-    for (final AlphaTest test : negation.alphaTests()) {
-      if (!test.test(payload)) {
-        return false;
-      }
-    }
-    for (final JoinTest test : negation.joinTests()) {
-      final Optional<Fact> other = memory.get(new FactHandle(bound[test.otherIndex()]));
-      if (other.isEmpty() || !test.test(payload, other.get().payload())) {
-        return false;
-      }
-    }
-    return true;
   }
 }

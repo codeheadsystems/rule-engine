@@ -9,6 +9,7 @@ import com.codeheadsystems.rules.match.Activation;
 import com.codeheadsystems.rules.match.ActivationKey;
 import com.codeheadsystems.rules.match.Negations;
 import com.codeheadsystems.rules.match.Tuple;
+import com.codeheadsystems.rules.match.Universals;
 import com.codeheadsystems.rules.rule.CompiledPattern;
 import com.codeheadsystems.rules.rule.CompiledRule;
 import com.codeheadsystems.rules.rule.ExpressionTest;
@@ -386,10 +387,23 @@ public abstract class RecomputingAgenda implements Agenda {
       return matches;
     }
     final List<Activation> present = rule.hasNegations() ? absences(rule, matches) : matches;
-    if (present.isEmpty() || !rule.hasExpressionTests()) {
-      return present;
+    /*
+     * Negations, then universals, then §6.4's conditions. A tuple must pass all three, so the order
+     * cannot change the answer -- but it is fixed rather than incidental, because §7.2's explainer
+     * attributes each removed tuple to whichever gate took it, and an attribution that depended on
+     * evaluation order would be a different explanation on a different day.
+     *
+     * No cost ordering is claimed. A negation short-circuits on its first witness where a universal
+     * that holds walks its whole scope, so the cheaper of the two is workload-dependent; the
+     * condition is last because it is the one gate with nothing to scan and no early exit.
+     */
+    final List<Activation> required = rule.hasUniversals()
+        ? requirements(rule, present)
+        : present;
+    if (required.isEmpty() || !rule.hasExpressionTests()) {
+      return required;
     }
-    return conditions(rule, present);
+    return conditions(rule, required);
   }
 
   /**
@@ -425,6 +439,52 @@ public abstract class RecomputingAgenda implements Agenda {
       }
     }
     return surviving;
+  }
+
+  /**
+   * Drops the matches whose rule asserts a requirement that some in-scope fact fails (§2.5's
+   * {@code FOR_ALL}).
+   *
+   * <p>Here for the reasons {@link #absences} is here, and it inherits the same two boundaries: no
+   * truth maintenance, so a rule that fired because everything in scope satisfied a requirement is
+   * not undone when a counterexample arrives; and the type must not be one the session evicts,
+   * because evicting facts can only remove counterexamples and so can only make the assertion more
+   * true. Both are §2.5's amendment, and the second is sharper than negation's -- a universal is
+   * <em>vacuously</em> true over an emptied scope, so a cap that evicts a type entirely turns the
+   * quantifier into a tautology rather than merely weakening it.
+   *
+   * <p><strong>Rejected matches stay held</strong>, exactly as negation-rejected ones do and for the
+   * same reason: the question is about facts the tuple does not bind, so a shape that dropped the
+   * match would have nothing to re-offer it with when the requirement started holding again.
+   *
+   * @param rule the rule
+   * @param matches its complete tuples
+   * @return the tuples whose asserted requirements all hold
+   */
+  private List<Activation> requirements(final CompiledRule rule, final List<Activation> matches) {
+    final List<Activation> surviving = new ArrayList<>(matches.size());
+    for (final Activation activation : matches) {
+      if (rule.universals().stream().noneMatch(universal -> fails(universal, activation))) {
+        surviving.add(activation);
+      }
+    }
+    return surviving;
+  }
+
+  /**
+   * Whether any in-scope fact fails a universal pattern against one binding.
+   *
+   * <p>Delegated to {@link com.codeheadsystems.rules.match.Universals} for the reason
+   * {@link #exists} delegates: §7.2's explainer has to answer the same question, and two copies
+   * could disagree.
+   *
+   * @param universal the universal pattern
+   * @param activation the complete positive binding
+   * @return true when the requirement does not hold
+   */
+  private boolean fails(final CompiledPattern universal, final Activation activation) {
+    return Universals.counterexample(universal, activation.tuple().boundFacts(), workingMemory)
+        .isPresent();
   }
 
   /**

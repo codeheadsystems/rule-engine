@@ -136,7 +136,9 @@ Read this before §2. Two of these bullets — collection flattening and negatio
 
   **The supported answer, which you should design your ingestion around from the start:** flatten collections into separate facts. An `Order` with an `items[]` array becomes one `Order` fact plus N `LineItem` facts carrying `orderId`, joined normally. This is not merely a workaround — it is how you get indexing and incremental matching over collection elements at all. Retrofitting it later means rewriting every rule that touches a collection, so decide now.
 
-- **Negation and quantified patterns (`NOT_EXISTS`, `FOR_ALL`).** "No `Payment` exists for this `Order`" is in the first ten rules most people write, so this is a deferral to be up-front about. It is deferred because negation is genuinely harder than positive matching: a `NotNode` needs per-tuple match *counters*, correct behavior when the count crosses 1↔0 in both directions, and correct interaction with truth maintenance, since a match justified by an absence must be retracted the moment the absence ends. §2.5's `Quantifier` reserves the syntax and §3.2's `NetworkNode` reserves the node type. **Interim answer:** compute the absence at ingestion and insert an explicit marker fact (`OrderUnpaid`) — less elegant, but the logic sits somewhere you can unit-test directly. See the amendment below: `NOT_EXISTS` is built, and none of the machinery this paragraph prices was needed.
+- **Negation and quantified patterns (`NOT_EXISTS`, `FOR_ALL`).** Both are built; see the amendments below. The paragraph that follows is the original deferral, kept because it prices machinery neither of them needed.
+
+  **Original deferral.** "No `Payment` exists for this `Order`" is in the first ten rules most people write, so this is a deferral to be up-front about. It is deferred because negation is genuinely harder than positive matching: a `NotNode` needs per-tuple match *counters*, correct behavior when the count crosses 1↔0 in both directions, and correct interaction with truth maintenance, since a match justified by an absence must be retracted the moment the absence ends. §2.5's `Quantifier` reserves the syntax and §3.2's `NetworkNode` reserves the node type. **Interim answer:** compute the absence at ingestion and insert an explicit marker fact (`OrderUnpaid`) — less elegant, but the logic sits somewhere you can unit-test directly. See the amendment below: `NOT_EXISTS` is built, and none of the machinery this paragraph prices was needed.
 
 - **Accumulation / aggregation (`ACCUMULATE`).** `sum`, `count`, `collect`, `average` over matching facts. Same reasoning — incremental aggregate maintenance under retract is its own correctness problem. **Interim answer:** aggregate at ingestion, insert the aggregate as a fact.
 
@@ -349,14 +351,15 @@ public record RuleDefinition(
 public record PatternDefinition(
     String alias,                   // binding name, e.g. "o"
     String factType,                // "Order"
-    Quantifier quantifier,          // EXISTS_AT_LEAST_ONE, or NOT_EXISTS (§1's amendment)
+    Quantifier quantifier,          // EXISTS_AT_LEAST_ONE, NOT_EXISTS (§1's amendment),
+                                    // or FOR_ALL (§2.5's amendment)
     List<Constraint> constraints
 ) {}
 
-/** The first two are implemented; FOR_ALL and ACCUMULATE are reserved so adding them later is a
- *  new enum constant plus a new node type, not a reshape of PatternDefinition. §1 states what each
- *  of those two costs and gives an interim answer; its amendment says why NOT_EXISTS needed no
- *  node type at all. */
+/** The first three are implemented; ACCUMULATE is reserved so adding it later is a new enum
+ *  constant plus a new node type, not a reshape of PatternDefinition. §1 states what it costs and
+ *  gives an interim answer; §1's amendment says why NOT_EXISTS needed no node type at all, and
+ *  this section's amendment says the same of FOR_ALL. */
 public enum Quantifier { EXISTS_AT_LEAST_ONE, NOT_EXISTS, FOR_ALL, ACCUMULATE }
 
 public sealed interface Constraint
@@ -426,6 +429,20 @@ Keep this layer DSL-agnostic — a second front-end (a text DSL, say) could be b
 **Note the two different Jackson uses, so they don't get conflated.** A *rule file* (a YAML/JSON document with `when:`/`then:` blocks) is parsed by Jackson into these records at compile time — a normal typed POJO binding. A *fact* (§2.2) is a `JsonNode` at runtime, with no POJO binding. `FieldConstraint.literal` being a `JsonNode` is what lets a DSL literal compare directly against a fact's field value (§2.6) with no coercion layer between: the DSL, the constraint AST, and the fact payload all speak one value model end to end.
 
 **On extending the sealed hierarchies.** `Constraint` is sealed over records, which are implicitly final, so that one is complete as written. `NetworkNode` (§3.2) is a different case, discussed there.
+
+> **Amendment (Phase 6, second slice, as built).** **`FOR_ALL` is implemented.** `ACCUMULATE`, backward chaining, truth maintenance and the temporal operators are not, and §1's bullets stand for them unchanged. It lands on the seam `NOT_EXISTS` opened — binds nothing, joins against bound aliases, evaluated against a *complete* tuple in `RecomputingAgenda` so the three matchers cannot disagree — so what follows is only about what is different.
+>
+> **The join tests choose the scope; the pattern's own constraints are the requirement.** This section's enum said "every fact of the type matches the pattern", and that reading is not merely weaker than the one built — it is a trap. A `FOR_ALL` carrying a join, read literally, asserts that every `LineItem` in working memory belongs to this order *and* is in stock, which is false the moment a second order exists. An author writes what looks right and gets a rule that can never fire, with nothing in the diagnostic to say why. Under the split, the same pattern says "every `LineItem` **of this order** is in stock", which is what they meant. With no joins the two readings coincide and the quantifier is the global one this section originally described.
+>
+> **What it buys over a negation, precisely.** A single-constraint requirement is already expressible as a negation of its complement: "every `Order` is shipped" is "no `Order` is not shipped". A *multi*-constraint one is not, because the complement of "in stock **and** qty above zero" is a disjunction and no pattern in this engine expresses one. That is the expressiveness `FOR_ALL` adds, and it is worth stating because a reader who only tries the single-constraint case will conclude the quantifier is redundant.
+>
+> **Only a join can narrow the scope, and that is the limit this reading leaves behind.** Every literal-valued constraint compiles to an alpha test, so it lands in the requirement — which means "every *physical* line item of this order is in stock" cannot be written. `type: { eq: "PHYSICAL" }` would make a digital item a *counterexample* rather than excluding it from the scope, and the rule silently never fires for an order containing one. That is the same shape of trap the split removes for joins, displaced onto literals, and it is recorded here rather than left for an author to hit. The interim answer is §1's collection-flattening answer in another form: split the type at ingestion, so the scope is selectable by fact type and therefore by the join. Lifting it needs the scope and the requirement to be separately writable — which is the two-pattern form this section declined, and is the shape a future amendment would have to choose.
+>
+> **The two halves of a pattern are now asked separately**, which is the one structural change. `PatternTests` holds them and `Negations` and `Universals` read them differently — a negation conjoins them, a universal gives them different jobs. Splitting them is what makes the scoped reading expressible at all.
+>
+> **Three boundaries, and the third is new.** There is no truth maintenance, inherited unchanged: a rule that fired because everything in scope complied is not undone when a counterexample arrives. The quantified type must not be one a session evicts (§4.4) — and this is *sharper* than negation's, because evicting facts can only remove counterexamples, so a cap does not weaken the requirement but strengthens it. And **a `FOR_ALL` is vacuously true over an empty scope**, which is classical logic and the trap to know about: "every line item of this order is in stock" fires for an order with no line items at all. Pair it with a positive pattern of the same type — which a rule wanting this usually has anyway — to say "there are some, and all of them". Combine the last two and a cap that empties the scope does not weaken the assertion but *deletes* it.
+>
+> **The sharpest limit is what a requirement can say.** A condition (§6.4) on a quantified pattern is refused, for the reason it is refused on a negation: the post-filter that evaluates conditions walks the *positive* patterns, so it would compile and never run, leaving the quantifier silently broader than written. That costs a `FOR_ALL` more than a negation, because an expression is exactly how an author would want to write a requirement the operator set cannot express. Recorded here rather than left to be discovered through the diagnostic.
 
 ### 2.6 Field access
 
@@ -1727,7 +1744,7 @@ Concurrency helpers live in `-core`: `SessionActor` and the virtual-thread wrapp
 | 3 | Streaming sessions: `SessionOptions`-selectable persistent beta memory (Rete `JoinNode`), the Rete agenda shape and its `activate`/`deactivate` interface (§4.3), differential propagation (§11.2), `fireUntilHalt` + hardened `SessionActor` (§5.4), session fact-eviction (§4.4) | Long-lived session with streaming inserts amortizes join cost; **TREAT and Rete produce identical firing sequences on the same input** (§11.5) — established by differential test against the v1 engine, which by then is a shipped oracle, not a thought experiment; a streaming session under sustained insert-without-retract load reaches a steady-state heap |
 | 4 | Concurrency layer: immutability audited, virtual-thread helpers, hot-reload holder (§5.6) | N concurrent sessions on M cores scale near-linearly for the batch case; rule-set swap under load drops nothing and mixes nothing |
 | 5 | DSL front-end: JSON/YAML parsing, rule-file schema validation, operator-map compiler, `CompilerReport` (§7.4), optional CEL, optional `SchemaRegistry` | An author writes YAML, never touches Java, gets index-eligible rules by default, and gets a report naming every constraint that isn't |
-| 6 (stretch) | Negation/`NOT_EXISTS` ✔, accumulate, truth maintenance, temporal/CEP, distributed sharding | `NOT_EXISTS` is built — see §1's amendment, which also records what it cost to land it without truth maintenance. The rest is out of scope; §1 says what each costs and what the interim answer is |
+| 6 (stretch) | Negation/`NOT_EXISTS` ✔, `FOR_ALL` ✔, accumulate, truth maintenance, temporal/CEP, distributed sharding | `NOT_EXISTS` is built (§1's amendment) and so is `FOR_ALL` (§2.5's), both without truth maintenance and both recording what that cost. The rest is out of scope; §1 says what each costs and what the interim answer is |
 
 **Phase 1's `update` criterion has two halves, and they test different things.** The *correctness* half is now nearly structural — `update` on a changed tested path **is** retract+insert (§3.4.1) — so the gate is narrow and specific: the handle survives, refraction is cleared for exactly the rules testing a changed path and no others, and the retract half computes its index keys from the **old** payload. Test update-after-fire explicitly; a rule that fired, then had an untested field change, must not fire again, and a rule that fired, then had a tested field change, must. The *performance* half is the no-op path: assert on a counter that an update touching no tested path performs zero network traversals. Assert it, don't infer it — "no propagation happened" is trivially satisfied by an implementation that never propagates.
 

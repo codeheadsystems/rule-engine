@@ -397,6 +397,57 @@ class DslEquivalenceTest {
     }
 
     @Test
+    @DisplayName("a forAll pattern's scope and requirement survive the round trip")
+    void readyToShip() {
+      /*
+       * The hash half of this oracle is the strong one, and for FOR_ALL it is checking something
+       * specific: that the rule file's joins and constraints land in the same halves the builder
+       * puts them in. A front end that conjoined them would produce a rule asserting every LineItem
+       * anywhere belongs to this order -- a different rule, with the same text.
+       */
+      final FiringSequence fired = DslEquivalence.assertEquivalent(
+          file("""
+                - id: ready-to-ship
+                  when:
+                    - fact: Order
+                      as: o
+                      where:
+                        status: { eq: "PENDING" }
+                    - fact: LineItem
+                      as: li
+                      quantifier: forAll
+                      where:
+                        orderId: { eq: { $ref: o.id } }
+                        inStock: { eq: true }
+                  then:
+                    - action: emit
+                      event: ready
+                      payload: { orderId: { $ref: o.id } }
+              """),
+          List.of(Rules.rule("ready-to-ship")
+              .when("o", "Order", pattern -> pattern.eq("status", "PENDING"))
+              .forAll("li", "LineItem", pattern -> pattern
+                  .ref("orderId", "o.id")
+                  .eq("inStock", true))
+              .then(actions -> actions.emit("ready", "orderId", Rules.ref("o.id")))
+              .build()),
+          session -> {
+            session.insert("Order", Facts.json("""
+                {"id": 1, "status": "PENDING"}"""));
+            session.insert("LineItem", Facts.json("""
+                {"orderId": 1, "inStock": true}"""));
+            session.insert("Order", Facts.json("""
+                {"id": 2, "status": "PENDING"}"""));
+            session.insert("LineItem", Facts.json("""
+                {"orderId": 2, "inStock": false}"""));
+          });
+
+      assertThat(fired.steps())
+          .as("order 1 is ready; order 2's out-of-stock item is out of scope for it")
+          .hasSize(1);
+    }
+
+    @Test
     @DisplayName("of a type the rule already binds carries §1's implicit inequality across too")
     void sameTypeNegation() {
       final FiringSequence fired = DslEquivalence.assertEquivalent(

@@ -94,7 +94,9 @@ class DslDiagnosticsTest {
       Actions.actionOf(
           new ThenNode("sendEmail", null, null, null, null, null, null, null, null, null),
           "", diagnostics);
-      Quantifiers.of("forAll", "", diagnostics);
+      // 'accumulate' rather than 'forAll': forAll is implemented as of §2.5's amendment and the
+      // schema spells it, so it is no longer a code this gate shields. accumulate still is.
+      Quantifiers.of("accumulate", "", diagnostics);
 
       assertThat(raised).extracting(DslDiagnostic::error)
           .containsExactlyInAnyOrder(DslError.UNKNOWN_OPERATOR, DslError.MALFORMED_OPERAND,
@@ -438,6 +440,9 @@ class DslDiagnosticsTest {
     @Test
     @DisplayName("with a quantifier this engine does not implement is refused at the schema gate")
     void unknownQuantifier() {
+      // 'accumulate', not 'forAll': §2.5's amendment implements the latter and the schema now
+      // spells it. What this test guards is unchanged -- a quantifier §1 still defers is stopped by
+      // the schema, before the component that would otherwise report it in words.
       final DslDiagnostic diagnostic = only("""
           apiVersion: rules.v1
           rules:
@@ -445,7 +450,7 @@ class DslDiagnosticsTest {
               when:
                 - fact: Order
                   as: o
-                  quantifier: forAll
+                  quantifier: accumulate
               then: [{ action: emit, event: e }]
           """);
 

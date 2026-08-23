@@ -322,15 +322,24 @@ public final class ReteAgenda extends RecomputingAgenda {
    * it sits near zero however many matches the beta memory holds -- which is the whole claim of
    * §4.3, stated as something a test can assert.
    *
-   * <p><strong>With one exception, and it is the one an operator reading this number needs to
-   * know.</strong> A §6.4 {@code condition} is applied in {@code RecomputingAgenda.postFilter},
-   * after {@link #matchesOf} has returned, so a match the condition rejects is never fired and
-   * therefore never pulled back out -- it stays here and is rebuilt and re-evaluated on every cycle
-   * the rule is dirty for. A rule set that rejects most of what it matches drives this number toward
-   * the beta memory's, and §4.3's win is lost for it. That is a cost rather than a defect, since the
-   * post-filter re-runs every cycle and a match whose condition starts holding fires; it is pinned
-   * by {@code CelEngineTest.theConflictSetHoldsWhatAConditionRejects}, which also records why
-   * pruning on rejection was not built.
+   * <p><strong>With three exceptions, and they are what an operator reading this number needs to
+   * know.</strong> Everything {@code RecomputingAgenda.postFilter} applies runs <em>after</em>
+   * {@link #matchesOf} has returned, so a match any of them removes is never fired and therefore
+   * never pulled back out -- it stays here and is rebuilt and re-evaluated on every cycle the rule
+   * is dirty for. A rule set that removes most of what it matches drives this number toward the beta
+   * memory's, and §4.3's win is lost for it. That is a cost rather than a defect, since the
+   * post-filter re-runs every cycle and a match that starts surviving fires.
+   *
+   * <p>The three are a §6.4 {@code condition}, §1's {@code NOT_EXISTS} and §2.5's {@code FOR_ALL}.
+   * The condition case is pinned by
+   * {@code CelEngineTest.theConflictSetHoldsWhatAConditionRejects}, which also records why pruning
+   * on rejection was not built. The quantifiers are deliberately the same shape and for a stronger
+   * reason: a negation-rejected or requirement-rejected match must stay held, because the facts that
+   * would make it eligible again are ones the tuple does not bind, so dropping it would leave
+   * nothing to re-offer when the absence returned or the counterexample left (§1's amendment).
+   * {@code FOR_ALL} is the worst of the three for this number -- a requirement that <em>holds</em>
+   * walks its whole scope without short-circuiting, every cycle, and still leaves the match here if
+   * some other gate removed it.
    */
   @Override
   public int pendingMatchCount() {

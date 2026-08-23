@@ -190,12 +190,14 @@ public final class RuleFiles {
             new Assembly.ConstraintSite(
                 parsed.index().nearest(pointer + "/condition"), rule.id()));
         /*
-         * The compiler refuses a condition on a negated pattern outright, and writes that one under
-         * a different prefix -- "<rule>: alias '<alias>': ..." rather than the "<rule>: <alias>:
-         * condition: ..." an ordinary condition diagnostic carries. Registered here so it lands on
-         * the condition rather than on the rule's id, which is the whole point of this module.
+         * The compiler refuses a condition on a quantified pattern outright, and writes that one
+         * under a different prefix -- "<rule>: alias '<alias>': ..." rather than the "<rule>:
+         * <alias>: condition: ..." an ordinary condition diagnostic carries. Registered here so it
+         * lands on the condition rather than on the rule's id, which is the whole point of this
+         * module.
          */
-        if (quantifier.orElse(null) == Quantifier.NOT_EXISTS) {
+        if (quantifier.filter(kind -> kind == Quantifier.NOT_EXISTS
+            || kind == Quantifier.FOR_ALL).isPresent()) {
           assembly.byConstraint.put(rule.id() + ": alias '" + pattern.as() + "'",
               new Assembly.ConstraintSite(
                   parsed.index().nearest(pointer + "/condition"), rule.id()));

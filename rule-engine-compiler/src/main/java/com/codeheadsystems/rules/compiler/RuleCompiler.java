@@ -199,48 +199,62 @@ public final class RuleCompiler {
     // rather than one that says the alias does not exist when it plainly does.
     final Map<String, Integer> aliasPositions = new LinkedHashMap<>();
     final List<String> aliasTypes = new ArrayList<>();
-    /** Aliases a {@code NOT_EXISTS} pattern names. They bind nothing, so nothing may reference one. */
-    final Set<String> negatedAliases = new LinkedHashSet<>();
+    /** Aliases of quantified patterns, which bind nothing, so nothing may reference one. */
+    final Map<String, Quantifier> nonBindingAliases = new LinkedHashMap<>();
     /*
-     * Positions are assigned to POSITIVE patterns only, and that is the whole trick that keeps
-     * negation from touching the rest of the engine. A NOT_EXISTS pattern binds no alias into the
-     * tuple, so giving it a position would make every downstream consumer -- the join planner, the
-     * join walk, the streaming matcher's pattern sites, the explainer -- have to know to skip it.
-     * Instead they read `patterns`, which contains only the ones that produce bindings, and the
-     * negated ones are compiled separately against these same positions.
+     * Positions are assigned to POSITIVE patterns only, and that is the whole trick that keeps the
+     * quantifiers from touching the rest of the engine. A NOT_EXISTS or FOR_ALL pattern binds no
+     * alias into the tuple, so giving it a position would make every downstream consumer -- the
+     * join planner, the join walk, the streaming matcher's pattern sites, the explainer -- have to
+     * know to skip it. Instead they read `patterns`, which contains only the ones that produce
+     * bindings, and the quantified ones are compiled separately against these same positions.
      */
     int position = 0;
     for (final PatternDefinition pattern : rule.when()) {
-      if (pattern.quantifier() != Quantifier.EXISTS_AT_LEAST_ONE
-          && pattern.quantifier() != Quantifier.NOT_EXISTS) {
-        diagnostics.add(rule.id() + ": quantifier " + pattern.quantifier()
+      /*
+       * Exhaustive and without a default, so adding a Quantifier constant fails THIS compile rather
+       * than shipping. An `== ACCUMULATE` test would let a new constant through as an ordinary
+       * binding pattern with no diagnostic at all, which is the failure mode the compiler exists to
+       * prevent -- a quantifier nobody implemented, silently matching.
+       */
+      switch (pattern.quantifier()) {
+        case EXISTS_AT_LEAST_ONE, NOT_EXISTS, FOR_ALL -> {
+          // Implemented; the partition below decides where each one lands.
+        }
+        case ACCUMULATE -> diagnostics.add(rule.id() + ": quantifier " + pattern.quantifier()
             + " on alias '" + pattern.alias() + "' is not implemented. See spec section 1"
             + " for the interim answer");
       }
-      if (pattern.quantifier() == Quantifier.NOT_EXISTS) {
+      if (bindsNoFact(pattern.quantifier())) {
         /*
-         * A negated alias is still checked for duplication, because "bound twice" would be just as
-         * confusing here -- but it is recorded in a separate set, since nothing may reference it.
+         * A quantified alias is still checked for duplication, because "bound twice" would be just
+         * as confusing here -- but it is recorded in a separate map, since nothing may reference it.
          * The pattern itself is compiled after this loop, when every positive position is known: a
-         * negation may join against any positive alias, including ones declared after it.
+         * quantified pattern may join against any positive alias, including ones declared after it.
          */
-        if (!negatedAliases.add(pattern.alias()) || aliasPositions.containsKey(pattern.alias())) {
+        if (nonBindingAliases.put(pattern.alias(), pattern.quantifier()) != null
+            || aliasPositions.containsKey(pattern.alias())) {
           diagnostics.add(rule.id() + ": alias '" + pattern.alias() + "' is bound twice");
         }
         /*
-         * A §6.4 condition on a negated pattern is refused rather than ignored. It would compile --
-         * ExpressionConstraint is a Constraint like any other -- and then never run, because the
-         * post-filter that evaluates conditions walks the rule's POSITIVE patterns and the negation
-         * is answered by its alpha and join tests alone. The negation would silently be broader than
+         * A §6.4 condition on a quantified pattern is refused rather than ignored. It would compile
+         * -- ExpressionConstraint is a Constraint like any other -- and then never run, because the
+         * post-filter that evaluates conditions walks the rule's POSITIVE patterns and a quantified
+         * pattern is answered by its alpha and join tests alone. It would silently be broader than
          * written, which loses a firing quietly. Refusing costs little: such a condition cannot
-         * reference the negated alias anyway, since only bound aliases are declared to the
+         * reference the quantified alias anyway, since only bound aliases are declared to the
          * expression compiler.
+         *
+         * It costs a FOR_ALL more than a NOT_EXISTS, and that is worth knowing: an expression is
+         * exactly how an author would want to write a requirement the operator set cannot express.
+         * §2.5's amendment records it as the quantifier's sharpest limit rather than leaving it to
+         * be discovered through this diagnostic.
          */
         for (final Constraint constraint : pattern.constraints()) {
           if (constraint instanceof ExpressionConstraint) {
-            diagnostics.add(rule.id() + ": alias '" + pattern.alias() + "': a condition on a"
-                + " NOT_EXISTS pattern is not supported. Express it with the pattern's own"
-                + " constraints, which are what decide whether the fact exists");
+            diagnostics.add(rule.id() + ": alias '" + pattern.alias() + "': a condition on a "
+                + pattern.quantifier() + " pattern is not supported. Express it with the pattern's"
+                + " own constraints, which are what the quantifier is asked of");
           }
         }
         continue;
@@ -254,32 +268,43 @@ public final class RuleCompiler {
 
     final List<CompiledPattern> patterns = new ArrayList<>(aliasTypes.size());
     final List<CompiledPattern> negations = new ArrayList<>();
+    final List<CompiledPattern> universals = new ArrayList<>();
     int positive = 0;
     for (final PatternDefinition pattern : rule.when()) {
-      if (pattern.quantifier() == Quantifier.NOT_EXISTS) {
+      if (bindsNoFact(pattern.quantifier())) {
         /*
          * Compiled at a notional position AFTER every positive one, which is not a trick: the third
          * argument only decides which earlier same-type positions this pattern's fact must differ
-         * from, and a negated candidate must differ from all of them. "No OTHER order for this
-         * customer" is what an author means by a negated pattern of a type the rule already binds,
-         * and it is the same rule §1 states for two positive aliases.
+         * from, and a quantified candidate must differ from all of them. "No OTHER order for this
+         * customer", and "every OTHER order is shipped", are what an author means by a quantified
+         * pattern of a type the rule already binds, and it is the same rule §1 states for two
+         * positive aliases.
          */
-        negations.add(compilePattern(rule, pattern, aliasTypes.size(), aliasPositions, aliasTypes,
-            negatedAliases));
+        final CompiledPattern compiled = compilePattern(rule, pattern, aliasTypes.size(),
+            aliasPositions, aliasTypes, nonBindingAliases);
+        if (pattern.quantifier() == Quantifier.NOT_EXISTS) {
+          negations.add(compiled);
+        } else {
+          universals.add(compiled);
+        }
       } else {
         patterns.add(compilePattern(rule, pattern, positive, aliasPositions, aliasTypes,
-            negatedAliases));
+            nonBindingAliases));
         positive++;
       }
     }
     if (patterns.isEmpty()) {
-      // A rule that is nothing but negations has no tuple to attach them to. It would "match" once,
-      // against the empty binding, which is a semantics nobody asked for and §2.5 does not define.
-      diagnostics.add(rule.id() + ": every pattern is NOT_EXISTS; a rule needs at least one pattern"
-          + " that binds a fact");
+      /*
+       * A rule of nothing but quantified patterns has no tuple to attach them to. It would "match"
+       * once, against the empty binding, which is a semantics nobody asked for and §2.5 does not
+       * define. For FOR_ALL it would be worse than undefined: the quantifier is vacuously true over
+       * an empty scope, so such a rule would fire on an empty working memory.
+       */
+      diagnostics.add(rule.id() + ": no pattern binds a fact; a rule needs at least one pattern that"
+          + " is neither NOT_EXISTS nor FOR_ALL");
     }
 
-    validateActions(rule, aliasPositions.keySet(), negatedAliases);
+    validateActions(rule, aliasPositions.keySet(), nonBindingAliases);
 
     /*
      * Aliases an insertFact introduces count as bound for an expression, exactly as they do for a
@@ -287,14 +312,14 @@ public final class RuleCompiler {
      * can name it, and an expression is a later action's value like any other.
      */
     final Map<String, CompiledExpression> valueExpressions =
-        compileValueExpressions(rule, aliasPositions.keySet(), negatedAliases);
+        compileValueExpressions(rule, aliasPositions.keySet(), nonBindingAliases);
 
     if (diagnostics.size() != before) {
       return Optional.empty();
     }
     return Optional.of(new CompiledRule(
         rule.id(), rule.salience(), rule.noLoop(), rule.agendaGroup(), patterns, negations,
-        rule.then(),
+        universals, rule.then(),
         pathsByRule.getOrDefault(rule.id(), Map.of()),
         valueExpressions, rule));
   }
@@ -307,13 +332,13 @@ public final class RuleCompiler {
    * @param position the pattern's position in the rule
    * @param aliasPositions every alias the rule binds, mapped to its position
    * @param aliasTypes every fact type the rule binds, indexed by position
-   * @param negatedAliases the aliases naming a negated pattern, which bind nothing
+   * @param nonBindingAliases the aliases of quantified patterns that bind nothing, by quantifier
    * @return the compiled pattern
    */
   private CompiledPattern compilePattern(final RuleDefinition rule,
       final PatternDefinition pattern, final int position,
       final Map<String, Integer> aliasPositions, final List<String> aliasTypes,
-      final Set<String> negatedAliases) {
+      final Map<String, Quantifier> nonBindingAliases) {
     final List<AlphaTest> alphaTests = new ArrayList<>();
     final List<JoinTest> joinTests = new ArrayList<>();
     final List<ExpressionTest> expressionTests = new ArrayList<>();
@@ -321,11 +346,11 @@ public final class RuleCompiler {
     for (final Constraint constraint : pattern.constraints()) {
       switch (constraint) {
         case JoinConstraint join ->
-            compileJoin(rule, pattern, position, join, aliasPositions, aliasTypes, negatedAliases)
+            compileJoin(rule, pattern, position, join, aliasPositions, aliasTypes, nonBindingAliases)
                 .ifPresent(joinTests::add);
         case ExpressionConstraint expression ->
             compileCondition(rule, pattern, expression, aliasPositions, aliasTypes,
-                negatedAliases).ifPresent(expressionTests::add);
+                nonBindingAliases).ifPresent(expressionTests::add);
         case FieldConstraint field ->
             compileField(rule, pattern, field).ifPresent(alphaTests::add);
         case RangeConstraint range ->
@@ -484,7 +509,7 @@ public final class RuleCompiler {
   private Optional<JoinTest> compileJoin(final RuleDefinition rule,
       final PatternDefinition pattern, final int position, final JoinConstraint constraint,
       final Map<String, Integer> aliasPositions, final List<String> aliasTypes,
-      final Set<String> negatedAliases) {
+      final Map<String, Quantifier> nonBindingAliases) {
     final String where = rule.id() + ": " + pattern.alias() + "." + constraint.field();
     switch (constraint.op()) {
       case MATCHES -> {
@@ -513,9 +538,8 @@ public final class RuleCompiler {
       // bound by the rule sends an author looking for a typo that is not there. Same reasoning as
       // the "bound later" branch below.
       diagnostics.add(where + ": $ref names alias '" + constraint.otherAlias() + "', which "
-          + (negatedAliases.contains(constraint.otherAlias())
-              ? "is a NOT_EXISTS pattern. A negated pattern binds no fact, so nothing can reference"
-                  + " it"
+          + (nonBindingAliases.containsKey(constraint.otherAlias())
+              ? bindsNothing(nonBindingAliases.get(constraint.otherAlias()))
               : "is not bound by this rule"));
       return Optional.empty();
     }
@@ -553,25 +577,62 @@ public final class RuleCompiler {
   }
 
   /**
+   * Whether a quantifier makes its pattern contribute no binding to the tuple.
+   *
+   * <p>The single question the two compilation loops branch on, asked in one place so they cannot
+   * disagree about it -- the first decides which aliases go in {@code nonBindingAliases} and the
+   * second decides which list a compiled pattern lands in, and a quantifier that was non-binding to
+   * one and binding to the other would produce an alias nothing can reference occupying a tuple
+   * position.
+   *
+   * @param quantifier the pattern's quantifier
+   * @return whether the pattern binds no fact
+   */
+  private static boolean bindsNoFact(final Quantifier quantifier) {
+    return quantifier == Quantifier.NOT_EXISTS || quantifier == Quantifier.FOR_ALL;
+  }
+
+  /**
+   * How to say that an alias names a pattern binding no fact.
+   *
+   * <p>Three places ask this and a fourth phrases it inline, and all of them are answering the same
+   * authoring mistake: a name the author can see written in {@code when}, reported as one the rule
+   * does not have, sends them hunting a typo that is not there. The quantifier is named because the
+   * two reasons differ -- a negation has no fact <em>because</em> it asserts there is none, while a
+   * universal has none because it speaks about a whole scope rather than a member of it -- and an
+   * author who reaches for the alias is reasoning from one of those two pictures.
+   *
+   * @param quantifier the quantifier the alias's pattern carries
+   * @return the clause, ready to follow "which "
+   */
+  private static String bindsNothing(final Quantifier quantifier) {
+    return quantifier == Quantifier.NOT_EXISTS
+        ? "is a NOT_EXISTS pattern. A negated pattern binds no fact, so nothing can reference it"
+        : "is a FOR_ALL pattern. A universal pattern asserts something about every fact in its"
+            + " scope rather than binding one, so nothing can reference it";
+  }
+
+  /**
    * Validates that every action names something that exists.
    *
    * @param rule the rule
    * @param lhsAliases the aliases the left-hand side binds
-   * @param negatedAliases the aliases a NOT_EXISTS pattern names, which bind nothing and so are
-   *     neither bound nor absent -- a distinction the diagnostic has to make
+   * @param nonBindingAliases the aliases of the quantified patterns that bind nothing, by
+   *     quantifier. They are neither bound nor absent -- a distinction the diagnostic has to make,
+   *     and the quantifier is carried because the two say why differently
    */
   private void validateActions(final RuleDefinition rule, final Set<String> lhsAliases,
-      final Set<String> negatedAliases) {
+      final Map<String, Quantifier> nonBindingAliases) {
     final Set<String> bound = new LinkedHashSet<>(lhsAliases);
     for (final ActionDefinition action : rule.then()) {
       switch (action) {
         case SetField setField -> {
-          requireAlias(rule, bound, negatedAliases, setField.targetAlias(), "setField target");
-          requireValue(rule, bound, negatedAliases, setField.value());
+          requireAlias(rule, bound, nonBindingAliases, setField.targetAlias(), "setField target");
+          requireValue(rule, bound, nonBindingAliases, setField.value());
         }
         case InsertFact insert -> {
           insert.payload().forEach(
-              field -> requireValue(rule, bound, negatedAliases, field.value()));
+              field -> requireValue(rule, bound, nonBindingAliases, field.value()));
           insert.alias().ifPresent(alias -> {
             /*
              * A negated alias is checked BEFORE `bound`, because it is in neither set: it names no
@@ -580,10 +641,11 @@ public final class RuleCompiler {
              * then resolve -- to the opposite of what the rule says, a fact this rule created
              * standing in for one whose absence it asserted.
              */
-            if (negatedAliases.contains(alias)) {
+            if (nonBindingAliases.containsKey(alias)) {
               diagnostics.add(rule.id() + ": insertFact binds alias '" + alias
-                  + "', which names a NOT_EXISTS pattern. One name cannot mean both the fact whose"
-                  + " absence this rule asserts and the fact this action creates");
+                  + "', which names a " + nonBindingAliases.get(alias) + " pattern. One name cannot"
+                  + " mean both the fact this rule quantifies over and the fact this action"
+                  + " creates");
             } else if (!bound.add(alias)) {
               diagnostics.add(rule.id() + ": insertFact binds alias '" + alias
                   + "', which is already bound");
@@ -591,13 +653,13 @@ public final class RuleCompiler {
           });
         }
         case RetractFact retract ->
-            requireAlias(rule, bound, negatedAliases, retract.targetAlias(), "retractFact target");
+            requireAlias(rule, bound, nonBindingAliases, retract.targetAlias(), "retractFact target");
         case Emit emit -> {
           if (emit.eventType().isBlank()) {
             diagnostics.add(rule.id() + ": emit needs an event type");
           }
           emit.payload().forEach(
-              field -> requireValue(rule, bound, negatedAliases, field.value()));
+              field -> requireValue(rule, bound, nonBindingAliases, field.value()));
         }
         case CallFunction call -> {
           options.declaredFunctions().ifPresent(declared -> {
@@ -606,7 +668,7 @@ public final class RuleCompiler {
                   + "', which is not registered. Known functions: " + new TreeSet<>(declared));
             }
           });
-          call.args().forEach(field -> requireValue(rule, bound, negatedAliases, field.value()));
+          call.args().forEach(field -> requireValue(rule, bound, nonBindingAliases, field.value()));
         }
       }
     }
@@ -617,12 +679,12 @@ public final class RuleCompiler {
    *
    * @param rule the rule
    * @param bound the aliases bound so far
-   * @param negatedAliases the aliases a NOT_EXISTS pattern names, which bind nothing
+   * @param nonBindingAliases the aliases of quantified patterns that bind nothing, by quantifier
    * @param alias the alias to check
    * @param what a description of where the alias appeared
    */
   private void requireAlias(final RuleDefinition rule, final Set<String> bound,
-      final Set<String> negatedAliases, final String alias, final String what) {
+      final Map<String, Quantifier> nonBindingAliases, final String alias, final String what) {
     if (bound.contains(alias)) {
       return;
     }
@@ -630,9 +692,8 @@ public final class RuleCompiler {
     // the rule plainly writes, reported as one the rule does not have, sends an author looking for
     // a typo that is not there. A negated alias is written in 'when' and binds nothing.
     diagnostics.add(rule.id() + ": " + what + " names alias '" + alias + "', which "
-        + (negatedAliases.contains(alias)
-            ? "is a NOT_EXISTS pattern. A negated pattern binds no fact, so nothing can reference"
-                + " it"
+        + (nonBindingAliases.containsKey(alias)
+            ? bindsNothing(nonBindingAliases.get(alias))
             : "is not bound by 'when' or by an earlier insertFact"));
   }
 
@@ -641,18 +702,18 @@ public final class RuleCompiler {
    *
    * @param rule the rule
    * @param bound the aliases bound so far
-   * @param negatedAliases the aliases a NOT_EXISTS pattern names, which bind nothing
+   * @param nonBindingAliases the aliases of quantified patterns that bind nothing, by quantifier
    * @param value the expression to check
    */
   private void requireValue(final RuleDefinition rule, final Set<String> bound,
-      final Set<String> negatedAliases, final ValueExpr value) {
+      final Map<String, Quantifier> nonBindingAliases, final ValueExpr value) {
     switch (value) {
       case Literal ignored -> {
         // A constant references nothing.
       }
-      case FieldRef ref -> requireAlias(rule, bound, negatedAliases, ref.alias(), "$ref");
+      case FieldRef ref -> requireAlias(rule, bound, nonBindingAliases, ref.alias(), "$ref");
       case ExpressionValue expression -> expression.referencedAliases()
-          .forEach(alias -> requireAlias(rule, bound, negatedAliases, alias, "expression"));
+          .forEach(alias -> requireAlias(rule, bound, nonBindingAliases, alias, "expression"));
     }
   }
 
@@ -861,7 +922,7 @@ public final class RuleCompiler {
   private Optional<ExpressionTest> compileCondition(final RuleDefinition rule,
       final PatternDefinition pattern, final ExpressionConstraint constraint,
       final Map<String, Integer> aliasPositions, final List<String> aliasTypes,
-      final Set<String> negatedAliases) {
+      final Map<String, Quantifier> nonBindingAliases) {
     final Set<String> bound = aliasPositions.keySet();
     /*
      * The prefix follows "<rule>: <alias>.<field>", which is what the DSL matches on to put a line
@@ -876,7 +937,7 @@ public final class RuleCompiler {
      * not an exotic name, and whose registration would win.
      */
     final String where = rule.id() + ": " + pattern.alias() + ": condition";
-    if (!checkAliases(where, constraint.referencedAliases(), bound, negatedAliases)) {
+    if (!checkAliases(where, constraint.referencedAliases(), bound, nonBindingAliases)) {
       return Optional.empty();
     }
     try {
@@ -950,7 +1011,7 @@ public final class RuleCompiler {
    * @return the compiled programs by source text
    */
   private Map<String, CompiledExpression> compileValueExpressions(final RuleDefinition rule,
-      final Set<String> whenAliases, final Set<String> negatedAliases) {
+      final Set<String> whenAliases, final Map<String, Quantifier> nonBindingAliases) {
     final Map<String, CompiledExpression> programs = new LinkedHashMap<>();
     /*
      * Grown as the actions are walked, not gathered up front. §6.2.2 allocates an insertFact's
@@ -970,7 +1031,7 @@ public final class RuleCompiler {
         // Keyed per operand, so the diagnostic lands on the line the expression is written on
         // rather than on the rule's id. The DSL registers the matching key at the same pointer.
         final String where = rule.id() + ": expression " + expression.expression();
-        if (!checkAliases(where, expression.referencedAliases(), bound, negatedAliases)) {
+        if (!checkAliases(where, expression.referencedAliases(), bound, nonBindingAliases)) {
           continue;
         }
         try {
@@ -1014,11 +1075,11 @@ public final class RuleCompiler {
    * @param where the diagnostic prefix
    * @param referenced the aliases the expression reads
    * @param bound every alias the rule binds
-   * @param negatedAliases the aliases a NOT_EXISTS pattern names, which bind nothing
+   * @param nonBindingAliases the aliases of quantified patterns that bind nothing, by quantifier
    * @return true when every referenced alias is bound
    */
   private boolean checkAliases(final String where, final Set<String> referenced,
-      final Set<String> bound, final Set<String> negatedAliases) {
+      final Set<String> bound, final Map<String, Quantifier> nonBindingAliases) {
     boolean valid = true;
     for (final String alias : referenced) {
       if (!bound.contains(alias)) {
@@ -1028,9 +1089,9 @@ public final class RuleCompiler {
         // false. An expression is where it matters most -- the alias is spelled inside free-form
         // text, so a typo really is the first thing to suspect.
         diagnostics.add(where + ": reads alias '" + alias + "', which "
-            + (negatedAliases.contains(alias)
-                ? "is a NOT_EXISTS pattern. A negated pattern binds no fact, so an expression has"
-                    + " nothing to read from it"
+            + (nonBindingAliases.containsKey(alias)
+                ? "is a " + nonBindingAliases.get(alias) + " pattern, which binds no fact, so an"
+                    + " expression has nothing to read from it"
                 : "this rule does not bind"));
         valid = false;
       }

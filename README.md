@@ -104,7 +104,7 @@ estimated 9% net, and either way a combined update path in place of the retract-
 agenda, refraction and eviction all hang off. Both are recorded as measured and not built. See
 [`docs/benchmarks.md`](docs/benchmarks.md).
 
-**Negation (`NOT_EXISTS`) now exists**, as the first slice of §9's Phase 6. A negated pattern binds
+**Negation (`NOT_EXISTS`) exists**, as the first slice of §9's Phase 6. A negated pattern binds
 nothing and joins nothing into the tuple, so it is a question asked of a *complete* match — the same
 shape a §6.4 condition has — and it is answered in the shared agenda base, which is what makes the
 three matchers agree about it by construction rather than by testing. Two boundaries ship with it
@@ -118,8 +118,26 @@ negated alias cannot do -- be referenced by a `$ref`, be named by an action, car
 author can see in front of them, reported as one the rule does not have, sends them looking for a
 typo that is not there.
 
-**What does not exist:** accumulation, truth maintenance, `FOR_ALL` and CEP, which are §1 non-goals
-with documented interim answers.
+**`FOR_ALL` now exists too**, as Phase 6's second slice, and it lands on the seam negation opened:
+binds nothing, joins against bound aliases, answered in the shared agenda base against a complete
+match. What is new is the reading. **A universal pattern's join tests choose the scope; its own
+constraints are what is asserted about it** — `forAll li: LineItem (orderId = o.id, inStock)` says
+"every line item *of this order* is in stock". §2.5's enum said "every fact of the type matches the
+pattern", and that reading is not merely weaker but a trap: it would assert that every `LineItem`
+anywhere belongs to this order, false the moment a second order exists, so the rule could never
+fire and nothing would say why.
+
+It earns its place on *multi*-constraint requirements. One constraint is already writable as a
+negation of its complement — "every order is shipped" is "no order is not shipped" — but the
+complement of "in stock **and** qty above zero" is a disjunction, and no pattern here expresses one.
+Three boundaries ship with it, documented on `Rules.forAll`: negation's two, inherited unchanged,
+plus **vacuous truth** — an order with no line items is "ready to ship", because nothing is there to
+fail the requirement. Pair it with a positive pattern of the same type to mean "there are some, and
+all of them". Combined with eviction that boundary is the sharpest in the engine: evicting facts can
+only remove counterexamples, so a cap does not weaken the requirement but deletes it.
+
+**What does not exist:** accumulation, truth maintenance and CEP, which are §1 non-goals with
+documented interim answers.
 
 ## Modules
 

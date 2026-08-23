@@ -204,6 +204,53 @@ public final class Rules {
     }
 
     /**
+     * Declares a pattern asserting that every fact in some scope meets a requirement (§2.5's
+     * {@code FOR_ALL}).
+     *
+     * <p><strong>The joins choose the scope; the constraints are the requirement.</strong> That is
+     * the whole reading, and it is what makes the quantifier useful rather than a trap. Written
+     * beside a bound {@code o}, {@code forAll("li", "LineItem", p -> p.ref("orderId", "o.id")
+     * .eq("inStock", true))} says "every {@code LineItem} <em>of this order</em> is in stock". Under
+     * the other reading -- every fact of the type satisfies everything written -- the same pattern
+     * would assert that every {@code LineItem} anywhere belongs to this order, which is false the
+     * moment a second order exists, and the rule could never fire.
+     *
+     * <p>With no joins the two readings coincide: every fact of the type must satisfy the
+     * constraints.
+     *
+     * <p>Like a negated pattern it <strong>binds nothing</strong>, and nothing in the rule may
+     * reference its alias. Where its fact type is one the rule already binds, §1's implicit
+     * inequality applies to the <em>scope</em>: the fact the tuple binds is not one the assertion is
+     * about, so "every other {@code Order} is shipped" is what a same-type universal means.
+     *
+     * <p><strong>It is vacuously true over an empty scope</strong>, which is classical and is the
+     * trap to know about. "Every line item of this order is in stock" fires for an order with no
+     * line items at all. Pair it with a positive pattern of the same type -- which a rule wanting
+     * this usually has anyway -- to say "there are some, and all of them".
+     *
+     * <p><strong>There is no truth maintenance behind this</strong> (§1), exactly as for
+     * {@link #notExists}: a rule that fired because everything in scope met the requirement is not
+     * undone when a counterexample arrives.
+     *
+     * <p><strong>Do not quantify over a type a session evicts</strong> (§4.4), and this is sharper
+     * than the negation case. Evicting facts can only remove counterexamples, so a cap does not
+     * weaken the requirement but strengthens it -- and a cap that empties the scope makes the
+     * assertion vacuously true, which deletes it. Cap the types you bind.
+     *
+     * @param alias a name for the facts being quantified over; binds nothing
+     * @param factType the fact type the assertion ranges over
+     * @param constraints the joins that choose the scope, and the requirement asserted of it
+     * @return this builder
+     */
+    public RuleBuilder forAll(final String alias, final String factType,
+        final Consumer<PatternBuilder> constraints) {
+      final PatternBuilder pattern = new PatternBuilder();
+      constraints.accept(pattern);
+      when.add(new PatternDefinition(alias, factType, Quantifier.FOR_ALL, pattern.constraints));
+      return this;
+    }
+
+    /**
      * Declares the right-hand side.
      *
      * @param actions declares the actions, in order

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.codeheadsystems.rules.evict.EvictionPolicy;
 import com.codeheadsystems.rules.fact.FactHandle;
+import com.codeheadsystems.rules.rule.Quantifier;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
 import com.codeheadsystems.rules.session.RuleSession;
@@ -749,12 +750,12 @@ class MatchExplainerTest {
           .describedAs("the part the author cannot derive: WHICH fact is in the way")
           .contains("fact #" + payment.id())
           .doesNotContain("eligible"));
-      assertThat(explanation.negations()).singleElement().satisfies(negation -> {
-        assertThat(negation.alias()).isEqualTo("p");
-        assertThat(negation.factType()).isEqualTo("Payment");
-        assertThat(negation.present()).isEqualTo(1);
-        assertThat(negation.suppressed()).isEqualTo(1);
-        assertThat(negation.exampleWitness()).contains(payment.id());
+      assertThat(explanation.quantifiers()).singleElement().satisfies(quantifier -> {
+        assertThat(quantifier.alias()).isEqualTo("p");
+        assertThat(quantifier.factType()).isEqualTo("Payment");
+        assertThat(quantifier.population()).isEqualTo(1);
+        assertThat(quantifier.suppressed()).isEqualTo(1);
+        assertThat(quantifier.example()).contains(payment.id());
       });
     }
   }
@@ -776,10 +777,10 @@ class MatchExplainerTest {
 
       assertThat(explanation.verdict()).hasValueSatisfying(verdict ->
           assertThat(verdict).contains("eligible"));
-      assertThat(explanation.negations()).singleElement().satisfies(negation -> {
-        assertThat(negation.present()).isEqualTo(1);
-        assertThat(negation.suppressed()).isZero();
-        assertThat(negation.exampleWitness()).isEmpty();
+      assertThat(explanation.quantifiers()).singleElement().satisfies(quantifier -> {
+        assertThat(quantifier.population()).isEqualTo(1);
+        assertThat(quantifier.suppressed()).isZero();
+        assertThat(quantifier.example()).isEmpty();
       });
       // The half a one-directional test misses. Sharing the predicate with the agenda is only worth
       // anything if the explainer is checked against the engine in BOTH directions: saying "eligible"
@@ -839,10 +840,10 @@ class MatchExplainerTest {
     try (RuleSession session = rules.newSession()) {
       session.insert("Order", Facts.obj("id", 1, "status", "NEW", "customerId", 7));
 
-      assertThat(new MatchExplainer(rules, session).explain(onlyOrder.id()).negations())
+      assertThat(new MatchExplainer(rules, session).explain(onlyOrder.id()).quantifiers())
           .describedAs("the one order does not block itself")
           .singleElement()
-          .satisfies(negation -> assertThat(negation.suppressed()).isZero());
+          .satisfies(quantifier -> assertThat(quantifier.suppressed()).isZero());
 
       final FactHandle second = session.insert("Order",
           Facts.obj("id", 2, "status", "NEW", "customerId", 7));
@@ -852,11 +853,11 @@ class MatchExplainerTest {
       assertThat(explanation.verdict()).hasValueSatisfying(verdict -> assertThat(verdict)
           .contains("2 combination(s)")
           .contains("no Order matches 'other'"));
-      assertThat(explanation.negations()).singleElement().satisfies(negation -> {
-        assertThat(negation.suppressed())
+      assertThat(explanation.quantifiers()).singleElement().satisfies(quantifier -> {
+        assertThat(quantifier.suppressed())
             .describedAs("each order is blocked by the other")
             .isEqualTo(2);
-        assertThat(negation.exampleWitness()).contains(second.id());
+        assertThat(quantifier.example()).contains(second.id());
       });
     }
   }
@@ -907,7 +908,7 @@ class MatchExplainerTest {
   void noNegationsIsAnEmptyList() {
     final CompiledRuleSet rules = Engine.compile(REVIEW);
     try (RuleSession session = rules.newSession()) {
-      assertThat(new MatchExplainer(rules, session).explain(REVIEW.id()).negations()).isEmpty();
+      assertThat(new MatchExplainer(rules, session).explain(REVIEW.id()).quantifiers()).isEmpty();
     }
   }
 
@@ -939,8 +940,8 @@ class MatchExplainerTest {
           .contains("no Payment matches 'p'")
           .describedAs("the exact answer, where charging the population gave up instead")
           .doesNotContain("search budget"));
-      assertThat(explanation.negations()).singleElement().satisfies(negation ->
-          assertThat(negation.suppressed()).isEqualTo(600));
+      assertThat(explanation.quantifiers()).singleElement().satisfies(quantifier ->
+          assertThat(quantifier.suppressed()).isEqualTo(600));
     }
   }
 
@@ -977,10 +978,10 @@ class MatchExplainerTest {
       assertThat(explanation.complete()).isFalse();
       assertThat(explanation.verdict()).hasValueSatisfying(verdict -> assertThat(verdict)
           .contains("search budget ran out")
-          .contains("suppressed by an absence the rule asserts"));
-      assertThat(explanation.negations()).singleElement().satisfies(negation -> {
-        assertThat(negation.present()).isEqualTo(1_100);
-        assertThat(negation.suppressed())
+          .contains("suppressed by a quantifier the rule carries"));
+      assertThat(explanation.quantifiers()).singleElement().satisfies(quantifier -> {
+        assertThat(quantifier.population()).isEqualTo(1_100);
+        assertThat(quantifier.suppressed())
             .describedAs("a lower bound, which is what the complete flag above is for")
             .isPositive();
       });
@@ -1017,7 +1018,7 @@ class MatchExplainerTest {
 
       final Explanation explanation = new MatchExplainer(rules, session).explain(unsettled.id());
 
-      assertThat(explanation.negations()).satisfiesExactly(
+      assertThat(explanation.quantifiers()).satisfiesExactly(
           payment -> {
             assertThat(payment.alias()).isEqualTo("p");
             assertThat(payment.suppressed()).describedAs("orders 1 and 3").isEqualTo(2);
@@ -1094,6 +1095,175 @@ class MatchExplainerTest {
           .hasValueSatisfying(verdict -> assertThat(verdict)
               .contains("'p' is a NOT_EXISTS pattern")
               .contains("binds no fact"));
+    }
+  }
+
+  /** Every line item of this order is in stock (§2.5's FOR_ALL). */
+  private static final RuleDefinition READY = Rules.rule("ready-to-ship")
+      .when("o", "Order", pattern -> pattern.eq("status", "PENDING"))
+      .forAll("li", "LineItem", pattern -> pattern
+          .ref("orderId", "o.id")
+          .eq("inStock", true))
+      .then(actions -> actions.emit("ready", "orderId", Rules.ref("o.id")))
+      .build();
+
+  @Test
+  @DisplayName("an in-scope fact failing a requirement is the verdict, and is named")
+  void counterexampleIsTheVerdict() {
+    final CompiledRuleSet rules = Engine.compile(READY);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("Order", Facts.obj("id", 1, "status", "PENDING"));
+      session.insert("LineItem", Facts.obj("orderId", 1, "inStock", true));
+      final FactHandle missing = session.insert("LineItem",
+          Facts.obj("orderId", 1, "inStock", false));
+
+      assertThat(session.fireAllRules().firedCount()).isZero();
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain(READY.id());
+
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict -> assertThat(verdict)
+          .contains("1 combination(s) matched every pattern and join")
+          .contains("every LineItem in scope for 'li'")
+          .describedAs("the part the author cannot derive: WHICH item fails")
+          .contains("fact #" + missing.id() + " does not")
+          .doesNotContain("eligible"));
+      assertThat(explanation.quantifiers()).singleElement().satisfies(quantifier -> {
+        assertThat(quantifier.kind()).isEqualTo(Quantifier.FOR_ALL);
+        assertThat(quantifier.population())
+            .describedAs("the whole type, not the in-scope subset, which depends on the tuple")
+            .isEqualTo(2);
+        assertThat(quantifier.example()).contains(missing.id());
+      });
+    }
+  }
+
+  @Test
+  @DisplayName("an out-of-scope failure is not blamed, because the rule says nothing about it")
+  void outOfScopeIsNotBlamed() {
+    // The scoped reading, checked through the diagnostic. Order 2's item fails the requirement but
+    // is out of scope for order 1, so blaming it would send the author to a fact their rule never
+    // spoke about -- and would contradict the engine, which fires.
+    final CompiledRuleSet rules = Engine.compile(READY);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("Order", Facts.obj("id", 1, "status", "PENDING"));
+      session.insert("LineItem", Facts.obj("orderId", 1, "inStock", true));
+      session.insert("LineItem", Facts.obj("orderId", 2, "inStock", false));
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain(READY.id());
+
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict ->
+          assertThat(verdict).contains("eligible"));
+      assertThat(explanation.quantifiers()).singleElement().satisfies(quantifier ->
+          assertThat(quantifier.suppressed()).isZero());
+      assertThat(session.fireAllRules().firedCount())
+          .describedAs("the explainer said eligible, so the engine must agree")
+          .isEqualTo(1);
+    }
+  }
+
+  @Test
+  @DisplayName("a vacuously true requirement says so, since a zero there is the surprising case")
+  void vacuousTruthIsRendered() {
+    // "0 present" against a FOR_ALL is not the same non-event it is against a negation: it means
+    // the rule fired because there was nothing to fail it. Rendering it silently as a zero leaves
+    // the reader to notice the difference, which is exactly what they will not do.
+    final CompiledRuleSet rules = Engine.compile(READY);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("Order", Facts.obj("id", 1, "status", "PENDING"));
+
+      final String rendered = new MatchExplainer(rules, session).explain(READY.id()).describe();
+
+      assertThat(rendered)
+          .contains("all li: LineItem")
+          .contains("0 present")
+          .contains("vacuously — nothing in scope");
+    }
+  }
+
+  @Test
+  @DisplayName("a negation and a universal on one rule are reported apart and attributed once")
+  void bothQuantifiersOnOneRule() {
+    final RuleDefinition both = Rules.rule("shippable")
+        .when("o", "Order", pattern -> pattern.eq("status", "PENDING"))
+        .notExists("h", "Hold", pattern -> pattern.ref("orderId", "o.id"))
+        .forAll("li", "LineItem", pattern -> pattern
+            .ref("orderId", "o.id")
+            .eq("inStock", true))
+        .then(actions -> actions.emit("shippable"))
+        .build();
+    final CompiledRuleSet rules = Engine.compile(both);
+    try (RuleSession session = rules.newSession()) {
+      // Order 1: held. Order 2: not held, but an item is out of stock. One tuple to each gate.
+      session.insert("Order", Facts.obj("id", 1, "status", "PENDING"));
+      session.insert("Hold", Facts.obj("orderId", 1));
+      session.insert("Order", Facts.obj("id", 2, "status", "PENDING"));
+      session.insert("LineItem", Facts.obj("orderId", 2, "inStock", false));
+
+      assertThat(session.fireAllRules().firedCount()).isZero();
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain(both.id());
+
+      assertThat(explanation.quantifiers()).satisfiesExactly(
+          negation -> {
+            assertThat(negation.kind()).isEqualTo(Quantifier.NOT_EXISTS);
+            assertThat(negation.suppressed()).describedAs("order 1").isEqualTo(1);
+          },
+          universal -> {
+            assertThat(universal.kind()).isEqualTo(Quantifier.FOR_ALL);
+            assertThat(universal.suppressed()).describedAs("order 2").isEqualTo(1);
+          });
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict -> assertThat(verdict)
+          .describedAs("the total, so the number partitions the complete tuples")
+          .contains("2 combination(s) matched every pattern and join"));
+      assertThat(explanation.describe())
+          .contains("not h: Hold")
+          .contains("all li: LineItem");
+    }
+  }
+
+  @Test
+  @DisplayName("evicting a quantified type warns on a forAll too, where it is the sharper case")
+  void evictedUniversalTypeIsAWarning() {
+    /*
+     * §4.4's hazard at its worst. For a negation a half-evicted type may still yield its witness;
+     * for a FOR_ALL eviction only ever removes counterexamples, so a cap does not weaken the
+     * requirement but strengthens it -- and a cap that empties the scope makes it vacuously true,
+     * deleting the assertion outright. The explainer cannot detect it, so it names the count.
+     */
+    final CompiledRuleSet rules = Engine.compile(READY);
+    try (RuleSession session = rules.newSession(SessionOptions.builder()
+        .eviction(EvictionPolicy.perType(Map.of("LineItem", 1)))
+        .build())) {
+      session.insert("Order", Facts.obj("id", 1, "status", "PENDING"));
+      session.insert("LineItem", Facts.obj("orderId", 1, "inStock", false));
+      // Pushes the counterexample out; the requirement now holds over what is left.
+      session.insert("LineItem", Facts.obj("orderId", 1, "inStock", true));
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain(READY.id());
+
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict -> assertThat(verdict)
+          .contains("eligible")
+          .contains("WARNING")
+          .contains("1 LineItem fact(s) evicted")
+          .contains("quantifies over them")
+          .contains("may be a false conclusion"));
+    }
+  }
+
+  @Test
+  @DisplayName("pinning a forAll alias is answered, as pinning a negated one is")
+  void pinningAUniversalAliasIsAnswered() {
+    final CompiledRuleSet rules = Engine.compile(READY);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("Order", Facts.obj("id", 1, "status", "PENDING"));
+      final FactHandle item = session.insert("LineItem",
+          Facts.obj("orderId", 1, "inStock", false));
+
+      assertThat(new MatchExplainer(rules, session)
+          .explain(READY.id(), Map.of("li", item)).verdict())
+          .hasValueSatisfying(verdict -> assertThat(verdict)
+              .contains("'li' is a FOR_ALL pattern")
+              .contains("every fact in its scope"));
     }
   }
 }

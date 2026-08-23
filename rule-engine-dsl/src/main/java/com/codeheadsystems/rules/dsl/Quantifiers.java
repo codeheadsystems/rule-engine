@@ -11,13 +11,13 @@ import java.util.Optional;
  * exactly as {@code notIn} is {@code NOT_IN}. Absent means {@code exists}, which is what every
  * pattern written before this key existed meant and must keep meaning.
  *
- * <p><strong>Only the implemented quantifiers are spellable.</strong> §2.5's enum reserves
- * {@code FOR_ALL} and {@code ACCUMULATE} and §1 defers both, and the temptation is to accept them
- * here so the compiler's "not implemented, see §1" message reaches the author. It is refused for a
- * reason that outlives the message: {@code rules.v1} is a published schema, and admitting a
- * spelling for a feature that does not exist promises a shape the version implementing it may not
- * want. A rule file naming one is rejected by the schema, and this class says the same thing in
- * words that name §1's interim answer.
+ * <p><strong>Only the implemented quantifiers are spellable.</strong> §2.5's enum still reserves
+ * {@code ACCUMULATE} and §1 defers it, and the temptation is to accept it here so the compiler's
+ * "not implemented, see §1" message reaches the author. It is refused for a reason that outlives
+ * the message: {@code rules.v1} is a published schema, and admitting a spelling for a feature that
+ * does not exist promises a shape the version implementing it may not want. A rule file naming it
+ * is rejected by the schema, and this class says the same thing in words that name §1's interim
+ * answer.
  */
 final class Quantifiers {
 
@@ -26,6 +26,9 @@ final class Quantifiers {
 
   /** The negation of §1, landed as the first slice of §9's Phase 6. */
   private static final String NOT_EXISTS = "notExists";
+
+  /** The universal of §2.5's amendment, landed as Phase 6's second slice. */
+  private static final String FOR_ALL = "forAll";
 
   private Quantifiers() {
     throw new UnsupportedOperationException("no instances");
@@ -47,10 +50,13 @@ final class Quantifiers {
     if (NOT_EXISTS.equals(written)) {
       return Optional.of(Quantifier.NOT_EXISTS);
     }
+    if (FOR_ALL.equals(written)) {
+      return Optional.of(Quantifier.FOR_ALL);
+    }
     diagnostics.error(DslError.UNKNOWN_QUANTIFIER, pointer,
-        "'" + written + "' is not a quantifier; write '" + EXISTS + "' (the default) or '"
-            + NOT_EXISTS + "'. §1 defers 'forAll' and 'accumulate', and gives the same interim"
-            + " answer for both: compute it at ingestion and insert the answer as a fact");
+        "'" + written + "' is not a quantifier; write '" + EXISTS + "' (the default), '"
+            + NOT_EXISTS + "' or '" + FOR_ALL + "'. §1 defers 'accumulate', and gives the interim"
+            + " answer for it: compute it at ingestion and insert the answer as a fact");
     return Optional.empty();
   }
 }

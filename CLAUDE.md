@@ -300,10 +300,19 @@ concurrently" an extra artifact to discover.
   between same-type aliases — and `JoinPlan` symmetrises it, because either end may be bound first.
 - **Collections are flattened at ingestion**, not matched inside a fact. JSON Pointer has no
   wildcard.
-- **A negated pattern binds nothing, and nothing may name its alias** — not a `$ref`, not an action,
-  not an `insertFact`'s `as`, not a §6.4 expression. All four are compile errors that say *which*
-  case it is, because an alias the author can see, reported as one the rule does not have, sends
-  them hunting a typo that is not there.
+- **A quantified pattern (`NOT_EXISTS`, `FOR_ALL`) binds nothing, and nothing may name its alias** —
+  not a `$ref`, not an action, not an `insertFact`'s `as`, not a §6.4 expression. All four are
+  compile errors that name *which quantifier* it is, because an alias the author can see, reported
+  as one the rule does not have, sends them hunting a typo that is not there.
+- **A `FOR_ALL`'s joins choose the scope; its own constraints are the requirement** (§2.5's
+  amendment). `forAll li: LineItem (orderId = o.id, inStock)` is "every line item *of this order* is
+  in stock". The literal reading — every fact of the type satisfies everything written — makes any
+  joined `FOR_ALL` false as soon as a second order exists, so the rule can never fire. `PatternTests`
+  is where the two halves are asked separately; `Negations` conjoins them, `Universals` does not.
+- **A `FOR_ALL` is vacuously true over an empty scope**, which is classical and is the trap. Pair it
+  with a positive pattern of the same type to mean "there are some, and all of them". Over an evicted
+  type this is the sharpest hazard in the engine: eviction only removes counterexamples, so a cap
+  does not weaken the requirement but deletes it.
 - **Negation has no truth maintenance, and must never be used over an evicted type** (§4.4). An
   evicted fact and an absent fact are indistinguishable to a negation, so a cap on the negated type
   stops costing a firing and starts asserting a false conclusion. This is the sharpest semantic

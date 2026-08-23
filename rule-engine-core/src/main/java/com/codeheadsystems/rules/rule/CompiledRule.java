@@ -36,6 +36,11 @@ import tools.jackson.core.JsonPointer;
  *     without any of them having to know negation exists
  * @param negations the compiled {@code NOT_EXISTS} patterns, in declaration order. Their join tests
  *     point at positions in {@code patterns}, and they are evaluated against a complete tuple
+ * @param universals the compiled {@code FOR_ALL} patterns, in declaration order. Held apart from
+ *     {@code negations} because the two read their own tests differently: a negation conjoins its
+ *     joins and constraints into one question, while a universal's joins choose the scope and its
+ *     constraints are what is asserted about it (§2.5's amendment). Same seam otherwise -- binds
+ *     nothing, joins point at positions in {@code patterns}, evaluated against a complete tuple
  * @param actions the RHS, in declaration order
  * @param testedPaths per fact type, the paths <em>this rule</em> reads. This is
  *     {@link TestedPaths#forRule}'s backing, and its per-rule scoping is what keeps refraction
@@ -50,6 +55,7 @@ public record CompiledRule(
     Optional<String> agendaGroup,
     java.util.List<CompiledPattern> patterns,
     java.util.List<CompiledPattern> negations,
+    java.util.List<CompiledPattern> universals,
     java.util.List<ActionDefinition> actions,
     Map<String, Set<JsonPointer>> testedPaths,
     Map<String, CompiledExpression> valueExpressions,
@@ -64,6 +70,7 @@ public record CompiledRule(
    * @param agendaGroup the optional agenda group
    * @param patterns the compiled positive LHS
    * @param negations the compiled negated patterns
+   * @param universals the compiled universal patterns
    * @param actions the RHS
    * @param testedPaths the per-type paths this rule reads
    * @param valueExpressions the compiled §6.4 expressions its actions use, by source text
@@ -75,6 +82,7 @@ public record CompiledRule(
     Objects.requireNonNull(source, "source");
     patterns = java.util.List.copyOf(patterns);
     negations = java.util.List.copyOf(negations);
+    universals = java.util.List.copyOf(universals);
     actions = java.util.List.copyOf(actions);
     // Map.copyOf is shallow: without this the values would remain the compiler's live, mutable
     // sets, leaving state inside the shared rule set that an outside caller could clear.
@@ -116,14 +124,24 @@ public record CompiledRule(
     for (final CompiledPattern negation : negations) {
       types.add(negation.factType());
     }
+    /*
+     * And universal types, for the same reason and with the same failure mode. A LineItem arriving
+     * can falsify "every LineItem of this order is in stock", and one leaving can make it true
+     * again; a rule that did not name the type here would go on asserting a requirement that had
+     * stopped holding, silently, until something else made it dirty.
+     */
+    for (final CompiledPattern universal : universals) {
+      types.add(universal.factType());
+    }
     return types;
   }
 
   /**
    * The fact types this rule <em>binds</em>, which is not the same question as {@link #factTypes()}.
    *
-   * <p>A negated type is one this rule reads and must be dirtied by, but not one it needs anything
-   * of to match -- it needs the opposite. So the two answers must not be confused, and confusing
+   * <p>A negated or universally-quantified type is one this rule reads and must be dirtied by,
+   * but not one it needs anything of to match -- it needs the opposite, or is content with none
+   * at all. So the two answers must not be confused, and confusing
    * them inverts a reachability analysis: a rule that negates {@code Payment} is at its <em>most</em>
    * reachable when no {@code Payment} is ever inserted, while a walk over {@link #factTypes()} would
    * call it dead for exactly that reason. §7.4's report asks this question; §4.1's dirty predicate
@@ -150,6 +168,19 @@ public record CompiledRule(
    */
   public boolean hasNegations() {
     return !negations.isEmpty();
+  }
+
+  /**
+   * Whether this rule asserts a requirement over every fact in some scope (§2.5's {@code FOR_ALL}).
+   *
+   * <p>A fast path for the agenda, for the reason {@link #hasNegations()} is one: the overwhelming
+   * majority of rules have none, and checking a boolean is cheaper than entering a loop over an
+   * empty list per match per fire cycle.
+   *
+   * @return whether any {@code FOR_ALL} pattern was compiled
+   */
+  public boolean hasUniversals() {
+    return !universals.isEmpty();
   }
 
   /**

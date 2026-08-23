@@ -226,6 +226,65 @@ facts, and a dropped fact is indistinguishable from one that was never there —
 `Payment` makes this rule say a paid order is unpaid. Everywhere else in the engine eviction costs
 you a firing at worst. Cap the types you bind.
 
+## Asking that every fact meet a requirement
+
+`quantifier: forAll` is the other half. It asserts that every fact **in scope** satisfies a
+requirement — and the join is what picks the scope:
+
+```yaml
+apiVersion: rules.v1
+rules:
+  - id: order-ready
+    when:
+      - fact: Order
+        as: o
+        where:
+          status: { eq: "PENDING" }
+      - fact: LineItem
+        as: li
+        quantifier: forAll
+        where:
+          orderId: { eq: { $ref: o.id } }
+          inStock: { eq: true }
+          qty: { gt: 0 }
+    then:
+      - action: emit
+        event: order.ready
+        payload: { orderId: { $ref: o.id } }
+```
+
+Read it as two halves. `orderId: { eq: { $ref: o.id } }` is the join, and it says *which* line items
+this is about: the ones belonging to this order. Everything else is what must be true of them. A
+line item on somebody else's order being out of stock does not stop this rule firing, because the
+rule never claimed anything about it.
+
+**Only the join picks the scope.** Anything with a literal value is part of the requirement. So
+there is no way to say "every *physical* line item" — a `type: { eq: "PHYSICAL" }` line would make
+your digital items counterexamples, and the rule would quietly never fire. When you need a narrower
+scope, split the fact type at ingestion.
+
+**Why not just write a `notExists`?** For one constraint you can — "every order is shipped" is
+`notExists` an order with `status: { ne: "SHIPPED" }`. For two you cannot: the opposite of "in stock
+*and* qty above zero" is an *or*, and a `where` block has no `or`.
+
+**The trap: an empty scope is `true`.** The rule above fires for an order with no line items at all,
+because there is nothing to fail the requirement. That is how "for all" works everywhere, and it is
+still going to surprise you at 3am. If you mean "there are some, and all of them", add a plain
+pattern of the same type:
+
+```yaml
+      - fact: LineItem
+        as: some
+        where:
+          orderId: { eq: { $ref: o.id } }
+```
+
+Everything the negation section says otherwise applies here as well — the pattern binds nothing, no
+`then` action may name its alias, there is no truth maintenance, and you must not quantify over a
+type your session evicts. That last one bites harder here: eviction only ever removes
+counterexamples, so a cap makes the requirement *easier* to satisfy, and a cap that empties the
+scope deletes it.
+
 ## Doing something
 
 Five actions, and no more. This is on purpose: a rule file stays something a non-programmer can read
@@ -377,11 +436,14 @@ Before that, check the three traps at the top of this page. A rule that "matches
 often an `eq: null` that meant `hasField: false`, and a rule that "matches everything" is very often
 a bare `ne`.
 
-**One thing it cannot answer: a rule with a `quantifier: notExists` pattern.** The explainer walks
-the patterns that bind facts, and a negated one binds none, so it will happily report eligible
-matches for a rule the negation is suppressing. A silent negated rule almost always means the fact
-whose absence it asserts is present — check that first, by querying the session for it. This is a
-known gap in the explainer, not a subtlety of your rule.
+**It answers for quantified patterns too**, and names the fact standing in the way — the `Payment`
+that defeats a `notExists`, or the `LineItem` that fails a `forAll`. It used to walk only the
+patterns that bind facts and report eligible matches for a rule a negation was suppressing, which
+was the opposite of the truth; that gap is closed.
+
+**The one thing it cannot see is eviction.** It re-asks the same question of the same working
+memory the engine does, so over an evicted type it is fooled identically. What it does is warn: a
+rule that matched while a type it quantifies over was being evicted gets the count in its verdict.
 
 ## Checking your rules in CI
 

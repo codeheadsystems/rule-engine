@@ -264,7 +264,7 @@ class NegationTest {
 
       Assertions.assertThatThrownBy(() -> RuleCompiler.compile(List.of(rule)))
           .isInstanceOf(RuleCompilationException.class)
-          .hasMessageContaining("at least one pattern that binds a fact");
+          .hasMessageContaining("no pattern binds a fact");
     }
 
     @Test

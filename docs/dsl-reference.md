@@ -18,6 +18,7 @@ page and the engine disagree, this page is wrong.
 - [A rule](#a-rule)
 - [`when`: patterns and operator maps](#when-patterns-and-operator-maps)
   - [Negation: `quantifier: notExists`](#negation-quantifier-notexists)
+  - [Universals: `quantifier: forAll`](#universals-quantifier-forall)
 - [The operator table](#the-operator-table)
 - [`$ref`, and the `$$` escape](#ref-and-the--escape)
 - [`then`: the five actions](#then-the-five-actions)
@@ -108,7 +109,7 @@ rules:
     when:
       - fact: Order            # required: the fact type
         as: o                  # required: the alias, unique within this rule
-        quantifier: exists     # optional: 'exists' (the default) or 'notExists'
+        quantifier: exists     # optional: 'exists' (default), 'notExists' or 'forAll'
         where:                 # optional: field name -> operator map
           total:  { gt: 10000 }
           status: { eq: "PENDING" }
@@ -160,9 +161,9 @@ rules:
         payload: { orderId: { $ref: o.id } }
 ```
 
-`quantifier` takes `exists` (the default, and what every pattern without the key means) or
-`notExists`. `forAll` and `accumulate` are §1 deferrals and are rejected by the schema; the interim
-answer for both is to compute the answer at ingestion and insert it as a fact.
+`quantifier` takes `exists` (the default, and what every pattern without the key means),
+`notExists` or [`forAll`](#universals-quantifier-forall). `accumulate` is a §1 deferral and is
+rejected by the schema; the interim answer is to compute it at ingestion and insert it as a fact.
 
 **A negated pattern binds nothing.** Its alias exists so that its own `where` can be written, and
 nothing else in the rule may name it — not a `$ref` from another pattern, not a `then` action, and
@@ -192,6 +193,82 @@ indistinguishable to a negation, so a cap on `Payment` makes the rule above anno
 order is unpaid. Everywhere else eviction can only cost you a firing; here it manufactures a false
 conclusion. Cap the types you bind, not the ones whose absence you assert — see
 [`SessionOptions.eviction`](../README.md#concurrency).
+
+
+### Universals: `quantifier: forAll`
+
+A pattern with `quantifier: forAll` asserts that every fact **in scope** meets a requirement. The
+join constraints choose the scope; the pattern's own constraints are what is asserted about it.
+
+```yaml
+apiVersion: rules.v1
+rules:
+  - id: ready-to-ship
+    when:
+      - fact: Order
+        as: o
+        where:
+          status: { eq: "PENDING" }
+      - fact: LineItem
+        as: li
+        quantifier: forAll             # every LineItem OF THIS ORDER ...
+        where:
+          orderId: { eq: { $ref: o.id } }   # <- the join picks the scope
+          inStock: { eq: true }             # <- the rest is the requirement
+          qty: { gt: 0 }
+    then:
+      - action: emit
+        event: order.ready
+        payload: { orderId: { $ref: o.id } }
+```
+
+**The join is a scope, not part of the requirement**, and this is the whole reading. Without the
+split, the pattern above would assert that every `LineItem` *anywhere* belongs to this order and is
+in stock — false the moment a second order exists, so the rule could never fire. With it, a line
+item belonging to a different order is simply not something this rule speaks about.
+
+**Only the join narrows the scope.** Everything with a literal value is part of the requirement, so
+you cannot say "every *physical* line item of this order is in stock" — `type: { eq: "PHYSICAL" }`
+makes a digital item a counterexample instead of excluding it, and the rule quietly never fires for
+an order containing one. If you need a narrower scope than a join expresses, make it a fact type:
+`PhysicalLineItem` and `DigitalLineItem` are separately quantifiable, and §1's flattening advice
+already points that way.
+
+**With no join it is a global assertion**: `forAll` over `Order` with `status: { eq: "SHIPPED" }`
+and nothing else says every `Order` in the session is shipped.
+
+**It earns its place on multi-constraint requirements.** A single constraint is already writable as
+a negation of its complement — "every `Order` is shipped" is `notExists` an `Order` with
+`status: { ne: "SHIPPED" }`. Two constraints are not: the complement of "in stock **and** qty above
+zero" is an *or*, and no `where` block expresses one.
+
+**It is vacuously true over an empty scope.** The rule above fires for an order with *no* line
+items — there is nothing to fail the requirement. This is classical logic and it is the mistake to
+watch for. Add a positive pattern of the same type to say "there are some, and all of them":
+
+```yaml
+      - fact: LineItem
+        as: some
+        where:
+          orderId: { eq: { $ref: o.id } }
+      - fact: LineItem
+        as: li
+        quantifier: forAll
+        where:
+          orderId: { eq: { $ref: o.id } }
+          inStock: { eq: true }
+```
+
+**Everything the negation section says about binding also applies.** A `forAll` pattern binds
+nothing, nothing may name its alias, it may join in either direction of declaration, it cannot
+stand alone, a `condition:` on it is refused, and over a type the rule already binds it means
+"every *other* one". There is no truth maintenance: a rule that fired because everything complied
+is not undone when a counterexample arrives.
+
+**Never quantify over a type the session evicts**, and this is sharper than the negation case.
+Evicting facts can only remove counterexamples, so a cap does not weaken the requirement — it
+strengthens it, and a cap that empties the scope makes the assertion vacuously true, which deletes
+it altogether.
 
 ### Two operators on one field
 
@@ -507,7 +584,7 @@ Fix `schema-violation` errors first.
 | `empty-range` | A `between` with neither `from` nor `to` |
 | `malformed-operand` | An operand of the wrong shape for its operator |
 | `unknown-action` | A `then` verb outside the five |
-| `unknown-quantifier` | A pattern's `quantifier` outside `exists` and `notExists` |
+| `unknown-quantifier` | A pattern's `quantifier` outside `exists`, `notExists` and `forAll` |
 | `malformed-action` | An action names a field path that will not compile, such as `a..b` |
 | `condition-not-implemented` | The CEL escape hatch; see below |
 | `semantic` | Everything the compiler checks: forward references, unknown aliases, duplicate ids, duplicate aliases, invalid regexes, malformed `where` and `$ref` field paths, unregistered function names |
@@ -751,9 +828,10 @@ time, insert it as a fact.
 ## Not implemented yet
 
 Deferred, each with an interim answer in §1 of the spec: accumulation, backward chaining, truth
-maintenance, `forAll`, and temporal operators. The short version of all of them is the same:
-compute it at ingestion and insert the answer as a fact.
+maintenance, and temporal operators. The short version of all of them is the same: compute it at
+ingestion and insert the answer as a fact.
 
-Negation is *not* on that list any more — [`quantifier: notExists`](#negation-quantifier-notexists)
-is implemented, with the two boundaries that section names: no truth maintenance, and never over an
-evicted type.
+The quantifiers are *not* on that list any more — [`notExists`](#negation-quantifier-notexists) and
+[`forAll`](#universals-quantifier-forall) are both implemented, with the boundaries those sections
+name: no truth maintenance, never over an evicted type, and — for `forAll` — vacuously true over an
+empty scope.

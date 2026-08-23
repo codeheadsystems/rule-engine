@@ -348,8 +348,8 @@ class CelReviewRegressionTest {
             .contains("no Payment matches 'p'")
             .as("order 2 alone; the clause is additional to the count above, not another view of it")
             .contains("a further 1 were rejected by a 'condition' expression"));
-        assertThat(why.negations()).singleElement().satisfies(negation ->
-            assertThat(negation.suppressed()).isEqualTo(2));
+        assertThat(why.quantifiers()).singleElement().satisfies(quantifier ->
+            assertThat(quantifier.suppressed()).isEqualTo(2));
       }
     }
 
