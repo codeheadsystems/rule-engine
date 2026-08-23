@@ -317,6 +317,40 @@ public final class ReteAgenda extends RecomputingAgenda {
   /**
    * {@inheritDoc}
    *
+   * <p><strong>The one place this shape needs telling that refraction changed.</strong> Every other
+   * un-refraction accompanies a fact event, and {@link #factInserted}/{@link #factRetracted} carry
+   * it; §4.4's truth maintenance clears refraction for a tuple whose facts never moved, so nothing
+   * would otherwise re-offer it. A fired match has been pulled out of {@code pendingByRule} and is
+   * still held in the beta memory, so re-offering it is a push of what is already derived rather
+   * than a re-derivation.
+   *
+   * <p><strong>The beta-memory guard keeps {@code pendingByRule} a subset of the beta memory, and
+   * that is what makes it load-bearing.</strong> {@link #factRetracted} prunes pending only through
+   * {@code BetaMemory.removeInvolving}, so a tuple pushed here that beta does not hold would never
+   * be pruned by any retract -- and {@link #matchesOf} would go on building an activation over a
+   * handle that had left working memory. Absent from beta means the match is genuinely gone, and
+   * declining is the answer.
+   *
+   * <p>The rebuilt {@code Tuple} is safe to add because {@link Tuple} hand-writes array-based
+   * equality, so an equal instance is a no-op in the set rather than a second entry. That is also
+   * why the ordering inside {@code TruthMaintenance.withdraw} is safe: this runs before the
+   * retracts, but a justification's conclusions are never among its own bound facts, and in a
+   * cascade the dependent's tuple has already left beta so the guard declines it.
+   */
+  @Override
+  public void reactivate(final ActivationKey key) {
+    // Refuses to be null-tolerant, as onConsumed does and for the same reason: a key naming a rule
+    // this agenda does not know is an engine invariant violation, not a case to scan harder for.
+    final int index = indexOf(key.ruleId());
+    final Tuple candidate = new Tuple(key.handles(), aliasesByRule.get(index));
+    if (betaByRule.get(index).tuples().contains(candidate)) {
+      pendingByRule.get(index).add(candidate);
+    }
+  }
+
+  /**
+   * {@inheritDoc}
+   *
    * <p>The number a fire cycle is proportional to under this shape, and the one that would reveal a
    * match this class failed to pull back out after firing. In a streaming session at a steady state
    * it sits near zero however many matches the beta memory holds -- which is the whole claim of
@@ -369,8 +403,24 @@ public final class ReteAgenda extends RecomputingAgenda {
   /**
    * The position of a rule in compilation order.
    *
+   * @param ruleId the rule id a justification names
+   * @return its position
+   * @throws IllegalStateException if no rule in this agenda has that id
+   */
+  private int indexOf(final String ruleId) {
+    for (int index = 0; index < rules.size(); index++) {
+      if (rules.get(index).id().equals(ruleId)) {
+        return index;
+      }
+    }
+    throw new IllegalStateException("rule '" + ruleId + "' is not in this agenda's rule set");
+  }
+
+  /**
+   * This agenda's position for a rule instance.
+   *
    * @param rule the rule
-   * @return its index
+   * @return its position
    */
   private int indexOf(final CompiledRule rule) {
     final Integer index = ruleIndices.get(rule);

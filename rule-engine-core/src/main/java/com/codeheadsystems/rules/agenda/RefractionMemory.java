@@ -175,11 +175,22 @@ public final class RefractionMemory {
   }
 
   /**
-   * Removes one key from every structure.
+   * Forgets one match, so the rule may fire on it again.
+   *
+   * <p>Public for §4.4's truth maintenance, which calls it when a justification dies. The coupling
+   * is load-bearing: a justification dies because its tuple stopped matching, and if that tuple
+   * starts matching again the handles -- and therefore the key -- are unchanged. A rule still
+   * refracted on it would never re-fire and never re-derive, so a conclusion withdrawn by something
+   * temporary would stay withdrawn for the life of the session.
+   *
+   * <p>Not a general "make this fire again" lever. Everything else that clears refraction does so
+   * because a fact changed ({@link #invalidateFor}) or left ({@link #invalidateAll}), and reaching
+   * for this one instead would clear a key whose facts are untouched -- which is how
+   * {@code fireAllRules} stops terminating (§4.4).
    *
    * @param key the match to forget
    */
-  private void forget(final ActivationKey key) {
+  public void forget(final ActivationKey key) {
     fired.remove(key);
     firedAtRecency.remove(key);
     for (final long handle : key.handles()) {

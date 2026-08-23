@@ -125,7 +125,11 @@
               "action": true,
               "fact": { "type": "string", "minLength": 1 },
               "as": { "type": "string", "minLength": 1 },
-              "payload": { "$ref": "#/$defs/payload" }
+              "payload": { "$ref": "#/$defs/payload" },
+              "logical": {
+                "description": "Section 4.4's truth maintenance. When true the new fact is a CONCLUSION held up by the match that inserted it, and is withdrawn when that match stops holding -- the negated fact arrives, a forAll counterexample turns up, or a bound fact is retracted. Absent means false, which is what every insertFact written before this key existed meant. Only insertFact accepts it; on any other verb it is an unknown key.",
+                "type": "boolean"
+              }
             }
           }
         },

@@ -216,10 +216,11 @@ there is no such fact to act on — that is the point of the rule.
 
 **Two things to know before you rely on it**, both of which are about facts arriving later.
 
-*A rule that fired because something was absent does not un-fire when it turns up.* There is no
-truth maintenance here. If the payment arriving has to undo the conclusion, make the conclusion a
-fact — `action: insertFact` with `fact: OrderUnpaid` — and write a second rule that retracts it when
-the payment appears.
+*A rule that fired because something was absent does not un-fire when it turns up* — unless you ask
+it to. Add `logical: true` to the `insertFact` and the conclusion is withdrawn when the payment
+arrives, and drawn again if the payment is retracted. See [Withdrawing a
+conclusion](#withdrawing-a-conclusion) below. Without it the fact stands, which is what every rule
+written before that key existed does.
 
 *Never negate a fact type your session evicts.* Eviction bounds a long-lived session by dropping
 facts, and a dropped fact is indistinguishable from one that was never there — so a cap on
@@ -280,10 +281,76 @@ pattern of the same type:
 ```
 
 Everything the negation section says otherwise applies here as well — the pattern binds nothing, no
-`then` action may name its alias, there is no truth maintenance, and you must not quantify over a
+`then` action may name its alias, a firing is not undone when a counterexample arrives unless it
+concluded logically (see [Withdrawing a conclusion](#withdrawing-a-conclusion)), and you must not
+quantify over a
 type your session evicts. That last one bites harder here: eviction only ever removes
 counterexamples, so a cap makes the requirement *easier* to satisfy, and a cap that empties the
 scope deletes it.
+
+## Withdrawing a conclusion
+
+A rule that concludes something because a fact was *absent* has a problem the moment that fact turns
+up: the conclusion is still sitting there. Add `logical: true` and the engine takes it back.
+
+```yaml
+apiVersion: rules.v1
+rules:
+  - id: unpaid-order
+    when:
+      - fact: Order
+        as: o
+        where:
+          status: { eq: "PENDING" }
+      - fact: Payment
+        as: p
+        quantifier: notExists
+        where:
+          orderId: { eq: { $ref: o.id } }
+    then:
+      - action: insertFact
+        fact: OrderUnpaid
+        logical: true
+        payload: { orderId: { $ref: o.id } }
+```
+
+Insert the payment, fire, and `OrderUnpaid` is gone. Retract the payment, fire, and it is back. The
+same applies to any reason the match stops holding — a bound fact retracted, an update that breaks a
+constraint, a `forAll` counterexample arriving.
+
+Three things to know:
+
+*It happens on the next fire, not instantly.* Right-hand sides are applied as a unit, so nothing is
+retracted halfway through one. Your conclusion outlives its reason until the next cycle.
+
+*Two matches concluding the same thing give you two facts.* Each is withdrawn on its own reason.
+There is no dedup by payload; if you need one fact, aggregate at ingestion.
+
+*It cascades.* A conclusion drawn from a conclusion goes when the first one does.
+
+*Do not conclude the very thing your `notExists` is about.* This looks like the "do it once" idiom
+and is a livelock:
+
+```yaml
+# WRONG with logical: true
+- fact: Alert
+  as: a
+  quantifier: notExists
+  where: { orderId: { eq: { $ref: o.id } } }
+# then: insertFact Alert, logical: true
+```
+
+Conclude, the Alert defeats the `notExists`, withdraw, conclude again — forever, until the cycle
+limit stops it. Without `logical` the same rule settles after one firing. If you want "alert once
+and leave it", that is an ordinary insert.
+
+*Do not evict a type your rules conclude.* Eviction drops the conclusion while its reason still
+holds, and the rule is still refracted, so it never comes back. This is the third member of the same
+family as "never negate an evicted type" and "never quantify over one".
+
+Leave the key off and nothing changes: the fact stands until something retracts it. That is still
+the right choice when the conclusion is a record of something that happened rather than a statement
+about how things currently are.
 
 ## Doing something
 

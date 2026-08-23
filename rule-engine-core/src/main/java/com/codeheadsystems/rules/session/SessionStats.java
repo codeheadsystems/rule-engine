@@ -36,6 +36,12 @@ import java.util.Objects;
  *     the steady state §4.3 exists to produce. A rule with a §6.4 {@code condition} is the
  *     exception: a match the condition rejects is never fired, so it is never pulled back out and
  *     this count rises toward the held-match count -- see {@code ReteAgenda.pendingMatchCount}
+ * @param concludedFactCount facts currently held up by a justification (§4.4's amendment) -- what
+ *     a {@code logical} insert has concluded and truth maintenance has not yet withdrawn. Reported
+ *     beside {@link #refractedMatchCount} because it is the same kind of thing: a per-session
+ *     structure that grows with what the rules conclude and is bounded only by them withdrawing it.
+ *     A long-lived session whose fact count is flat and whose conclusion count climbs has rules
+ *     concluding faster than their reasons expire
  * @param evictedCount facts this session has evicted (§4.4); zero when no policy is configured
  * @param evictedByType the same count split by fact type, holding an entry only for a type that has
  *     had something evicted. Split because the total cannot answer the question it is needed for:
@@ -48,11 +54,12 @@ public record SessionStats(
     int materialisedMatchCount,
     int materialisedHandleCount,
     int pendingMatchCount,
+    int concludedFactCount,
     long evictedCount,
     Map<String, Long> evictedByType) {
 
   /** A session holding nothing. */
-  private static final SessionStats EMPTY = new SessionStats(0, 0, 0, 0, 0, 0L, Map.of());
+  private static final SessionStats EMPTY = new SessionStats(0, 0, 0, 0, 0, 0, 0L, Map.of());
 
   /**
    * Copies the per-type counts, keeping their order.

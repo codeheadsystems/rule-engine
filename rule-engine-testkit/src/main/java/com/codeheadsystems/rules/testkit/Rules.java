@@ -177,10 +177,11 @@ public final class Rules {
      * Where its fact type is one the rule already binds, §1's implicit inequality applies as it does
      * between two positive aliases: the question is about some <em>other</em> fact of that type.
      *
-     * <p><strong>There is no truth maintenance behind this</strong> (§1). A rule that fires because
-     * something was absent is not retracted when that thing arrives; refraction is keyed on the
-     * facts the match binds, and the fact whose absence was asserted is not one of them. The absence
-     * ending makes the match ineligible from then on, which is not the same as undoing what it did.
+     * <p><strong>A firing is not undone when the absence ends -- unless what it concluded was
+     * inserted logically</strong> (§4.4's amendment). Refraction is keyed on the facts the match
+     * binds, and the fact whose absence was asserted is not one of them, so by default the absence
+     * ending merely makes the match ineligible from then on. {@link ActionBuilder#insertLogical} is
+     * what makes the conclusion itself revocable.
      *
      * <p><strong>Do not negate a type a session evicts</strong> (§4.4), and this one is sharper than
      * the paragraph above. An evicted fact and an absent fact are indistinguishable to a negation,
@@ -228,9 +229,9 @@ public final class Rules {
      * line items at all. Pair it with a positive pattern of the same type -- which a rule wanting
      * this usually has anyway -- to say "there are some, and all of them".
      *
-     * <p><strong>There is no truth maintenance behind this</strong> (§1), exactly as for
-     * {@link #notExists}: a rule that fired because everything in scope met the requirement is not
-     * undone when a counterexample arrives.
+     * <p><strong>A firing is not undone when a counterexample arrives</strong>, exactly as for
+     * {@link #notExists} -- unless what it concluded was inserted with
+     * {@link ActionBuilder#insertLogical} (§4.4's amendment), which makes the conclusion revocable.
      *
      * <p><strong>Do not quantify over a type a session evicts</strong> (§4.4), and this is sharper
      * than the negation case. Evicting facts can only remove counterexamples, so a cap does not
@@ -530,7 +531,57 @@ public final class Rules {
      */
     public ActionBuilder insertFactAs(final String factType, final String alias,
         final Object... keysAndValues) {
-      actions.add(new InsertFact(factType, Optional.of(alias), fields(keysAndValues)));
+      actions.add(new InsertFact(factType, Optional.of(alias), fields(keysAndValues), false));
+      return this;
+    }
+
+    /**
+     * Inserts a derived fact as a <em>conclusion</em> this match holds up (§4.4's amendment).
+     *
+     * <p><strong>The fact is withdrawn when the match stops holding.</strong> That is the whole
+     * difference from {@link #insertFact}, and it is what pays off the boundary
+     * {@link RuleBuilder#notExists} and {@link RuleBuilder#forAll} ship with: a rule that concluded
+     * something because a {@code Payment} was absent now un-concludes it when the payment arrives,
+     * instead of leaving a stale conclusion standing for the life of the session.
+     *
+     * <p>Withdrawal happens at a cycle boundary, not the instant the reason goes. §4.6 stages a
+     * right-hand side and then commits it, and retracting a fact the firing activation binds
+     * halfway through would break that -- so truth maintenance runs where §4.4 already runs
+     * eviction, at the top of a fire cycle.
+     *
+     * <p><strong>Two matches concluding the same thing make two facts.</strong> A logical insert
+     * allocates a fresh handle, so each conclusion carries its own reason and is withdrawn on its
+     * own -- there is no deduplication by payload and no fact held up by two reasons. Two unpaid
+     * orders for one customer give two {@code CustomerAtRisk} facts, and a rule counting them counts
+     * two. Aggregate at ingestion if you need one.
+     *
+     * <p><strong>A re-firing replaces its conclusion rather than adding one.</strong> An update that
+     * clears refraction while leaving the match valid fires the same activation again; what it drew
+     * before was drawn from the old payload, so it is superseded at the next cycle boundary.
+     *
+     * <p>Retracting the conclusion cascades: a justification resting on a withdrawn fact is itself
+     * withdrawn, until nothing more changes.
+     *
+     * @param factType the new fact's type
+     * @param keysAndValues alternating field names and values or references
+     * @return this builder
+     */
+    public ActionBuilder insertLogical(final String factType, final Object... keysAndValues) {
+      actions.add(InsertFact.logical(factType, fields(keysAndValues)));
+      return this;
+    }
+
+    /**
+     * Inserts a logical fact and binds it, so later actions in this right-hand side can name it.
+     *
+     * @param factType the new fact's type
+     * @param alias the binding name
+     * @param keysAndValues alternating field names and values or references
+     * @return this builder
+     */
+    public ActionBuilder insertLogicalAs(final String factType, final String alias,
+        final Object... keysAndValues) {
+      actions.add(new InsertFact(factType, Optional.of(alias), fields(keysAndValues), true));
       return this;
     }
 

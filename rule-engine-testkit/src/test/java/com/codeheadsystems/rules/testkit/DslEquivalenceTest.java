@@ -397,6 +397,51 @@ class DslEquivalenceTest {
     }
 
     @Test
+    @DisplayName("a logical insert survives the round trip and is still withdrawn")
+    void logicalInsert() {
+      /*
+       * The hash half of this oracle is the one doing the work here, and it is worth saying why the
+       * sequence half cannot. `logical` changes what happens AFTER a firing, not what fires, so two
+       * rules differing only in that flag produce identical firing sequences -- Engine.run fires
+       * once at the end of the scenario, so there is no second cycle in which a withdrawal could
+       * show up. What the hash catches is a front end that dropped the key: InsertFact is a record,
+       * so `logical` reaches the version hash through its toString, and a dropped key would make a
+       * stated conclusion and a revocable one hash identically. The withdrawal itself is
+       * TruthMaintenanceTest's job, including from a rule file.
+       */
+      final FiringSequence fired = DslEquivalence.assertEquivalent(
+          file("""
+                - id: unpaid-order
+                  when:
+                    - fact: Order
+                      as: o
+                      where:
+                        status: { eq: "PENDING" }
+                    - fact: Payment
+                      as: p
+                      quantifier: notExists
+                      where:
+                        orderId: { eq: { $ref: o.id } }
+                  then:
+                    - action: insertFact
+                      fact: OrderUnpaid
+                      logical: true
+                      payload: { orderId: { $ref: o.id } }
+              """),
+          List.of(Rules.rule("unpaid-order")
+              .when("o", "Order", pattern -> pattern.eq("status", "PENDING"))
+              .notExists("p", "Payment", pattern -> pattern.ref("orderId", "o.id"))
+              .then(actions -> actions.insertLogical("OrderUnpaid", "orderId", Rules.ref("o.id")))
+              .build()),
+          session -> session.insert("Order", Facts.json("""
+              {"id": 1, "status": "PENDING"}""")));
+
+      assertThat(fired.steps())
+          .as("both sides conclude, once")
+          .hasSize(1);
+    }
+
+    @Test
     @DisplayName("a forAll pattern's scope and requirement survive the round trip")
     void readyToShip() {
       /*

@@ -313,7 +313,15 @@ concurrently" an extra artifact to discover.
   with a positive pattern of the same type to mean "there are some, and all of them". Over an evicted
   type this is the sharpest hazard in the engine: eviction only removes counterexamples, so a cap
   does not weaken the requirement but deletes it.
-- **Negation has no truth maintenance, and must never be used over an evicted type** (§4.4). An
+- **Truth maintenance is opt-in per insert** (§4.4's amendment). `insertFact` with `logical: true`
+  makes the fact a conclusion held up by the match that inserted it, withdrawn when that match stops
+  holding; the default is unchanged. Validity is re-asked of the tuple by `TupleMatch`, never diffed
+  against a match set -- the streaming conflict set holds only unfired matches, so a diff would read
+  every fired match as gone. Invalidating a justification also clears refraction for it, or the
+  withdrawal is irreversible. Exactly one justification per conclusion: two matches concluding the
+  same thing make two facts, because a logical insert allocates a fresh handle.
+- **Negation still has no truth maintenance unless the conclusion is logical, and must never be used
+  over an evicted type** (§4.4). An
   evicted fact and an absent fact are indistinguishable to a negation, so a cap on the negated type
   stops costing a firing and starts asserting a false conclusion. This is the sharpest semantic
   hazard in the engine. `MatchExplainer` cannot *detect* it — it re-asks the same question of the

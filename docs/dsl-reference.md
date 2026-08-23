@@ -183,7 +183,9 @@ governs two positive aliases. A fact is never its own counterexample.
 post-filter walks the patterns that bind — so the negation would silently be broader than written.
 Say it with the pattern's own `where`, which is what decides whether the fact exists.
 
-**There is no truth maintenance.** A rule that fired because something was absent is *not* undone
+**There is no truth maintenance unless you ask for it** with [`logical:
+true`](#logical-true--a-conclusion-rather-than-a-fact), which is the supported answer to everything
+this paragraph describes. Without it, a rule that fired because something was absent is *not* undone
 when that thing arrives. The absence ending makes the match ineligible from then on, which is not
 the same as retracting what it did. If you need the retraction, model the conclusion as a fact and
 retract it from a second rule.
@@ -262,8 +264,9 @@ watch for. Add a positive pattern of the same type to say "there are some, and a
 **Everything the negation section says about binding also applies.** A `forAll` pattern binds
 nothing, nothing may name its alias, it may join in either direction of declaration, it cannot
 stand alone, a `condition:` on it is refused, and over a type the rule already binds it means
-"every *other* one". There is no truth maintenance: a rule that fired because everything complied
-is not undone when a counterexample arrives.
+"every *other* one". A rule that fired because everything complied is not undone when a
+counterexample arrives, unless it concluded with [`logical:
+true`](#logical-true--a-conclusion-rather-than-a-fact).
 
 **Never quantify over a type the session evicts**, and this is sharper than the negation case.
 Evicting facts can only remove counterexamples, so a cap does not weaken the requirement — it
@@ -502,12 +505,68 @@ declaration order.
 - action: insertFact
   fact: RiskSignal
   as: sig                # optional; binds the new handle for later actions in this RHS
+  logical: false         # optional; true makes the fact a withdrawable conclusion (see below)
   payload:
     orderId:  { $ref: o.id }
     severity: "HIGH"
 ```
 
 The handle is allocated at stage time, which is what lets a later action in the same RHS name `sig`.
+
+#### `logical: true` — a conclusion rather than a fact
+
+A logical insert is **withdrawn when the match that made it stops holding** (§4.4's amendment). That
+is what pays off the boundary [`notExists`](#negation-quantifier-notexists) and
+[`forAll`](#universals-quantifier-forall) ship with: a rule that concluded something because a
+`Payment` was absent now un-concludes it when the payment arrives.
+
+```yaml
+- id: unpaid-order
+  when:
+    - fact: Order
+      as: o
+      where:
+        status: { eq: "PENDING" }
+    - fact: Payment
+      as: p
+      quantifier: notExists
+      where:
+        orderId: { eq: { $ref: o.id } }
+  then:
+    - action: insertFact
+      fact: OrderUnpaid
+      logical: true
+      payload: { orderId: { $ref: o.id } }
+```
+
+Insert the payment and `OrderUnpaid` goes. Retract the payment and it comes back. The same happens
+when a bound fact is retracted, when an update stops it matching, or when a `forAll`'s
+counterexample turns up.
+
+**Withdrawal happens at a cycle boundary**, not the instant the reason goes. Right-hand sides are
+staged and committed as a unit, so nothing is retracted mid-firing; a conclusion outlives its reason
+until the next `fireAllRules` cycle.
+
+**Two matches concluding the same thing make two facts.** Each carries its own reason and is
+withdrawn on its own. There is no deduplication by payload, so two unpaid orders for one customer
+give you two `CustomerAtRisk` facts — aggregate at ingestion if you need one.
+
+**Cascades.** A conclusion drawn from a conclusion goes when the first one does.
+
+**A re-firing replaces its conclusion.** An update that keeps the match valid but clears refraction
+fires the same activation again; what it concluded before was drawn from the old payload and is
+retracted at the next cycle boundary rather than left standing beside the new one.
+
+**Never conclude the fact your own `notExists` is about.** Conclude, defeat the negation, withdraw,
+conclude again — a livelock that ends at the cycle limit. The same rule with an ordinary insert
+settles after one firing.
+
+**Never evict a type your rules conclude** (§4.4). Eviction drops the conclusion while its
+justification still holds and the rule is still refracted, so it never returns — the third member of
+the family alongside "never negate an evicted type" and "never quantify over one".
+
+Leave `logical` off — the default — and the fact behaves as it always has: it stands until something
+retracts it explicitly.
 
 ### `retractFact`
 
@@ -827,11 +886,11 @@ time, insert it as a fact.
 
 ## Not implemented yet
 
-Deferred, each with an interim answer in §1 of the spec: accumulation, backward chaining, truth
-maintenance, and temporal operators. The short version of all of them is the same: compute it at
+Deferred, each with an interim answer in §1 of the spec: accumulation, backward chaining, and
+temporal operators. The short version of all of them is the same: compute it at
 ingestion and insert the answer as a fact.
 
 The quantifiers are *not* on that list any more — [`notExists`](#negation-quantifier-notexists) and
 [`forAll`](#universals-quantifier-forall) are both implemented, with the boundaries those sections
-name: no truth maintenance, never over an evicted type, and — for `forAll` — vacuously true over an
+name: never over an evicted type, and — for `forAll` — vacuously true over an
 empty scope.

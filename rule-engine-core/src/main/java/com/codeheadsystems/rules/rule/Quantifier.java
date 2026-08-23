@@ -27,8 +27,9 @@ public enum Quantifier {
    * tuple, so it is answered in the shared agenda base where the three matchers cannot disagree,
    * and the 1-to-0 transitions fall out of §4.1's dirty tracking.
    *
-   * <p><strong>Two boundaries.</strong> There is no truth maintenance -- a rule that fired because
-   * something was absent is not undone when that thing arrives. And a negated type must not be one
+   * <p><strong>Two boundaries.</strong> A rule that fired because something was absent is not
+   * undone when that thing arrives, unless what it concluded was inserted logically (§4.4's
+   * amendment, which is what makes a conclusion revocable). And a negated type must not be one
    * a session evicts (§4.4): an evicted fact and an absent fact are indistinguishable here, so a
    * cap on the negated type turns a lost firing into a false conclusion.
    */
@@ -49,7 +50,8 @@ public enum Quantifier {
    * assertion the original wording described.
    *
    * <p><strong>Only a join can narrow the scope.</strong> Every literal-valued constraint compiles
-   * to an alpha test and so lands in the requirement, which means "every <em>physical</em> line item
+   * to an alpha test and so lands in the requirement, which means "every <em>physical</em> line
+   * item
    * of this order is in stock" cannot be written: the type test would make a digital item a
    * counterexample rather than excluding it. §2.5's amendment records this as the quantifier's
    * remaining shape limit, and the interim answer is §1's -- narrow at ingestion, by fact type.
@@ -60,14 +62,14 @@ public enum Quantifier {
    * fact the tuple binds is not one the assertion is about, so "every other order is shipped" is
    * what a same-type universal means.
    *
-   * <p><strong>Three boundaries.</strong> There is no truth maintenance, inherited unchanged from
-   * negation: a rule that fired because everything in scope complied is not undone when a
-   * counterexample arrives. The quantified type must not be one a session evicts (§4.4), and this
-   * is sharper than negation's -- eviction can only remove counterexamples, so a cap does not
-   * weaken the requirement but strengthens it. And it is <strong>vacuously true over an empty
-   * scope</strong>, which is classical and is the trap: pair it with a positive pattern of the same
-   * type to mean "there are some, and all of them". Combine the last two and a cap that empties the
-   * scope does not weaken the assertion but deletes it.
+   * <p><strong>Three boundaries.</strong> A rule that fired because everything in scope complied is
+   * not undone when a counterexample arrives, inherited unchanged from negation -- unless what it
+   * concluded was inserted logically (§4.4's amendment). The quantified type must not be one a
+   * session evicts (§4.4), and this is sharper than negation's -- eviction can only remove
+   * counterexamples, so a cap does not weaken the requirement but strengthens it. And it is
+   * <strong>vacuously true over an empty scope</strong>, which is classical and is the trap: pair
+   * it with a positive pattern of the same type to mean "there are some, and all of them". Combine
+   * the last two and a cap that empties the scope does not weaken the assertion but deletes it.
    */
   FOR_ALL,
 

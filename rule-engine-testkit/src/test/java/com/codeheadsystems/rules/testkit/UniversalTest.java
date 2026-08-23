@@ -260,7 +260,8 @@ class UniversalTest {
         session.insert("LineItem", Facts.obj("orderId", 1, "inStock", false, "qty", 1));
 
         assertThat(session.fireAllRules().firedCount())
-            .describedAs("not re-fired, and equally not retracted: there is no truth maintenance")
+            .describedAs("not re-fired, and equally not retracted -- this insert is not logical,"
+                + " so §4.4's truth maintenance has nothing to withdraw")
             .isZero();
       }
     }

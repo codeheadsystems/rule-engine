@@ -108,8 +108,9 @@ agenda, refraction and eviction all hang off. Both are recorded as measured and 
 nothing and joins nothing into the tuple, so it is a question asked of a *complete* match — the same
 shape a §6.4 condition has — and it is answered in the shared agenda base, which is what makes the
 three matchers agree about it by construction rather than by testing. Two boundaries ship with it
-and both are documented on `Rules.notExists`: there is no truth maintenance, so a rule that fired
-because something was absent is not undone when that thing arrives; and a negated type must not be
+and both are documented on `Rules.notExists`: a rule that fired because something was absent is not
+undone when that thing arrives — unless what it concluded was inserted logically, which is what the
+truth-maintenance section below adds; and a negated type must not be
 one a session evicts, because an evicted fact and an absent one are indistinguishable to a negation.
 It is written in a rule file as `quantifier: notExists` on a pattern, and from the `Rules` builder
 as `notExists`; `docs/dsl-reference.md` carries the rule-file half. The compiler refuses what a
@@ -136,8 +137,26 @@ fail the requirement. Pair it with a positive pattern of the same type to mean "
 all of them". Combined with eviction that boundary is the sharpest in the engine: evicting facts can
 only remove counterexamples, so a cap does not weaken the requirement but deletes it.
 
-**What does not exist:** accumulation, truth maintenance and CEP, which are §1 non-goals with
-documented interim answers.
+**Truth maintenance now exists**, as Phase 6's third slice, and it pays off the boundary both
+quantifiers shipped with. `insertFact` gains a `logical` flag (`insertLogical` from the builder):
+a logical insert is a **conclusion held up by the match that made it**, withdrawn when that match
+stops holding — the `Payment` arrives, a `forAll` counterexample turns up, a bound fact is
+retracted or updated out of matching. Withdrawal cascades, and it is reversible: invalidating a
+justification also forgets the refraction on it, or a conclusion withdrawn by something temporary
+would stay withdrawn for the life of the session.
+
+Validity is re-asked of the *tuple* rather than diffed against a match set, which is what makes it
+work identically under all three matchers — §4.3's streaming conflict set holds only what is waiting
+to fire, so a diff would read every fired match as gone. `TupleMatch` shares all four predicates
+with the agenda rather than restating them. Two things to know: withdrawal happens at a cycle
+boundary, not the instant the reason goes, because §4.6 stages and commits a right-hand side as a
+unit; and there is **exactly one justification per conclusion**, so two matches concluding the same
+thing produce two facts rather than one held up twice. Deduplicating by payload is a separate
+feature from withdrawing — it would change what §2.1 means by fact identity — and is not smuggled in.
+
+**What does not exist:** accumulation and CEP, which are §1 non-goals with documented interim
+answers, and distributed evaluation, which §5's immutability split makes feasible without making it
+built.
 
 ## Modules
 

@@ -1,18 +1,16 @@
 package com.codeheadsystems.rules.agenda;
 
-import com.codeheadsystems.rules.expr.ExpressionBindings;
-import com.codeheadsystems.rules.expr.ExpressionEvaluationException;
 import com.codeheadsystems.rules.fact.WorkingMemory;
 import com.codeheadsystems.rules.listener.RuleEngineListener;
 import com.codeheadsystems.rules.listener.SuppressReason;
 import com.codeheadsystems.rules.match.Activation;
 import com.codeheadsystems.rules.match.ActivationKey;
+import com.codeheadsystems.rules.match.Conditions;
 import com.codeheadsystems.rules.match.Negations;
 import com.codeheadsystems.rules.match.Tuple;
 import com.codeheadsystems.rules.match.Universals;
 import com.codeheadsystems.rules.rule.CompiledPattern;
 import com.codeheadsystems.rules.rule.CompiledRule;
-import com.codeheadsystems.rules.rule.ExpressionTest;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Iterator;
@@ -445,9 +443,10 @@ public abstract class RecomputingAgenda implements Agenda {
    * Drops the matches whose rule asserts a requirement that some in-scope fact fails (§2.5's
    * {@code FOR_ALL}).
    *
-   * <p>Here for the reasons {@link #absences} is here, and it inherits the same two boundaries: no
-   * truth maintenance, so a rule that fired because everything in scope satisfied a requirement is
-   * not undone when a counterexample arrives; and the type must not be one the session evicts,
+   * <p>Here for the reasons {@link #absences} is here, and it inherits the same two boundaries: a
+   * rule that fired because everything in scope satisfied a requirement is not undone when a
+   * counterexample arrives unless what it concluded was inserted logically (§4.4's amendment); and
+   * the type must not be one the session evicts,
    * because evicting facts can only remove counterexamples and so can only make the assertion more
    * true. Both are §2.5's amendment, and the second is sharper than negation's -- a universal is
    * <em>vacuously</em> true over an emptied scope, so a cap that evicts a type entirely turns the
@@ -525,57 +524,20 @@ public abstract class RecomputingAgenda implements Agenda {
   /**
    * Whether every condition on a rule holds for one match.
    *
+   * <p>Delegated to {@link com.codeheadsystems.rules.match.Conditions} rather than written here,
+   * because §4.4's truth maintenance re-asks the same question of a justifying tuple. Two copies
+   * could disagree, and a disagreement there means either a conclusion left standing after its
+   * justification died or a fact retracted while the engine still believes it.
+   *
    * @param rule the rule
    * @param activation the complete match
    * @return true when no condition rejected it
    */
   private boolean holdsFor(final CompiledRule rule, final Activation activation) {
-    final ExpressionBindings bindings =
+    return Conditions.holdFor(rule,
         alias -> activation.tuple().aliases().contains(alias)
             ? activation.tuple().payloadOf(alias, workingMemory)
-            : MissingNode.getInstance();
-    for (final CompiledPattern pattern : rule.patterns()) {
-      for (final ExpressionTest test : pattern.expressionTests()) {
-        if (!evaluate(rule, pattern, test, bindings)) {
-          return false;
-        }
-      }
-    }
-    return true;
-  }
-
-  /**
-   * Evaluates one condition, naming it if it fails.
-   *
-   * <p><strong>A condition that throws aborts the fire cycle, and there is no policy that catches
-   * it.</strong> That is worth stating plainly rather than discovering: §4.6's {@code RhsErrorHandler}
-   * governs the right-hand side, and a condition is evaluated here, in the agenda, while the
-   * conflict set is being built. There is nothing to skip and continue past -- matching is not a
-   * per-rule operation the way firing is, and a matcher that silently treated an evaluation failure
-   * as "no match" would turn a broken expression into rules that quietly stop firing, which is the
-   * failure mode this engine works hardest to avoid.
-   *
-   * <p>So the exception propagates, and the one thing this method owes the operator is enough
-   * context to find the cause immediately: which rule, which alias, and the expression text. The
-   * bare message from the expression compiler names none of them.
-   *
-   * @param rule the rule being matched
-   * @param pattern the pattern the condition was written on
-   * @param test the compiled condition
-   * @param bindings the tuple's facts
-   * @return whether the condition holds
-   */
-  private static boolean evaluate(final CompiledRule rule, final CompiledPattern pattern,
-      final ExpressionTest test, final ExpressionBindings bindings) {
-    try {
-      return test.program().test(bindings);
-    } catch (final RuntimeException failed) {
-      throw new ExpressionEvaluationException(
-          "rule '" + rule.id() + "', condition on alias '" + pattern.alias() + "' ("
-              + test.source().expression() + "): " + failed.getMessage()
-              + ". A condition that fails to evaluate stops the fire cycle -- there is no"
-              + " per-match error policy on the left-hand side (§6.4)", failed);
-    }
+            : MissingNode.getInstance());
   }
 
   /**

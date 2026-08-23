@@ -2,6 +2,7 @@ package com.codeheadsystems.rules.agenda;
 
 import com.codeheadsystems.rules.fact.Fact;
 import com.codeheadsystems.rules.match.Activation;
+import com.codeheadsystems.rules.match.ActivationKey;
 import java.util.Optional;
 
 /**
@@ -142,6 +143,27 @@ public interface Agenda {
    */
   default void factRetracted(Fact fact) {
     // Nothing to do for a recomputing shape; see the contract above.
+  }
+
+  /**
+   * Re-offers a match that refraction had suppressed and no longer does (§4.4's amendment).
+   *
+   * <p><strong>Exists because truth maintenance is the first thing in the engine that clears
+   * refraction without an accompanying fact event.</strong> Everything else that un-refracts does so
+   * because a fact changed or left, and every shape learns about that through
+   * {@link #markDirty(String)} or {@link #factRetracted(Fact)}. Withdrawing a conclusion clears
+   * refraction for a tuple whose facts are all untouched, so there is no event to carry it.
+   *
+   * <p>A no-op for the recomputing shapes, and the default is the honest answer: they rebuild a
+   * dirty rule's whole slice, so an un-refracted match reappears by itself. §4.3's shape does not --
+   * a match enters its conflict set when derived and leaves when it fires, and nothing re-derives a
+   * tuple whose facts never moved. Without this the same rule set withdraws a conclusion under every
+   * matcher and re-derives it under only two, which is the divergence §9's exit criterion forbids.
+   *
+   * @param key the match to offer again
+   */
+  default void reactivate(ActivationKey key) {
+    // Recomputing shapes rebuild a dirty rule's whole slice; there is nothing to push.
   }
 
   /**

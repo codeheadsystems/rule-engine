@@ -651,7 +651,7 @@ public final class RhsExecutor {
           throw new CommitFailure(action, failure);
         }
       }
-      effects.add(new StagedEffect.FactInserted(handle, factType, payload));
+      effects.add(new StagedEffect.FactInserted(handle, factType, payload, action.logical()));
     }
   }
 

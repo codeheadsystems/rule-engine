@@ -103,7 +103,10 @@ final class Actions {
       final Diagnostics diagnostics) {
     return payload(node.payload(), pointer + "/payload", diagnostics)
         .map(fields -> new InsertFact(
-            node.fact(), Optional.ofNullable(node.as()), fields));
+            node.fact(), Optional.ofNullable(node.as()), fields,
+            // Absent means false, which is what every insertFact written before §4.4's amendment
+            // meant and must go on meaning.
+            Boolean.TRUE.equals(node.logical())));
   }
 
   /**

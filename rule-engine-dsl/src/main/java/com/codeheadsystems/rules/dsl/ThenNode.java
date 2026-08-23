@@ -38,7 +38,8 @@ record ThenNode(
     Map<String, JsonNode> payload,
     String event,
     String name,
-    Map<String, JsonNode> args) {
+    Map<String, JsonNode> args,
+    Boolean logical) {
 
   /**
    * Canonical constructor. Copies both maps into insertion-ordered ones.
@@ -57,6 +58,9 @@ record ThenNode(
    * @param event the event type
    * @param name the host-function name
    * @param args the function arguments
+   * @param logical whether an {@code insertFact} is a conclusion its match holds up (§4.4's
+   *     amendment). Boxed so an absent key is distinguishable from {@code false} at this layer,
+   *     which is what lets the schema reject it on any other verb rather than silently ignoring it
    */
   ThenNode {
     payload = payload == null

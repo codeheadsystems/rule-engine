@@ -92,7 +92,7 @@ class DslDiagnosticsTest {
       OperatorMaps.constraintsOf("total", operatorMap("{ matches: { $ref: c.p } }"), "",
           diagnostics);
       Actions.actionOf(
-          new ThenNode("sendEmail", null, null, null, null, null, null, null, null, null),
+          new ThenNode("sendEmail", null, null, null, null, null, null, null, null, null, null),
           "", diagnostics);
       // 'accumulate' rather than 'forAll': forAll is implemented as of §2.5's amendment and the
       // schema spells it, so it is no longer a code this gate shields. accumulate still is.

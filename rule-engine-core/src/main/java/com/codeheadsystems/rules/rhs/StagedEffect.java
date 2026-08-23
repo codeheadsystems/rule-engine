@@ -44,8 +44,13 @@ public sealed interface StagedEffect {
    * @param handle the new fact's handle, allocated at stage time so later actions could name it
    * @param factType the new fact's type
    * @param payload the payload as inserted
+   * @param logical whether the fact is a conclusion the firing match holds up (§4.4's amendment).
+   *     Recorded on the effect rather than tracked beside it because the effects list is what a
+   *     firing <em>did</em>, and "concluded, revocably" is a different thing to have done from
+   *     "inserted"
    */
-  record FactInserted(FactHandle handle, String factType, JsonNode payload) implements StagedEffect {
+  record FactInserted(FactHandle handle, String factType, JsonNode payload, boolean logical)
+      implements StagedEffect {
 
     /**
      * Canonical constructor.
@@ -53,6 +58,7 @@ public sealed interface StagedEffect {
      * @param handle the new handle
      * @param factType the new fact's type
      * @param payload the payload
+     * @param logical whether the fact is a revocable conclusion
      */
     public FactInserted {
       Objects.requireNonNull(handle, "handle");

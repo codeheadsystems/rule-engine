@@ -18,9 +18,14 @@ import com.codeheadsystems.rules.rete.ReteAgenda;
 import com.codeheadsystems.rules.rhs.RhsErrorHandler;
 import com.codeheadsystems.rules.rhs.RhsExecutor;
 import com.codeheadsystems.rules.rhs.RhsResult;
+import com.codeheadsystems.rules.rhs.StagedEffect;
 import com.codeheadsystems.rules.rule.ActionDefinition;
+import com.codeheadsystems.rules.rule.CompiledRule;
+import com.codeheadsystems.rules.truth.Justifications;
+import com.codeheadsystems.rules.truth.TruthMaintenance;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -50,6 +55,8 @@ public final class DefaultRuleSession implements RuleSession {
 
   /** Null when no eviction policy is configured, which is the default and the common case. */
   private final SessionEvictor evictor;
+  private final Justifications justifications = new Justifications();
+  private final TruthMaintenance truth;
 
   private volatile boolean halted;
 
@@ -117,6 +124,15 @@ public final class DefaultRuleSession implements RuleSession {
         .map(policy -> new SessionEvictor(policy, workingMemory, options.listeners(),
             options.strict()))
         .orElse(null);
+    /*
+     * Always built, unlike the evictor, because it costs nothing when unused: a session whose rules
+     * never insert logically has an empty graph, and revalidate() returns on an emptiness check.
+     * Making it optional would mean deciding at construction whether any rule in the set carries a
+     * logical insert, which is a question the rule set can answer but which buys one null check.
+     */
+    final Map<String, CompiledRule> byId = new LinkedHashMap<>();
+    ruleSet.rules().forEach(rule -> byId.put(rule.id(), rule));
+    this.truth = new TruthMaintenance(justifications, workingMemory, refraction, agenda, byId);
   }
 
   @Override
@@ -237,6 +253,14 @@ public final class DefaultRuleSession implements RuleSession {
        * racing it.
        */
       evictIfNeeded();
+      /*
+       * After eviction and before the agenda is read. After, because an eviction can itself be what
+       * makes a justification stop holding -- a conclusion resting on a fact the cap just dropped is
+       * unsupported from that instant, and leaving it for the next cycle would let the agenda see a
+       * conclusion the engine has already stopped believing. Before the agenda is read, because
+       * everything this withdraws changes what is eligible.
+       */
+      maintainTruth();
       if (agenda.isEmpty()) {
         break;
       }
@@ -269,6 +293,7 @@ public final class DefaultRuleSession implements RuleSession {
     return new SessionStats(workingMemory.size(), refraction.size(),
         agenda.materialisedMatchCount(), agenda.materialisedHandleCount(),
         agenda.pendingMatchCount(),
+        justifications.size(),
         evictor == null ? 0L : evictor.evictedCount(),
         evictor == null ? Map.of() : evictor.evictedByType());
   }
@@ -301,6 +326,19 @@ public final class DefaultRuleSession implements RuleSession {
   private void evictIfNeeded() {
     if (evictor != null && !firing) {
       evictor.evictIfNeeded();
+    }
+  }
+
+  /**
+   * Withdraws conclusions whose reason has stopped holding (§4.4's amendment).
+   *
+   * <p>Guarded by {@code firing} for the reason eviction is: §4.6 stages a right-hand side and then
+   * commits it, and retracting a fact the firing activation binds in between would leave the engine
+   * applying a match against a fact that no longer exists.
+   */
+  private void maintainTruth() {
+    if (!firing) {
+      truth.revalidate();
     }
   }
 
@@ -342,6 +380,44 @@ public final class DefaultRuleSession implements RuleSession {
       outcome = rhs.execute(activation);
     } finally {
       refraction.guardNoLoop(null);
+    }
+
+    /*
+     * Recorded from the effects list, which is what actually LANDED, rather than from the rule's
+     * actions, which is what was asked for. §4.6's commit is atomic per phase and not across it, so
+     * a firing can fail partway with some inserts applied -- justifying a fact that was never
+     * inserted would leave the graph holding a handle working memory does not have, and the pass
+     * would go on trying to withdraw it forever.
+     *
+     * A dry run is the exception the effects list cannot express, and it has to be handled here:
+     * §7.5 makes those effects what WOULD have landed, and the handle is released rather than used.
+     * Recording them would grow the graph without bound over a long-lived dry-run session and spend
+     * a TupleMatch.holds per cycle on tuples that never existed.
+     */
+    if (!options.dryRun()) {
+      final List<Long> concluded = new ArrayList<>();
+      for (final StagedEffect effect : outcome.effects()) {
+        if (effect instanceof StagedEffect.FactInserted inserted && inserted.logical()) {
+          concluded.add(inserted.handle().id());
+        }
+      }
+      /*
+       * Superseded only when this firing actually concluded something, and the guard is the whole
+       * point. An earlier version superseded unconditionally, before the loop -- acting on the
+       * INTENT to re-fire while recording acted on what landed. §4.6 says a staging failure applies
+       * nothing, and that version made it apply a retraction: a re-firing that threw left the
+       * previous conclusion deleted, the key gone from the graph so the pass never visited it, and
+       * the rule refracted at selection. A transient right-hand-side failure silently destroyed a
+       * standing belief that its own justification still held.
+       *
+       * Re-recording also moves the key to the tail of concludedBy, which is where the single-pass
+       * cascade argument in TruthMaintenance needs it: a re-drawn conclusion is newer than
+       * everything it could depend on, so visiting it last is correct rather than incidental.
+       */
+      if (!concluded.isEmpty()) {
+        justifications.supersede(activation.key());
+        concluded.forEach(handleId -> justifications.record(activation.key(), handleId));
+      }
     }
 
     RhsErrorHandler.Decision decision = null;
@@ -471,6 +547,7 @@ public final class DefaultRuleSession implements RuleSession {
       // shapes ignore this call entirely.
       agenda.factInserted(fact);
       agenda.markDirty(fact.type());
+      truth.factTypeTouched(fact.type());
       for (final RuleEngineListener listener : options.listeners()) {
         listener.onInsert(fact);
       }
@@ -486,6 +563,11 @@ public final class DefaultRuleSession implements RuleSession {
       ruleSet.network().retract(fact.type(), fact.handle().id(), fact.payload(), memories);
       agenda.factRetracted(fact);
       agenda.markDirty(fact.type());
+      truth.factTypeTouched(fact.type());
+      // Whatever door it left by -- a caller's retract, an eviction, another rule's retractFact, or
+      // truth maintenance itself. This is what bounds the justification graph: an entry per
+      // conclusion ever drawn would leak in a long-lived session, invisibly to the fact count.
+      truth.factRetracted(fact.handle().id());
       for (final RuleEngineListener listener : options.listeners()) {
         listener.onRetract(fact);
       }

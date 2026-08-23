@@ -27,10 +27,10 @@ class SessionStatsTest {
     final Map<String, Long> live = new LinkedHashMap<>();
     live.put("Order", 1L);
 
-    final SessionStats before = new SessionStats(1, 0, 0, 0, 0, 1L, live);
+    final SessionStats before = new SessionStats(1, 0, 0, 0, 0, 0, 1L, live);
     live.put("Order", 99L);
     live.put("Customer", 5L);
-    final SessionStats after = new SessionStats(1, 0, 0, 0, 0, 100L, live);
+    final SessionStats after = new SessionStats(1, 0, 0, 0, 0, 0, 100L, live);
 
     assertThat(before.evictedByType())
         .describedAs("taken when the record was built, not when it is read")
@@ -43,7 +43,7 @@ class SessionStatsTest {
   @Test
   @DisplayName("the copy handed out rejects writes")
   void perTypeCountsRejectWrites() {
-    final SessionStats stats = new SessionStats(0, 0, 0, 0, 0, 0L, Map.of("Order", 1L));
+    final SessionStats stats = new SessionStats(0, 0, 0, 0, 0, 0, 0L, Map.of("Order", 1L));
 
     assertThatThrownBy(() -> stats.evictedByType().put("Order", 2L))
         .isInstanceOf(UnsupportedOperationException.class);
@@ -66,7 +66,7 @@ class SessionStatsTest {
   @Test
   @DisplayName("a null map is refused by name rather than at the first read")
   void nullMapIsRefused() {
-    assertThatThrownBy(() -> new SessionStats(0, 0, 0, 0, 0, 0L, null))
+    assertThatThrownBy(() -> new SessionStats(0, 0, 0, 0, 0, 0, 0L, null))
         .isInstanceOf(NullPointerException.class)
         .hasMessageContaining("evictedByType");
   }
