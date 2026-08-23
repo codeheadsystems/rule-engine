@@ -36,24 +36,29 @@ import java.util.Set;
  * on it would never re-fire and never re-derive. The conclusion would be withdrawn permanently by
  * something temporary. Forgetting the key is what makes a withdrawal reversible.
  *
- * <p><strong>One forward pass cascades completely, and the argument for that is the interesting
- * part of this class.</strong> Justifications are visited in the order they were recorded, which is
- * the order their rules fired. A justification can only bind facts that existed when it fired, so
- * every fact it depends on positively was concluded <em>earlier</em> in that order -- dependencies
- * point backwards. And withdrawal only ever <em>removes</em> facts, which can never invalidate an
- * earlier justification it does not bind: removing a fact can only make a {@code NOT_EXISTS} more
- * satisfied and a {@code FOR_ALL} more satisfied, and a §6.4 condition reads bound payloads alone.
- * So by the time the pass reaches a justification, everything that could have invalidated it has
- * already happened. A {@code while (changed)} loop was written first and removed: no test could kill
- * it, because nothing can reach it.
+ * <p><strong>The pass repeats until a round changes nothing, and the history of why is worth
+ * keeping.</strong> When only {@code NOT_EXISTS} and {@code FOR_ALL} existed, one forward pass was
+ * provably enough: justifications are visited in the order their rules fired, a justification binds
+ * only facts that existed when it fired so its positive dependencies are earlier in that order, and
+ * withdrawal only ever <em>removes</em> facts -- which can only make an absence more true and a
+ * universal more true, and cannot touch a §6.4 condition, which reads bound payloads alone. A
+ * {@code while (changed)} loop was written, found unkillable by any mutation, and deleted.
  *
- * <p>What would break that argument, if anyone changes it: a conclusion shared by two
- * justifications (see {@link Justifications} for why there is no such thing here); a withdrawal that
- * inserted rather than only retracting; or a listener that inserts from {@code onRetract}, since
- * {@code workingMemory.retract} dispatches it synchronously and an insert from inside the pass
- * breaks "withdrawal only removes facts" exactly as a shared conclusion would. Any of the three
- * would let a later withdrawal invalidate an earlier justification, and the pass would need to
- * repeat. Either would let a later withdrawal invalidate an
+ * <p>§2.5's {@code ACCUMULATE} broke that argument in both halves, and the loop came back.
+ * Removing a fact <em>decreases</em> a {@code count} or a {@code sum} and moves a {@code min},
+ * {@code max} or {@code average}, so a withdrawal can make an earlier justification's {@code having}
+ * stop holding rather than start. And an accumulate reads its scope from <em>current</em> working
+ * memory rather than from the handles the tuple binds, so "dependencies point backwards" does not
+ * cover it either: a justification can depend on a fact that did not exist when it fired.
+ *
+ * <p>Termination is unchanged and does not need a bound. Nothing adds a justification during the
+ * pass -- only a firing does that, and firings do not happen here -- so every round that changes
+ * anything removes at least one justification from a finite set.
+ *
+ * <p>The other two things that would break the ordering argument, if the loop were ever removed
+ * again: a conclusion shared by two justifications (see {@link Justifications} for why there is no
+ * such thing here), and a listener that inserts from {@code onRetract}, since
+ * {@code workingMemory.retract} dispatches it synchronously. Either would let a later withdrawal invalidate an
  * earlier justification, and the pass would need to repeat.
  */
 public final class TruthMaintenance {
@@ -147,27 +152,41 @@ public final class TruthMaintenance {
       return retractedSuperseded;
     }
     int retracted = retractedSuperseded;
-    for (final ActivationKey key : justifications.keys()) {
-      final CompiledRule rule = rulesById.get(key.ruleId());
-      if (rule == null) {
+    boolean changed = true;
+    while (changed) {
+      changed = false;
+      for (final ActivationKey key : justifications.keys()) {
+        final CompiledRule rule = rulesById.get(key.ruleId());
+        if (rule == null) {
+          /*
+           * Unreachable: rulesById is built from the session's own CompiledRuleSet, which never
+           * changes -- §5.6's swap affects new sessions only -- and every key in the graph came
+           * from an activation of that set. Defensive rather than a case that happens, and it
+           * withdraws rather than throwing because a conclusion whose rule cannot be found is one
+           * nothing can ever re-derive.
+           */
+          retracted += withdraw(key);
+          changed = true;
+          continue;
+        }
         /*
-         * Unreachable: rulesById is built from the session's own CompiledRuleSet, which never
-         * changes -- §5.6's swap affects new sessions only -- and every key in the graph came from
-         * an activation of that set. Defensive rather than a case that happens, and it withdraws
-         * rather than throwing because a conclusion whose rule cannot be found is one nothing can
-         * ever re-derive.
+         * Read live rather than snapshotted, so a justification later in this round sees the types
+         * the round has already retracted. That is what lets a chain -- an Order concluding
+         * OrderUnpaid concluding AccountFlagged -- come apart in one traversal. The round that
+         * follows is for the cases a single traversal cannot reach: an accumulate whose total a
+         * later withdrawal moved, which the pass has already walked past.
          */
-        retracted += withdraw(key);
-        continue;
+        if (touches(rule) && !TupleMatch.holds(rule, key.handles(), workingMemory)) {
+          retracted += withdraw(key);
+          changed = true;
+        }
       }
       /*
-       * Read live rather than snapshotted, so a justification later in the pass sees the types this
-       * pass has already retracted. That is what makes a chain -- an Order concluding OrderUnpaid
-       * concluding AccountFlagged -- come apart in one traversal rather than needing another.
+       * NOT cleared between rounds. A withdrawal in this round records its own types, and clearing
+       * here would throw away exactly the signal the next round needs -- which is how the version
+       * of this loop that cleared per round managed to leave a conclusion standing forever, its
+       * types recorded and then discarded before anything could act on them.
        */
-      if (touches(rule) && !TupleMatch.holds(rule, key.handles(), workingMemory)) {
-        retracted += withdraw(key);
-      }
     }
     touchedTypes.clear();
     return retracted;

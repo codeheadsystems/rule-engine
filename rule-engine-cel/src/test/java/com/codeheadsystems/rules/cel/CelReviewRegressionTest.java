@@ -9,6 +9,7 @@ import com.codeheadsystems.rules.compiler.RuleCompiler;
 import com.codeheadsystems.rules.expr.ExpressionEvaluationException;
 import com.codeheadsystems.rules.observability.Explanation;
 import com.codeheadsystems.rules.observability.MatchExplainer;
+import com.codeheadsystems.rules.rule.AggregateFunction;
 import com.codeheadsystems.rules.rule.ExpressionConstraint;
 import com.codeheadsystems.rules.rule.ExpressionValue;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
@@ -309,6 +310,67 @@ class CelReviewRegressionTest {
             .as("at run time this throws and stops the cycle; it does not filter anything")
             .contains("could not be evaluated")
             .contains("stops the fire cycle");
+      }
+    }
+
+    @Test
+    @DisplayName("a condition can read an accumulate's answer, which is the only way to compare it")
+    void aConditionReadsAFold() {
+      /*
+       * The claim five documents make and that nothing checked: `having` takes a literal and nothing
+       * may join to an accumulate alias, so a §6.4 expression is the only way to compare a fold
+       * against anything else. It was documented before it worked -- compileCondition declared only
+       * the tuple's aliases, so the first thing an author would try failed with "undeclared
+       * reference to 'units'".
+       */
+      final CompiledRuleSet rules = compile(Rules.rule("over-cap")
+          .when("o", "Order", pattern -> pattern.constraint(
+              new ExpressionConstraint("units > o.cap", Set.of("o", "units"))))
+          .accumulate("units", "LineItem",
+              Rules.fold(AggregateFunction.SUM, "qty"),
+              pattern -> pattern.ref("orderId", "o.id"))
+          .then(actions -> actions.emit("e")).build());
+
+      try (RuleSession session = rules.newSession()) {
+        session.insert("Order", Facts.json("{\"id\": 1, \"cap\": 100}"));
+        session.insert("LineItem", Facts.json("{\"orderId\": 1, \"qty\": 60}"));
+        assertThat(session.fireAllRules().fired())
+            .as("60 is not over the cap of 100")
+            .isEmpty();
+
+        session.insert("LineItem", Facts.json("{\"orderId\": 1, \"qty\": 60}"));
+        assertThat(session.fireAllRules().fired())
+            .as("120 is, and the comparison is against a FIELD, which no having could express")
+            .hasSize(1);
+      }
+    }
+
+    @Test
+    @DisplayName("an $expr value can read one too, as the decimal a fold answers with")
+    void anExpressionValueReadsAFold() {
+      /*
+       * `units * 2.0`, not `units * 2`. A sum answers a decimal, which CEL binds as a double, and
+       * CEL has no double-times-int overload -- so the literal has to be a double. The alternative
+       * was to answer an integral node when every contribution happens to be integral, which was
+       * rejected: the same expression would then compile and evaluate on one day's data and fail on
+       * the next, which is worse than a type an author can read once and remember. Comparisons are
+       * unaffected -- the condition test above compares a fold against an int field -- because CEL
+       * does have cross-type comparison overloads.
+       */
+      final CompiledRuleSet rules = compile(Rules.rule("doubled")
+          .when("o", "Order")
+          .accumulate("units", "LineItem", Rules.fold(AggregateFunction.SUM, "qty"),
+              pattern -> pattern.ref("orderId", "o.id"))
+          .then(actions -> actions.emit("e", "twice",
+              new ExpressionValue("units * 2.0", Set.of("units")))).build());
+
+      try (RuleSession session = rules.newSession()) {
+        session.insert("Order", Facts.json("{\"id\": 1}"));
+        session.insert("LineItem", Facts.json("{\"orderId\": 1, \"qty\": 21}"));
+
+        assertThat(session.fireAllRules().fired().getFirst().emitted().getFirst().payload()
+            .get("twice").asInt())
+            .isEqualTo(42);
       }
     }
 

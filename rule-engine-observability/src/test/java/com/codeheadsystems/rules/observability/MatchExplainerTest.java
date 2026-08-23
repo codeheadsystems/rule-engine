@@ -1266,4 +1266,78 @@ class MatchExplainerTest {
               .contains("every fact in its scope"));
     }
   }
+
+  @Test
+  @DisplayName("a fold whose answer misses its having is the verdict")
+  void aHavingIsExplained() {
+    /*
+     * Before this the explainer built its tally from negations and universals only, so an
+     * accumulate was invisible and a rule blocked by its `having` reported "1 match(es); all
+     * eligible, none has fired yet" -- which points the author at refraction, the one thing that is
+     * not the problem.
+     */
+    final RuleDefinition bulk = Rules.rule("bulk")
+        .when("o", "Order", pattern -> pattern.eq("status", "OPEN"))
+        .accumulate("units", "LineItem",
+            Rules.fold(com.codeheadsystems.rules.rule.AggregateFunction.SUM, "qty",
+                com.codeheadsystems.rules.rule.Operator.GT, 100),
+            pattern -> pattern.ref("orderId", "o.id"))
+        .then(actions -> actions.emit("order.bulk"))
+        .build();
+    final CompiledRuleSet rules = Engine.compile(bulk);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("Order", Facts.obj("id", 1, "status", "OPEN"));
+      session.insert("LineItem", Facts.obj("orderId", 1, "qty", 10));
+
+      assertThat(session.fireAllRules().firedCount()).isZero();
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain(bulk.id());
+
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict -> assertThat(verdict)
+          .contains("1 combination(s) matched every pattern and join")
+          .contains("folds LineItem into 'units'")
+          .contains("fails its 'having'")
+          .doesNotContain("eligible"));
+      assertThat(explanation.quantifiers()).singleElement().satisfies(quantifier -> {
+        assertThat(quantifier.kind())
+            .isEqualTo(com.codeheadsystems.rules.rule.Quantifier.ACCUMULATE);
+        assertThat(quantifier.alias())
+            .describedAs("the accumulate's own alias, not the scope pattern's")
+            .isEqualTo("units");
+        assertThat(quantifier.suppressed()).isEqualTo(1);
+        assertThat(quantifier.example())
+            .describedAs("no single contributor is at fault, so none is named")
+            .isEmpty();
+      });
+      assertThat(explanation.describe()).contains("fold units: LineItem");
+    }
+  }
+
+  @Test
+  @DisplayName("a fold that passes is reported and not blamed")
+  void aPassingFoldIsNotBlamed() {
+    final RuleDefinition bulk = Rules.rule("bulk")
+        .when("o", "Order", pattern -> pattern.eq("status", "OPEN"))
+        .accumulate("units", "LineItem",
+            Rules.fold(com.codeheadsystems.rules.rule.AggregateFunction.SUM, "qty",
+                com.codeheadsystems.rules.rule.Operator.GT, 100),
+            pattern -> pattern.ref("orderId", "o.id"))
+        .then(actions -> actions.emit("order.bulk"))
+        .build();
+    final CompiledRuleSet rules = Engine.compile(bulk);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("Order", Facts.obj("id", 1, "status", "OPEN"));
+      session.insert("LineItem", Facts.obj("orderId", 1, "qty", 500));
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain(bulk.id());
+
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict ->
+          assertThat(verdict).contains("eligible"));
+      assertThat(explanation.quantifiers()).singleElement().satisfies(quantifier ->
+          assertThat(quantifier.suppressed()).isZero());
+      assertThat(session.fireAllRules().firedCount())
+          .describedAs("the explainer said eligible, so the engine must agree")
+          .isEqualTo(1);
+    }
+  }
 }

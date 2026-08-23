@@ -721,4 +721,63 @@ class TruthMaintenanceTest {
       }
     }
   }
+
+  @Nested
+  @DisplayName("a justification whose reason is an aggregate")
+  class OverAnAggregate {
+
+    @Test
+    @DisplayName("is withdrawn even when a LATER withdrawal is what moves the total")
+    void aLaterWithdrawalInvalidatesAnEarlierJustification() {
+      /*
+       * The case that brought back the cascade loop, and the one the single-pass argument could not
+       * cover. That argument had two halves and §2.5's ACCUMULATE breaks both: withdrawal only
+       * REMOVES facts, which can only make an absence or a universal more true -- but it decreases
+       * a count, so it can make an earlier `having` stop holding rather than start. And an
+       * accumulate reads its scope from CURRENT working memory rather than from the handles the
+       * tuple binds, so "dependencies point backwards" does not apply: this justification depends
+       * on a Flag that did not exist when it fired.
+       *
+       * Ordering is what makes it bite. `alert` is recorded FIRST and `sensor` SECOND, so a single
+       * forward pass visits `alert` while the Flag `sensor` concluded is still there, finds its
+       * count still passing, walks on, and then withdraws the Flag -- leaving Alert standing on a
+       * count of zero, permanently.
+       */
+      final List<RuleDefinition> chain = List.of(
+          Rules.rule("alert")
+              .when("o", "Order", pattern -> pattern.gt("total", 0))
+              .accumulate("flags", "Flag",
+                  Rules.count(com.codeheadsystems.rules.rule.Operator.GTE, 1),
+                  pattern -> pattern.ref("orderId", "o.id"))
+              .then(actions -> actions.insertLogical("Alert", "orderId", Rules.ref("o.id")))
+              .build(),
+          Rules.rule("sensor")
+              .when("s", "Sensor")
+              .then(actions -> actions.insertLogical("Flag", "orderId", Rules.ref("s.orderId")))
+              .build());
+      final CompiledRuleSet rules = Engine.compile(chain.toArray(new RuleDefinition[0]));
+      try (RuleSession session = rules.newSession()) {
+        session.insert("Order", Facts.obj("id", 1, "total", 100));
+        final FactHandle stated = session.insert("Flag", Facts.obj("orderId", 1));
+        session.fireAllRules();
+        assertThat(count(session, "Alert")).describedAs("one flag, so the count passes").isEqualTo(1);
+
+        final FactHandle sensor = session.insert("Sensor", Facts.obj("orderId", 1));
+        session.fireAllRules();
+        assertThat(count(session, "Flag")).describedAs("the sensor concluded a second").isEqualTo(2);
+
+        session.retract(stated);
+        session.retract(sensor);
+        session.fireAllRules();
+
+        assertThat(count(session, "Flag"))
+            .describedAs("the sensor is gone, so its conclusion goes")
+            .isZero();
+        assertThat(count(session, "Alert"))
+            .describedAs("and with no flags left the count no longer passes -- which only a second"
+                + " round of the pass can notice, because the first walked past it")
+            .isZero();
+      }
+    }
+  }
 }

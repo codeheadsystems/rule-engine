@@ -1,6 +1,8 @@
 package com.codeheadsystems.rules.session;
 
+import com.codeheadsystems.rules.rule.Accumulate;
 import com.codeheadsystems.rules.rule.ActionDefinition;
+import com.codeheadsystems.rules.rule.AggregateTest;
 import com.codeheadsystems.rules.rule.CallFunction;
 import com.codeheadsystems.rules.rule.CompiledRule;
 import com.codeheadsystems.rules.rule.Constraint;
@@ -19,6 +21,7 @@ import com.codeheadsystems.rules.rule.RetractFact;
 import com.codeheadsystems.rules.rule.SetField;
 import com.codeheadsystems.rules.rule.ValueExpr;
 import java.util.List;
+import java.util.Optional;
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -143,6 +146,17 @@ final class RuleSetFingerprint {
       for (final PatternDefinition pattern : rule.source().when()) {
         for (final Constraint constraint : pattern.constraints()) {
           hash = mix(hash, constraintHash(constraint));
+        }
+        /*
+         * An accumulate's `having` literal is a mutable JsonNode this rule set holds and hands back
+         * live, exactly as a FieldConstraint's is -- and it reaches the matching path through
+         * Comparisons.test, so a caller mutating it changes what every session decides. It is not
+         * in `constraints`, so it needs naming here or §5.5's invariant 1 has a hole the strict-mode
+         * re-check cannot see.
+         */
+        final Optional<AggregateTest> having = pattern.accumulate().flatMap(Accumulate::having);
+        if (having.isPresent()) {
+          hash = mix(hash, nodeHash(having.get().literal()));
         }
       }
       for (final ActionDefinition action : rule.source().then()) {

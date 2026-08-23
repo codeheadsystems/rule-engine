@@ -2,6 +2,8 @@ package com.codeheadsystems.rules.testkit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.codeheadsystems.rules.rule.AggregateFunction;
+import com.codeheadsystems.rules.rule.Operator;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.RuleSession;
 import java.util.List;
@@ -394,6 +396,60 @@ class DslEquivalenceTest {
       assertThat(fired.steps())
           .as("the unpaid order fires and the paid one does not")
           .hasSize(1);
+    }
+
+    @Test
+    @DisplayName("an accumulate's function, field, scope and having all survive the round trip")
+    void accumulate() {
+      /*
+       * Four things could be dropped independently here -- the function, the field it folds, the
+       * scope's constraints and the having -- and the version hash catches every one, because all
+       * four reach it through PatternDefinition's record toString. The firing half catches the one
+       * the hash cannot: that the bound VALUE is the same number on both sides, which is a
+       * statement about Accumulators rather than about the front end.
+       */
+      final FiringSequence fired = DslEquivalence.assertEquivalent(
+          file("""
+                - id: bulk-order
+                  when:
+                    - fact: Order
+                      as: o
+                      where:
+                        status: { eq: "OPEN" }
+                    - fact: LineItem
+                      as: units
+                      quantifier: accumulate
+                      accumulate:
+                        sum: "qty"
+                        having: { gt: 100 }
+                      where:
+                        orderId: { eq: { $ref: o.id } }
+                  then:
+                    - action: emit
+                      event: order.bulk
+                      payload: { units: { $ref: units } }
+              """),
+          List.of(Rules.rule("bulk-order")
+              .when("o", "Order", pattern -> pattern.eq("status", "OPEN"))
+              .accumulate("units", "LineItem",
+                  Rules.fold(AggregateFunction.SUM, "qty", Operator.GT, 100),
+                  pattern -> pattern.ref("orderId", "o.id"))
+              .then(actions -> actions.emit("order.bulk", "units", Rules.ref("units")))
+              .build()),
+          session -> {
+            session.insert("Order", Facts.json("""
+                {"id": 1, "status": "OPEN"}"""));
+            session.insert("LineItem", Facts.json("""
+                {"orderId": 1, "qty": 70}"""));
+            session.insert("LineItem", Facts.json("""
+                {"orderId": 1, "qty": 80}"""));
+          });
+
+      assertThat(fired.steps()).as("150 units, over the threshold").hasSize(1);
+      assertThat(fired.steps().getFirst().emitted().getFirst())
+          .as("and the bound value is the fold, not a placeholder -- identical on both sides,"
+              + " which the version hash cannot check because it is about Accumulators")
+          .contains("\"units\":150");
     }
 
     @Test

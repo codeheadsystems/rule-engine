@@ -19,6 +19,7 @@ page and the engine disagree, this page is wrong.
 - [`when`: patterns and operator maps](#when-patterns-and-operator-maps)
   - [Negation: `quantifier: notExists`](#negation-quantifier-notexists)
   - [Universals: `quantifier: forAll`](#universals-quantifier-forall)
+  - [Aggregates: `quantifier: accumulate`](#aggregates-quantifier-accumulate)
 - [The operator table](#the-operator-table)
 - [`$ref`, and the `$$` escape](#ref-and-the--escape)
 - [`then`: the five actions](#then-the-five-actions)
@@ -109,7 +110,7 @@ rules:
     when:
       - fact: Order            # required: the fact type
         as: o                  # required: the alias, unique within this rule
-        quantifier: exists     # optional: 'exists' (default), 'notExists' or 'forAll'
+        quantifier: exists     # 'exists' (default), 'notExists', 'forAll', 'accumulate'
         where:                 # optional: field name -> operator map
           total:  { gt: 10000 }
           status: { eq: "PENDING" }
@@ -162,8 +163,9 @@ rules:
 ```
 
 `quantifier` takes `exists` (the default, and what every pattern without the key means),
-`notExists` or [`forAll`](#universals-quantifier-forall). `accumulate` is a §1 deferral and is
-rejected by the schema; the interim answer is to compute it at ingestion and insert it as a fact.
+`notExists`, [`forAll`](#universals-quantifier-forall) or
+[`accumulate`](#aggregates-quantifier-accumulate). `collect` is a §1 deferral and is rejected by the
+schema; the interim answer is to gather at ingestion and insert the result as a fact.
 
 **A negated pattern binds nothing.** Its alias exists so that its own `where` can be written, and
 nothing else in the rule may name it — not a `$ref` from another pattern, not a `then` action, and
@@ -272,6 +274,75 @@ true`](#logical-true--a-conclusion-rather-than-a-fact).
 Evicting facts can only remove counterexamples, so a cap does not weaken the requirement — it
 strengthens it, and a cap that empties the scope makes the assertion vacuously true, which deletes
 it altogether.
+
+
+### Aggregates: `quantifier: accumulate`
+
+A pattern with `quantifier: accumulate` folds its scope into a value and **binds it**. Every
+constraint selects the scope; the `accumulate` block says what to compute and, optionally, what to
+require of the answer.
+
+```yaml
+apiVersion: rules.v1
+rules:
+  - id: bulk-order
+    when:
+      - fact: Order
+        as: o
+        where:
+          status: { eq: "OPEN" }
+      - fact: LineItem
+        as: units
+        quantifier: accumulate
+        accumulate:
+          sum: "qty"                        # one of sum, count, min, max, average
+          having: { gt: 100 }               # optional test on the answer
+        where:
+          orderId: { eq: { $ref: o.id } }   # the scope
+    then:
+      - action: emit
+        event: order.bulk
+        payload:
+          orderId: { $ref: o.id }
+          units:   { $ref: units }          # a bare alias: the answer, not a field
+```
+
+**The alias binds a value, not a fact.** Reference it with a bare `$ref: units` — there is no field,
+because there is no fact. What may read it: an action, a `condition:`, and the `accumulate` block's
+own `having`. What may **not**: a join from another pattern, because a join compares two facts.
+
+**The value is recomputed every time it is read**, never stored, so it cannot go stale. The cost is
+that reading it twice folds it twice.
+
+**Every constraint filters the scope**, `$ref` joins and literals alike — so
+`kind: { eq: "PHYSICAL" }` restricts what is summed. This is where `accumulate` differs from
+`forAll`, whose literals state a requirement instead.
+
+**The five functions.** `count: true` takes no field and counts the facts in scope. `sum`, `min`,
+`max` and `average` each name a dotted field. Exactly one per block. `collect` is not implemented.
+
+**Absent is not zero.** A fact whose field is missing or non-numeric is skipped, not folded as zero,
+which matches how the rest of the engine treats absence. So an `average` over a scope where some
+facts lack the field is the average of the ones that have it.
+
+**An empty scope answers differently per function:**
+
+| function | empty scope |
+|---|---|
+| `count` | `0` |
+| `sum` | `0` |
+| `min`, `max`, `average` | *absent* — a `having` on it does not hold |
+
+That asymmetry is deliberate: the mean of nothing is not zero, and treating it as zero would make
+`average: { lt: 10 }` true for an order with no line items.
+
+**Over a type the rule already binds it means "the others."** `Order as o` plus an `accumulate` over
+`Order` totals every *other* matching order, by the same implicit inequality that governs two
+positive aliases.
+
+**Never accumulate over a type the session evicts** (§4.4). Eviction changes the *number* rather
+than costing a firing, and a total that is quietly short by whatever aged out is harder to notice
+than a rule that quietly stops firing.
 
 ### Two operators on one field
 
@@ -643,7 +714,8 @@ Fix `schema-violation` errors first.
 | `empty-range` | A `between` with neither `from` nor `to` |
 | `malformed-operand` | An operand of the wrong shape for its operator |
 | `unknown-action` | A `then` verb outside the five |
-| `unknown-quantifier` | A pattern's `quantifier` outside `exists`, `notExists` and `forAll` |
+| `unknown-quantifier` | A pattern's `quantifier` outside `exists`, `notExists`, `forAll` and `accumulate` |
+| `malformed-accumulate` | An `accumulate` block that does not compute exactly one thing, or a `having` whose operator cannot test a value |
 | `malformed-action` | An action names a field path that will not compile, such as `a..b` |
 | `condition-not-implemented` | The CEL escape hatch; see below |
 | `semantic` | Everything the compiler checks: forward references, unknown aliases, duplicate ids, duplicate aliases, invalid regexes, malformed `where` and `$ref` field paths, unregistered function names |
@@ -886,8 +958,8 @@ time, insert it as a fact.
 
 ## Not implemented yet
 
-Deferred, each with an interim answer in §1 of the spec: accumulation, backward chaining, and
-temporal operators. The short version of all of them is the same: compute it at
+Deferred, each with an interim answer in §1 of the spec: `collect`, backward chaining, and temporal
+operators. The short version of all of them is the same: compute it at
 ingestion and insert the answer as a fact.
 
 The quantifiers are *not* on that list any more — [`notExists`](#negation-quantifier-notexists) and

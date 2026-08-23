@@ -163,9 +163,13 @@ final class Actions {
           .map(source -> new ExpressionValue(source, java.util.Set.of()));
     }
     if (References.isRef(value)) {
-      return References.readRef(value, pointer, diagnostics)
-          .flatMap(ref -> path(ref.field(), pointer, diagnostics)
-              .map(path -> new FieldRef(ref.alias(), path)));
+      // A value position, so a bare alias is allowed: it names an accumulate's answer, which has
+      // no field because it is not a fact (§2.5's second amendment).
+      return References.readRef(value, pointer, true, diagnostics)
+          .flatMap(ref -> ref.wholeAlias()
+              ? Optional.of(new FieldRef(ref.alias(), tools.jackson.core.JsonPointer.empty()))
+              : path(ref.field(), pointer, diagnostics)
+                  .map(path -> new FieldRef(ref.alias(), path)));
     }
     return References.readLiteral(value, pointer, diagnostics).map(Literal::new);
   }

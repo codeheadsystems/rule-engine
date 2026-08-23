@@ -36,6 +36,10 @@ import tools.jackson.core.JsonPointer;
  *     without any of them having to know negation exists
  * @param negations the compiled {@code NOT_EXISTS} patterns, in declaration order. Their join tests
  *     point at positions in {@code patterns}, and they are evaluated against a complete tuple
+ * @param accumulates the compiled {@code ACCUMULATE} patterns, in declaration order. They bind a
+ *     value rather than a fact, so like the two above they take no tuple position -- but unlike
+ *     them their alias may be read, by a {@code having}, a {@code $ref} in an action, and a §6.4
+ *     expression
  * @param universals the compiled {@code FOR_ALL} patterns, in declaration order. Held apart from
  *     {@code negations} because the two read their own tests differently: a negation conjoins its
  *     joins and constraints into one question, while a universal's joins choose the scope and its
@@ -56,6 +60,7 @@ public record CompiledRule(
     java.util.List<CompiledPattern> patterns,
     java.util.List<CompiledPattern> negations,
     java.util.List<CompiledPattern> universals,
+    java.util.List<CompiledAccumulate> accumulates,
     java.util.List<ActionDefinition> actions,
     Map<String, Set<JsonPointer>> testedPaths,
     Map<String, CompiledExpression> valueExpressions,
@@ -71,6 +76,7 @@ public record CompiledRule(
    * @param patterns the compiled positive LHS
    * @param negations the compiled negated patterns
    * @param universals the compiled universal patterns
+   * @param accumulates the compiled accumulate patterns
    * @param actions the RHS
    * @param testedPaths the per-type paths this rule reads
    * @param valueExpressions the compiled §6.4 expressions its actions use, by source text
@@ -83,6 +89,7 @@ public record CompiledRule(
     patterns = java.util.List.copyOf(patterns);
     negations = java.util.List.copyOf(negations);
     universals = java.util.List.copyOf(universals);
+    accumulates = java.util.List.copyOf(accumulates);
     actions = java.util.List.copyOf(actions);
     // Map.copyOf is shallow: without this the values would remain the compiler's live, mutable
     // sets, leaving state inside the shared rule set that an outside caller could clear.
@@ -133,6 +140,14 @@ public record CompiledRule(
     for (final CompiledPattern universal : universals) {
       types.add(universal.factType());
     }
+    /*
+     * And accumulated types, for the third time and the same reason. A LineItem arriving changes
+     * what sum(qty) answers, which can flip a `having` and can change what the right-hand side
+     * writes -- so a rule that did not name the type here would go on firing with a stale total.
+     */
+    for (final CompiledAccumulate accumulate : accumulates) {
+      types.add(accumulate.scope().factType());
+    }
     return types;
   }
 
@@ -181,6 +196,36 @@ public record CompiledRule(
    */
   public boolean hasUniversals() {
     return !universals.isEmpty();
+  }
+
+  /**
+   * Whether this rule folds anything over a scope (§2.5's {@code ACCUMULATE}).
+   *
+   * <p>A fast path for the agenda and for {@code RhsExecutor}, for the reason
+   * {@link #hasNegations()} is one.
+   *
+   * @return whether any {@code ACCUMULATE} pattern was compiled
+   */
+  public boolean hasAccumulates() {
+    return !accumulates.isEmpty();
+  }
+
+  /**
+   * The accumulate an alias names, if it names one.
+   *
+   * <p>A linear scan, because a rule has at most a handful and the alternative is a map in every
+   * compiled rule for a lookup the overwhelming majority never make.
+   *
+   * @param alias the name to resolve
+   * @return the accumulate, or empty when the alias names something else
+   */
+  public Optional<CompiledAccumulate> accumulateNamed(final String alias) {
+    for (final CompiledAccumulate accumulate : accumulates) {
+      if (accumulate.alias().equals(alias)) {
+        return Optional.of(accumulate);
+      }
+    }
+    return Optional.empty();
   }
 
   /**

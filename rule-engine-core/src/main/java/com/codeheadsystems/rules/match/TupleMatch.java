@@ -3,8 +3,11 @@ package com.codeheadsystems.rules.match;
 import com.codeheadsystems.rules.fact.Fact;
 import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.fact.WorkingMemory;
+import com.codeheadsystems.rules.rule.AggregateTest;
+import com.codeheadsystems.rules.rule.CompiledAccumulate;
 import com.codeheadsystems.rules.rule.CompiledPattern;
 import com.codeheadsystems.rules.rule.CompiledRule;
+import com.codeheadsystems.rules.value.Comparisons;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -24,9 +27,11 @@ import tools.jackson.databind.node.MissingNode;
  *
  * <p>It is the same question the matchers ask, in the same order and through the same code:
  * every handle still present, every alpha test, every join, §1's implicit inequality, then the
- * post-filters {@code RecomputingAgenda} applies -- {@link Negations}, {@link Universals} and
- * {@link Conditions}, in that order. Nothing here re-implements a predicate that exists elsewhere,
- * which is the whole reason those four classes are public.
+ * post-filters {@code RecomputingAgenda} applies -- {@link Negations}, {@link Universals},
+ * {@link Accumulators} for a {@code having}, and {@link Conditions}, in that order. Four gates, and
+ * all four have to be here: a justification is still valid only if the match still passes
+ * everything the agenda would ask of it. Nothing here re-implements a predicate that exists
+ * elsewhere, which is the whole reason those classes are public.
  *
  * <p><strong>What it deliberately does not check is refraction.</strong> A justification asks
  * whether the match still <em>holds</em>, not whether it would fire again; a fired match is
@@ -84,9 +89,27 @@ public final class TupleMatch {
         return false;
       }
     }
+    /*
+     * The accumulates last, and they have to be here at all: a conclusion justified by "this
+     * order's line items total over 100" must be withdrawn when a line item leaves and the total
+     * drops. Leaving them out would make truth maintenance correct for two of the three §2.5
+     * quantifiers and silently wrong for the third.
+     */
+    for (final CompiledAccumulate accumulate : rule.accumulates()) {
+      final Optional<AggregateTest> having = accumulate.having();
+      if (having.isPresent() && !Comparisons.test(having.get().op(),
+          Accumulators.evaluate(accumulate, bound, memory), having.get().literal())) {
+        return false;
+      }
+    }
     return Conditions.holdFor(rule, alias -> {
       final JsonNode payload = byAlias.get(alias);
-      return payload == null ? MissingNode.getInstance() : payload;
+      if (payload != null) {
+        return payload;
+      }
+      return rule.accumulateNamed(alias)
+          .map(accumulate -> Accumulators.evaluate(accumulate, bound, memory))
+          .orElseGet(MissingNode::getInstance);
     });
   }
 }

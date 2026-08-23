@@ -175,22 +175,14 @@ class CompilerValidationTest {
         .hasMessageContaining("RE2");
   }
 
-  @Test
-  @DisplayName("a deferred quantifier is rejected with a pointer to the interim answer")
-  void deferredQuantifiersRejected() {
-    // NOT_EXISTS is implemented (NegationTest) and so now is FOR_ALL (UniversalTest); ACCUMULATE
-    // remains §1's deferral, and this is the diagnostic that points an author at the interim answer
-    // rather than at a stack trace. It named NOT_EXISTS until negation landed, and FOR_ALL until
-    // §2.5's amendment landed.
-    final RuleDefinition rule = new RuleDefinition("quantified", 0,
-        List.of(new PatternDefinition("o", "Order", Quantifier.ACCUMULATE, List.<Constraint>of())),
-        Rules.rule("x").when("o", "Order").then(actions -> actions.emit("a")).build().then(),
-        false, Optional.empty(), Set.of());
-
-    assertThatThrownBy(() -> RuleCompiler.compile(List.of(rule)))
-        .isInstanceOf(RuleCompilationException.class)
-        .hasMessageContaining("not implemented");
-  }
+  /*
+   * There was a test here asserting that a deferred quantifier is rejected with a pointer to §1's
+   * interim answer. It named NOT_EXISTS until negation landed, FOR_ALL until §2.5's amendment, and
+   * ACCUMULATE until §2.5's second one -- and now every constant in the enum is implemented, so
+   * there is no deferred quantifier left to reject. The compiler's switch over Quantifier is
+   * exhaustive and has no default, which means adding a constant fails that compile rather than
+   * reaching a diagnostic this test would have checked.
+   */
 
   @Test
   @DisplayName("an expression with no compiler registered names the module that would accept it")
@@ -378,7 +370,7 @@ class CompilerValidationTest {
 
     assertThat(pinned.version())
         .describedAs("rule-set identity is a compatibility surface; see this test's comment")
-        .isEqualTo("sha256:8049b5f6bd96b20d");
+        .isEqualTo("sha256:c956532f981f3853");
   }
 
   @Test

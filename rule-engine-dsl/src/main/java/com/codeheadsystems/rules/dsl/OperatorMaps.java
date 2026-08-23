@@ -74,17 +74,17 @@ final class OperatorMaps {
       final JsonNode operand = entry.getValue();
       final String at = pointer + "/" + key;
       switch (key) {
-        case "eq" -> comparison(field, Operator.EQ, operand, at, diagnostics)
+        case "eq" -> comparison(field, comparisonOf(key).orElseThrow(), operand, at, diagnostics)
             .ifPresent(constraints::add);
-        case "ne" -> comparison(field, Operator.NE, operand, at, diagnostics)
+        case "ne" -> comparison(field, comparisonOf(key).orElseThrow(), operand, at, diagnostics)
             .ifPresent(constraints::add);
-        case "gt" -> ordered(field, Operator.GT, operand, at, diagnostics)
+        case "gt" -> ordered(field, comparisonOf(key).orElseThrow(), operand, at, diagnostics)
             .ifPresent(constraints::add);
-        case "gte" -> ordered(field, Operator.GTE, operand, at, diagnostics)
+        case "gte" -> ordered(field, comparisonOf(key).orElseThrow(), operand, at, diagnostics)
             .ifPresent(constraints::add);
-        case "lt" -> ordered(field, Operator.LT, operand, at, diagnostics)
+        case "lt" -> ordered(field, comparisonOf(key).orElseThrow(), operand, at, diagnostics)
             .ifPresent(constraints::add);
-        case "lte" -> ordered(field, Operator.LTE, operand, at, diagnostics)
+        case "lte" -> ordered(field, comparisonOf(key).orElseThrow(), operand, at, diagnostics)
             .ifPresent(constraints::add);
         case "between" -> constraints.addAll(between(field, operand, at, diagnostics));
         case "in" -> literalTest(field, Operator.IN, key, operand, at, diagnostics)
@@ -107,6 +107,35 @@ final class OperatorMaps {
       }
     }
     return constraints;
+  }
+
+  /**
+   * The {@link Operator} a scalar comparison spelling names, if it names one.
+   *
+   * <p><strong>The one table of comparison spellings in this module.</strong> The switch above
+   * reads it rather than repeating the six, and {@link Accumulates} reads it for an accumulate's
+   * {@code having} -- which is a comparison against a value with no field behind it, so it cannot
+   * go through the constraint path but must agree with it about what {@code gte} means. Two tables
+   * would be two answers, which is the drift CLAUDE.md names as the reason the three gates never
+   * duplicate each other.
+   *
+   * <p>Only the six that compare a scalar. {@code between} is two of them, {@code in} and
+   * {@code matches} and the field predicates need a field, and none of that is available to an
+   * aggregate -- the caller reports the rejection, because only it knows what the value is.
+   *
+   * @param written the spelling as the rule file has it
+   * @return the operator, or empty when the spelling is not a scalar comparison
+   */
+  static Optional<Operator> comparisonOf(final String written) {
+    return switch (written) {
+      case "eq" -> Optional.of(Operator.EQ);
+      case "ne" -> Optional.of(Operator.NE);
+      case "gt" -> Optional.of(Operator.GT);
+      case "gte" -> Optional.of(Operator.GTE);
+      case "lt" -> Optional.of(Operator.LT);
+      case "lte" -> Optional.of(Operator.LTE);
+      default -> Optional.empty();
+    };
   }
 
   /**

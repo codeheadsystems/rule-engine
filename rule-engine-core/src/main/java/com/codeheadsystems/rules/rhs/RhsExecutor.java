@@ -5,6 +5,7 @@ import com.codeheadsystems.rules.fact.Fact;
 import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.fact.WorkingMemory;
 import com.codeheadsystems.rules.listener.RuleEngineListener;
+import com.codeheadsystems.rules.match.Accumulators;
 import com.codeheadsystems.rules.match.Activation;
 import com.codeheadsystems.rules.rule.ActionDefinition;
 import com.codeheadsystems.rules.rule.CallFunction;
@@ -503,8 +504,9 @@ public final class RhsExecutor {
    * @param ref the reference
    * @param activation the firing match
    * @param staging the buffer
-   * @return the payload of the fact the alias names
-   * @throws IllegalStateException if the alias is unbound
+   * @return the payload of the fact the alias names, the staged payload of a fact this same
+   *     right-hand side is inserting, or the folded answer of an accumulate; empty when the alias
+   *     names none of the three
    */
   private Optional<JsonNode> payloadOf(final String alias, final Activation activation,
       final Staging staging) {
@@ -512,7 +514,22 @@ public final class RhsExecutor {
       return Optional.of(activation.tuple().payloadOf(alias, workingMemory));
     }
     final PendingInsert insert = staging.insertsByAlias.get(alias);
-    return insert == null ? Optional.empty() : Optional.of(insert.payload);
+    if (insert != null) {
+      return Optional.of(insert.payload);
+    }
+    /*
+     * An accumulate alias, folded HERE rather than carried in the tuple (§2.5's second amendment).
+     * The value is computed from working memory at the moment it is read, which is the same thing
+     * payloadOf does above for a handle and is what keeps §3.2.2's invariant intact -- an aggregate
+     * stored in a materialised tuple would be stale the instant any fact in its scope moved.
+     *
+     * Read at staging time, so it sees working memory as it was before this right-hand side
+     * committed anything. That is the same instant every other $ref reads at, which is the property
+     * §4.6 wants: every value in one firing comes from one consistent view.
+     */
+    return activation.rule().accumulateNamed(alias)
+        .map(accumulate -> Accumulators.evaluate(
+            accumulate, activation.tuple().boundFacts(), workingMemory));
   }
 
   /**

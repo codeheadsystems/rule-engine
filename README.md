@@ -154,9 +154,25 @@ unit; and there is **exactly one justification per conclusion**, so two matches 
 thing produce two facts rather than one held up twice. Deduplicating by payload is a separate
 feature from withdrawing — it would change what §2.1 means by fact identity — and is not smuggled in.
 
-**What does not exist:** accumulation and CEP, which are §1 non-goals with documented interim
-answers, and distributed evaluation, which §5's immutability split makes feasible without making it
-built.
+**Accumulation now exists too**, as Phase 6's fourth slice: `sum`, `count`, `min`, `max` and
+`average` over a scope, with an optional `having` on the answer. §1 deferred it because "incremental
+aggregate maintenance under retract is its own correctness problem" — and that problem never arose,
+because nothing here is maintained incrementally. The fold is computed from working memory at each
+read, so a retract has nothing to correct.
+
+That read-time evaluation is also what keeps §3.2.2's invariant intact. **The alias binds a value,
+and the value is never stored** — an aggregate is the most stale-able thing in the engine, and under
+the streaming matcher a tuple is materialised and held across cycles, so a stored total would be
+wrong the moment any fact in its scope moved. Every constraint selects the scope (joins *and*
+literals, unlike `FOR_ALL`), the answer is readable from an action, a §6.4 expression and its own
+`having`, and nothing may join to it, because a join compares two facts and there is no fact on that
+side. Two arithmetic decisions are semantics rather than implementation: an absent field is skipped
+rather than folded as zero, and an empty scope gives `0` for `count`/`sum` but *absent* for
+`min`/`max`/`average`.
+
+**What does not exist:** `collect`, which answers with a collection and so has no meaningful
+`having`; CEP; and distributed evaluation, which §5's immutability split makes feasible without
+making it built.
 
 ## Modules
 

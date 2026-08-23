@@ -3,11 +3,14 @@ package com.codeheadsystems.rules.observability;
 import com.codeheadsystems.rules.expr.ExpressionBindings;
 import com.codeheadsystems.rules.fact.Fact;
 import com.codeheadsystems.rules.fact.FactHandle;
+import com.codeheadsystems.rules.match.Accumulators;
 import com.codeheadsystems.rules.match.ActivationKey;
 import com.codeheadsystems.rules.match.Negations;
 import com.codeheadsystems.rules.match.Scan;
 import com.codeheadsystems.rules.match.Universals;
+import com.codeheadsystems.rules.rule.AggregateTest;
 import com.codeheadsystems.rules.rule.AlphaTest;
+import com.codeheadsystems.rules.rule.CompiledAccumulate;
 import com.codeheadsystems.rules.rule.CompiledPattern;
 import com.codeheadsystems.rules.rule.CompiledRule;
 import com.codeheadsystems.rules.rule.ExpressionTest;
@@ -15,6 +18,7 @@ import com.codeheadsystems.rules.rule.JoinTest;
 import com.codeheadsystems.rules.rule.Quantifier;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
 import com.codeheadsystems.rules.session.RuleSession;
+import com.codeheadsystems.rules.value.Comparisons;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -67,8 +71,8 @@ import tools.jackson.databind.node.MissingNode;
  *
  * <p>So quantifiers are evaluated here too, against each complete tuple and <strong>before</strong>
  * the §6.4 conditions, which is the order {@code RecomputingAgenda.postFilter} applies them in. The
- * predicates are not re-implemented: they are {@link Negations#scan} and {@link Universals#scan},
- * the same code the agenda decides with. That sharing is the point rather than a convenience -- a
+ * predicates are not re-implemented: they are {@link Negations#scan}, {@link Universals#scan} and
+ * {@link Accumulators#evaluate}, the same code the agenda decides with. That sharing is the point rather than a convenience -- a
  * diagnostic that disagrees with the engine it is diagnosing sends an author to fix a rule that is
  * already correct -- and it is also what supplies the part an author cannot derive, the
  * {@link QuantifierResult#example()} that says <em>which</em> fact is standing in the way.
@@ -429,14 +433,26 @@ public final class MatchExplainer {
    */
   private List<Quantified> quantified(final CompiledRule rule) {
     final List<Quantified> all =
-        new ArrayList<>(rule.negations().size() + rule.universals().size());
+        new ArrayList<>(rule.negations().size() + rule.universals().size()
+            + rule.accumulates().size());
     for (final CompiledPattern negation : rule.negations()) {
       all.add(new Quantified(Quantifier.NOT_EXISTS, negation,
-          session.workingMemory().factsOfType(negation.factType()).toList()));
+          session.workingMemory().factsOfType(negation.factType()).toList(), Optional.empty()));
     }
     for (final CompiledPattern universal : rule.universals()) {
       all.add(new Quantified(Quantifier.FOR_ALL, universal,
-          session.workingMemory().factsOfType(universal.factType()).toList()));
+          session.workingMemory().factsOfType(universal.factType()).toList(), Optional.empty()));
+    }
+    /*
+     * Accumulates last, matching RecomputingAgenda.postFilter -- negations, universals, havings,
+     * then §6.4's conditions. Only the ones carrying a `having` can suppress anything, but all of
+     * them are listed: an author looking at a silent rule needs to see the fold that did not
+     * suppress it as much as the one that did.
+     */
+    for (final CompiledAccumulate accumulate : rule.accumulates()) {
+      all.add(new Quantified(Quantifier.ACCUMULATE, accumulate.scope(),
+          session.workingMemory().factsOfType(accumulate.scope().factType()).toList(),
+          Optional.of(accumulate)));
     }
     return all;
   }
@@ -447,8 +463,10 @@ public final class MatchExplainer {
    * @param kind which quantifier it carries
    * @param pattern the compiled pattern, whose join tests point at positive positions
    * @param population every fact of its type, snapshotted when the walk started
+   * @param accumulate the fold, present only for {@link Quantifier#ACCUMULATE}
    */
-  private record Quantified(Quantifier kind, CompiledPattern pattern, List<Fact> population) {
+  private record Quantified(Quantifier kind, CompiledPattern pattern, List<Fact> population,
+      Optional<CompiledAccumulate> accumulate) {
   }
 
   /**
@@ -561,6 +579,30 @@ public final class MatchExplainer {
   private boolean removedByQuantifier(final long[] bound, final int[] budget, final Tally tally) {
     for (int index = 0; index < tally.size(); index++) {
       final Quantified quantified = tally.quantified(index);
+      if (quantified.kind() == Quantifier.ACCUMULATE) {
+        final CompiledAccumulate accumulate = quantified.accumulate().orElseThrow();
+        final Optional<AggregateTest> having = accumulate.having();
+        if (having.isEmpty()) {
+          // A binding-only accumulate suppresses nothing, so nothing is folded and nothing is
+          // charged. Debiting here anyway -- which an earlier version did, before the emptiness
+          // check -- burned the budget on work never done and could truncate the walk into "there
+          // may be a match" on a rule this class could have answered exactly.
+          continue;
+        }
+        // Charged at the population's size: a fold has no witness to short-circuit on, so it walks
+        // the whole scope every time. That is the honest number here, unlike for the two scans.
+        budget[0] -= quantified.population().size();
+        if (!Comparisons.test(having.get().op(),
+            Accumulators.evaluate(accumulate, bound, quantified.population(),
+                session.workingMemory()),
+            having.get().literal())) {
+          // No example handle: what suppressed the match is the ANSWER, and naming one contributor
+          // would point the author at a fact that is doing nothing wrong.
+          tally.suppress(index, Tally.NO_EXAMPLE);
+          return true;
+        }
+        continue;
+      }
       final Scan scan = quantified.kind() == Quantifier.NOT_EXISTS
           ? Negations.scan(quantified.pattern(), bound, quantified.population(),
               session.workingMemory())
@@ -587,7 +629,7 @@ public final class MatchExplainer {
   private static final class Tally {
 
     /** No fact has this handle id, so it is unambiguously "nothing recorded yet". */
-    private static final long NO_EXAMPLE = -1L;
+    static final long NO_EXAMPLE = -1L;
 
     private final List<Quantified> quantified;
     private final int[] suppressedBy;
@@ -658,7 +700,8 @@ public final class MatchExplainer {
       final List<QuantifierResult> results = new ArrayList<>(quantified.size());
       for (int index = 0; index < quantified.size(); index++) {
         final Quantified one = quantified.get(index);
-        results.add(new QuantifierResult(one.kind(), one.pattern().alias(),
+        results.add(new QuantifierResult(one.kind(),
+            one.accumulate().map(CompiledAccumulate::alias).orElseGet(one.pattern()::alias),
             one.pattern().factType(), one.population().size(), suppressedBy[index],
             exampleOf[index] == NO_EXAMPLE ? Optional.empty() : Optional.of(exampleOf[index])));
       }
@@ -827,8 +870,10 @@ public final class MatchExplainer {
    *
    * <p>The verdict a rule author is least able to reach on their own, and the one this class used to
    * get exactly backwards. Every pattern matched, every join held, and the rule is silent because of
-   * a fact it does not bind -- one that is there and was asserted not to be, or one in scope that
-   * fails what was asserted of everything in scope. Either way the answer has to name it. A sentence
+   * facts it does not bind -- one that is there and was asserted not to be, one in scope that fails
+   * what was asserted of everything in scope, or a fold whose answer misses its {@code having}. The
+   * first two name the fact; the third cannot, because what suppressed the match is the answer and
+   * no single contributor is at fault. A sentence
    * saying only "a quantifier suppressed the match" leaves the author scanning a whole population
    * for a fact they believe is absent or compliant.
    *
@@ -849,7 +894,10 @@ public final class MatchExplainer {
     final StringBuilder text = new StringBuilder()
         .append(matches.suppressedByQuantifier())
         .append(" combination(s) matched every pattern and join, but ");
-    if (worst.kind() == Quantifier.NOT_EXISTS) {
+    if (worst.kind() == Quantifier.ACCUMULATE) {
+      text.append("the rule folds ").append(worst.factType()).append(" into '")
+          .append(worst.alias()).append("' and the answer fails its 'having' (§2.5's ACCUMULATE)");
+    } else if (worst.kind() == Quantifier.NOT_EXISTS) {
       text.append("the rule asserts that no ").append(worst.factType())
           .append(" matches '").append(worst.alias()).append("' and ")
           .append(worst.example().map(handle -> "fact #" + handle + " does").orElse("one does"))

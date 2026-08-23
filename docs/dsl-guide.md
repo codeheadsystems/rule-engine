@@ -288,6 +288,59 @@ type your session evicts. That last one bites harder here: eviction only ever re
 counterexamples, so a cap makes the requirement *easier* to satisfy, and a cap that empties the
 scope deletes it.
 
+## Adding things up
+
+`quantifier: accumulate` folds a set of facts into one value and hands it to you.
+
+```yaml
+apiVersion: rules.v1
+rules:
+  - id: bulk-order
+    when:
+      - fact: Order
+        as: o
+        where:
+          status: { eq: "OPEN" }
+      - fact: LineItem
+        as: units
+        quantifier: accumulate
+        accumulate:
+          sum: "qty"
+          having: { gt: 100 }
+        where:
+          orderId: { eq: { $ref: o.id } }
+    then:
+      - action: emit
+        event: order.bulk
+        payload:
+          orderId: { $ref: o.id }
+          units:   { $ref: units }
+```
+
+Read it in three parts. The `where` says *which* line items — this order's. The `sum` says what to
+do with them. The `having` says the rule only fires when the answer clears 100. And `units` is now a
+name you can use in `then`, written as a bare `$ref: units` because it is a number, not a fact.
+
+Five functions: `sum`, `count`, `min`, `max`, `average`. `count: true` takes no field; the rest name
+one. One per block.
+
+Three things that will catch you out:
+
+*An empty set is not zero for everything.* `count` and `sum` of nothing are `0`. `min`, `max` and
+`average` of nothing are *absent*, so a `having` on them does not hold. That is on purpose — the
+average of no orders is not zero, and pretending otherwise makes "average under 10" true for a
+customer who has never bought anything.
+
+*A missing field is skipped, not zero.* Average three line items where one has no price and you get
+the average of two. If you want the ones without a price excluded from the count as well, say so in
+the `where` with `hasField`.
+
+*You cannot join to it.* `$ref: units` works in `then` and in a `condition:`. It does not work in
+another pattern's `where`, because a join matches two facts and `units` is a number.
+
+And the same eviction warning as the other quantifiers, for a worse reason: if you cap `LineItem`,
+your totals go quietly wrong rather than your rule going quiet.
+
 ## Withdrawing a conclusion
 
 A rule that concludes something because a fact was *absent* has a problem the moment that fact turns

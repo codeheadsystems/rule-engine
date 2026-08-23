@@ -300,6 +300,13 @@ concurrently" an extra artifact to discover.
   between same-type aliases — and `JoinPlan` symmetrises it, because either end may be bound first.
 - **Collections are flattened at ingestion**, not matched inside a fact. JSON Pointer has no
   wildcard.
+- **`ACCUMULATE` binds a value that is folded at read time, never stored** (§2.5's second
+  amendment). That is what keeps "tuples bind handles, never values" true: a stored aggregate goes
+  stale the instant any fact in its scope moves, and the streaming matcher holds tuples across
+  cycles. Every constraint selects the scope, unlike `FOR_ALL`. The answer is readable from an
+  action, a §6.4 expression and its own `having`; nothing may join to it. An absent field is skipped
+  rather than folded as zero, and an empty scope is `0` for `count`/`sum` and *absent* for
+  `min`/`max`/`average`.
 - **A quantified pattern (`NOT_EXISTS`, `FOR_ALL`) binds nothing, and nothing may name its alias** —
   not a `$ref`, not an action, not an `insertFact`'s `as`, not a §6.4 expression. All four are
   compile errors that name *which quantifier* it is, because an alias the author can see, reported

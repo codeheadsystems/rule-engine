@@ -5,9 +5,12 @@ import com.codeheadsystems.rules.access.Paths;
 import com.codeheadsystems.rules.expr.CompiledExpression;
 import com.codeheadsystems.rules.expr.ExpressionCompilationException;
 import com.codeheadsystems.rules.network.Network;
+import com.codeheadsystems.rules.rule.Accumulate;
 import com.codeheadsystems.rules.rule.ActionDefinition;
+import com.codeheadsystems.rules.rule.AggregateFunction;
 import com.codeheadsystems.rules.rule.AlphaTest;
 import com.codeheadsystems.rules.rule.CallFunction;
+import com.codeheadsystems.rules.rule.CompiledAccumulate;
 import com.codeheadsystems.rules.rule.CompiledPattern;
 import com.codeheadsystems.rules.rule.CompiledRule;
 import com.codeheadsystems.rules.rule.Constraint;
@@ -199,7 +202,7 @@ public final class RuleCompiler {
     // rather than one that says the alias does not exist when it plainly does.
     final Map<String, Integer> aliasPositions = new LinkedHashMap<>();
     final List<String> aliasTypes = new ArrayList<>();
-    /** Aliases of quantified patterns, which bind nothing, so nothing may reference one. */
+    /** Aliases of quantified patterns, none of which takes a tuple position. */
     final Map<String, Quantifier> nonBindingAliases = new LinkedHashMap<>();
     /*
      * Positions are assigned to POSITIVE patterns only, and that is the whole trick that keeps the
@@ -218,14 +221,24 @@ public final class RuleCompiler {
        * prevent -- a quantifier nobody implemented, silently matching.
        */
       switch (pattern.quantifier()) {
-        case EXISTS_AT_LEAST_ONE, NOT_EXISTS, FOR_ALL -> {
-          // Implemented; the partition below decides where each one lands.
+        case EXISTS_AT_LEAST_ONE, NOT_EXISTS, FOR_ALL, ACCUMULATE -> {
+          // All implemented; the partition below decides where each one lands. Exhaustive and
+          // without a default, so adding a constant fails this compile rather than shipping.
         }
-        case ACCUMULATE -> diagnostics.add(rule.id() + ": quantifier " + pattern.quantifier()
-            + " on alias '" + pattern.alias() + "' is not implemented. See spec section 1"
-            + " for the interim answer");
       }
-      if (bindsNoFact(pattern.quantifier())) {
+      /*
+       * The accumulate spec and the quantifier have to agree, in both directions. A pattern
+       * carrying one without the quantifier would compile and never fold; a quantifier without one
+       * has nothing to compute. Refusing both by name costs nothing and saves an author staring at
+       * a rule that looks like it aggregates.
+       */
+      if (pattern.accumulate().isPresent() != (pattern.quantifier() == Quantifier.ACCUMULATE)) {
+        diagnostics.add(rule.id() + ": alias '" + pattern.alias() + "': "
+            + (pattern.accumulate().isPresent()
+                ? "an 'accumulate' block needs quantifier: accumulate"
+                : "quantifier: accumulate needs an 'accumulate' block saying what to compute"));
+      }
+      if (takesNoPosition(pattern.quantifier())) {
         /*
          * A quantified alias is still checked for duplication, because "bound twice" would be just
          * as confusing here -- but it is recorded in a separate map, since nothing may reference it.
@@ -269,9 +282,10 @@ public final class RuleCompiler {
     final List<CompiledPattern> patterns = new ArrayList<>(aliasTypes.size());
     final List<CompiledPattern> negations = new ArrayList<>();
     final List<CompiledPattern> universals = new ArrayList<>();
+    final List<CompiledAccumulate> accumulates = new ArrayList<>();
     int positive = 0;
     for (final PatternDefinition pattern : rule.when()) {
-      if (bindsNoFact(pattern.quantifier())) {
+      if (takesNoPosition(pattern.quantifier())) {
         /*
          * Compiled at a notional position AFTER every positive one, which is not a trick: the third
          * argument only decides which earlier same-type positions this pattern's fact must differ
@@ -282,10 +296,12 @@ public final class RuleCompiler {
          */
         final CompiledPattern compiled = compilePattern(rule, pattern, aliasTypes.size(),
             aliasPositions, aliasTypes, nonBindingAliases);
-        if (pattern.quantifier() == Quantifier.NOT_EXISTS) {
-          negations.add(compiled);
-        } else {
-          universals.add(compiled);
+        switch (pattern.quantifier()) {
+          case NOT_EXISTS -> negations.add(compiled);
+          case FOR_ALL -> universals.add(compiled);
+          case ACCUMULATE -> compileAccumulate(rule, pattern, compiled)
+              .ifPresent(accumulates::add);
+          case EXISTS_AT_LEAST_ONE -> throw new IllegalStateException("positive pattern here");
         }
       } else {
         patterns.add(compilePattern(rule, pattern, positive, aliasPositions, aliasTypes,
@@ -300,8 +316,8 @@ public final class RuleCompiler {
        * define. For FOR_ALL it would be worse than undefined: the quantifier is vacuously true over
        * an empty scope, so such a rule would fire on an empty working memory.
        */
-      diagnostics.add(rule.id() + ": no pattern binds a fact; a rule needs at least one pattern that"
-          + " is neither NOT_EXISTS nor FOR_ALL");
+      diagnostics.add(rule.id() + ": no pattern binds a fact; a rule needs at least one pattern"
+          + " that is not NOT_EXISTS, FOR_ALL or ACCUMULATE");
     }
 
     validateActions(rule, aliasPositions.keySet(), nonBindingAliases);
@@ -319,7 +335,7 @@ public final class RuleCompiler {
     }
     return Optional.of(new CompiledRule(
         rule.id(), rule.salience(), rule.noLoop(), rule.agendaGroup(), patterns, negations,
-        universals, rule.then(),
+        universals, accumulates, rule.then(),
         pathsByRule.getOrDefault(rule.id(), Map.of()),
         valueExpressions, rule));
   }
@@ -577,6 +593,111 @@ public final class RuleCompiler {
   }
 
   /**
+   * Compiles what an accumulate computes, on top of the pattern that selects its scope.
+   *
+   * @param rule the rule being compiled
+   * @param pattern the source pattern
+   * @param scope its compiled scope
+   * @return the compiled accumulate, or empty when it was rejected
+   */
+  private Optional<CompiledAccumulate> compileAccumulate(final RuleDefinition rule,
+      final PatternDefinition pattern, final CompiledPattern scope) {
+    final Optional<Accumulate> source = pattern.accumulate();
+    if (source.isEmpty()) {
+      // Already reported by the quantifier/spec agreement check; nothing to add.
+      return Optional.empty();
+    }
+    final Accumulate accumulate = source.get();
+    final String where = rule.id() + ": " + pattern.alias();
+    if (!havingIsUsable(accumulate, where)) {
+      return Optional.empty();
+    }
+    /*
+     * COUNT asks about the facts, not about anything in them, so a field on it is refused rather
+     * than ignored -- an author who writes count(total) means something, and it is not what COUNT
+     * does. Every other function needs one for the same reason in reverse.
+     */
+    if (accumulate.function() == AggregateFunction.COUNT) {
+      if (accumulate.field().isPresent()) {
+        diagnostics.add(where + ": count takes no field; it counts the facts in scope, and a field"
+            + " would suggest it skips the ones without that field");
+        return Optional.empty();
+      }
+      return Optional.of(new CompiledAccumulate(pattern.alias(), scope, accumulate.function(),
+          Optional.empty(), accumulate.having()));
+    }
+    if (accumulate.field().isEmpty()) {
+      diagnostics.add(where + ": " + accumulate.function().name().toLowerCase(Locale.ROOT)
+          + " needs a field to fold over");
+      return Optional.empty();
+    }
+    final Optional<JsonPointer> path = compilePath(where, accumulate.field().get());
+    if (path.isEmpty()) {
+      return Optional.empty();
+    }
+    /*
+     * Recorded as a tested path of the accumulated type, and it has to be. §3.4.1's update gate is
+     * upstream of every matcher, so a change to a field only an accumulate reads would propagate
+     * nothing and the rule would go on firing with a stale total -- the same defect CLAUDE.md
+     * records from the §6.4 condition case, where no differential test could catch it because every
+     * matcher was identically wrong.
+     */
+    record(rule.id(), scope.factType(), path.get());
+    return Optional.of(new CompiledAccumulate(pattern.alias(), scope, accumulate.function(),
+        Optional.of(new JsonPointerAccessor(path.get())), accumulate.having()));
+  }
+
+  /**
+   * Renders a compiled pointer back as the dotted path an author wrote.
+   *
+   * <p>A diagnostic that echoes {@code units/value} at somebody who typed {@code units.value} makes
+   * them look for a path they do not have. Everything else in this compiler quotes the author's own
+   * spelling back at them; this is what lets the one reference diagnostic built from a compiled
+   * pointer do the same.
+   *
+   * @param path the compiled pointer, which must address a field rather than the root -- the one
+   *     caller checks that before asking, and the {@code substring} below would throw on an empty
+   *     one
+   * @return the dotted form, without a leading separator
+   */
+  private static String dotted(final JsonPointer path) {
+    return path.toString().replace('/', '.').substring(1);
+  }
+
+  /**
+   * Whether an accumulate's {@code having} names an operator that can test a bare value.
+   *
+   * <p><strong>The compiler checks this even though the DSL's operator table already narrows
+   * it.</strong> CLAUDE.md's rule is that a gate ahead never excuses a gate behind, and here the
+   * consequence is not a loosened constraint but a throw on the matching path: {@code Comparisons}
+   * calls {@code asBoolean()} for {@code HAS_FIELD} and {@code IS_NULL} and reaches for a
+   * precompiled pattern for {@code MATCHES}, and Jackson 3's accessors throw on a type mismatch
+   * rather than answering false. An {@code AggregateTest} is the third position in the engine that
+   * reaches {@code Comparisons.test}, and the other two are guarded here for exactly this reason.
+   *
+   * <p>{@code IN} and {@code NOT_IN} do not throw but are refused anyway: membership of a set is a
+   * question about a field's value against a list, and a fold answers one number.
+   *
+   * @param accumulate the source spec
+   * @param where the diagnostic prefix
+   * @return whether the test is safe to evaluate, true when there is no test
+   */
+  private boolean havingIsUsable(final Accumulate accumulate, final String where) {
+    if (accumulate.having().isEmpty()) {
+      return true;
+    }
+    final Operator op = accumulate.having().get().op();
+    return switch (op) {
+      case EQ, NE, GT, GTE, LT, LTE -> true;
+      default -> {
+        diagnostics.add(where + ": 'having' cannot use " + op + "; a fold answers one value, so"
+            + " only EQ, NE, GT, GTE, LT and LTE apply");
+        yield false;
+      }
+    };
+  }
+
+  /**
    * Whether a quantifier makes its pattern contribute no binding to the tuple.
    *
    * <p>The single question the two compilation loops branch on, asked in one place so they cannot
@@ -593,6 +714,22 @@ public final class RuleCompiler {
   }
 
   /**
+   * Whether a quantifier makes its pattern take no tuple position.
+   *
+   * <p>Wider than {@link #bindsNoFact}, and the gap between them is {@code ACCUMULATE}. All three
+   * are absent from {@code patterns} and compile against the positive positions rather than into
+   * them -- but a negation and a universal bind <em>nothing</em>, where an accumulate binds a
+   * value. So they share a compilation path and differ in what may reference them, which is why the
+   * compiler keeps two questions rather than one.
+   *
+   * @param quantifier the pattern's quantifier
+   * @return whether the pattern contributes no tuple position
+   */
+  private static boolean takesNoPosition(final Quantifier quantifier) {
+    return bindsNoFact(quantifier) || quantifier == Quantifier.ACCUMULATE;
+  }
+
+  /**
    * How to say that an alias names a pattern binding no fact.
    *
    * <p>Three places ask this and a fourth phrases it inline, and all of them are answering the same
@@ -606,10 +743,24 @@ public final class RuleCompiler {
    * @return the clause, ready to follow "which "
    */
   private static String bindsNothing(final Quantifier quantifier) {
-    return quantifier == Quantifier.NOT_EXISTS
-        ? "is a NOT_EXISTS pattern. A negated pattern binds no fact, so nothing can reference it"
-        : "is a FOR_ALL pattern. A universal pattern asserts something about every fact in its"
-            + " scope rather than binding one, so nothing can reference it";
+    return switch (quantifier) {
+      case NOT_EXISTS ->
+          "is a NOT_EXISTS pattern. A negated pattern binds no fact, so nothing can reference it";
+      case FOR_ALL -> "is a FOR_ALL pattern. A universal pattern asserts something about every fact"
+          + " in its scope rather than binding one, so nothing can reference it";
+      /*
+       * The one of the three that says "not HERE" rather than "not at all", and it reaches three
+       * positions that each fail for the same reason: a join has no fact on this side, a setField
+       * has nothing to write to, a retractFact has nothing to remove. Reporting it as
+       * unreferenceable would send an author to delete a binding they are right to want, so the
+       * message names what does work instead.
+       */
+      case ACCUMULATE -> "is an ACCUMULATE pattern, which binds a value rather than a fact -- so"
+          + " there is nothing here to write to, retract, or join against. Reading the answer is"
+          + " fine: name it in an action's value, in a §6.4 expression, or test it with the"
+          + " accumulate's own 'having'";
+      case EXISTS_AT_LEAST_ONE -> "is not bound by this rule";
+    };
   }
 
   /**
@@ -644,8 +795,7 @@ public final class RuleCompiler {
             if (nonBindingAliases.containsKey(alias)) {
               diagnostics.add(rule.id() + ": insertFact binds alias '" + alias
                   + "', which names a " + nonBindingAliases.get(alias) + " pattern. One name cannot"
-                  + " mean both the fact this rule quantifies over and the fact this action"
-                  + " creates");
+                  + " mean both what this rule quantifies over and the fact this action creates");
             } else if (!bound.add(alias)) {
               diagnostics.add(rule.id() + ": insertFact binds alias '" + alias
                   + "', which is already bound");
@@ -711,9 +861,48 @@ public final class RuleCompiler {
       case Literal ignored -> {
         // A constant references nothing.
       }
-      case FieldRef ref -> requireAlias(rule, bound, nonBindingAliases, ref.alias(), "$ref");
+      case FieldRef ref -> requireValueAlias(rule, bound, nonBindingAliases, ref, "$ref");
       case ExpressionValue expression -> expression.referencedAliases()
-          .forEach(alias -> requireAlias(rule, bound, nonBindingAliases, alias, "expression"));
+          .forEach(alias -> {
+            if (nonBindingAliases.get(alias) != Quantifier.ACCUMULATE) {
+              requireAlias(rule, bound, nonBindingAliases, alias, "expression");
+            }
+          });
+    }
+  }
+
+  /**
+   * Records a diagnostic if a {@code $ref} in a <em>value</em> position names something unreadable.
+   *
+   * <p><strong>Separate from {@link #requireAlias} because the two positions differ, and an earlier
+   * version conflated them.</strong> An accumulate alias may be read -- its answer is a value the
+   * right-hand side can use -- but it may not be <em>written to</em> or retracted, because there is
+   * no fact behind it. Putting the escape in {@code requireAlias} let a {@code setField} whose
+   * target was an accumulate compile clean and then throw at fire time, which is the shape of defect
+   * the compiler exists to prevent.
+   *
+   * <p>A dotted path into an accumulate is refused here too. {@code $ref: units.value} resolves to a
+   * missing node and lands in the payload as JSON null, silently -- and it is the natural thing to
+   * write, because every other alias in the language needs a field.
+   *
+   * @param rule the rule
+   * @param bound the aliases bound so far
+   * @param nonBindingAliases the aliases of quantified patterns, by quantifier
+   * @param ref the reference to check
+   * @param what a description of where it appeared
+   */
+  private void requireValueAlias(final RuleDefinition rule, final Set<String> bound,
+      final Map<String, Quantifier> nonBindingAliases, final FieldRef ref, final String what) {
+    if (nonBindingAliases.get(ref.alias()) != Quantifier.ACCUMULATE) {
+      requireAlias(rule, bound, nonBindingAliases, ref.alias(), what);
+      return;
+    }
+    // matches() on an empty pointer is Jackson's spelling of "addresses the root", which for a
+    // FieldRef means "no field was written". A non-empty path is a dotted reference into a value.
+    if (!ref.path().matches()) {
+      diagnostics.add(rule.id() + ": " + what + " names '" + ref.alias() + "."
+          + dotted(ref.path()) + "', but '" + ref.alias() + "' is an ACCUMULATE pattern: it binds a"
+          + " value, not a fact, so it has no fields. Write '" + ref.alias() + "' on its own");
     }
   }
 
@@ -923,7 +1112,19 @@ public final class RuleCompiler {
       final PatternDefinition pattern, final ExpressionConstraint constraint,
       final Map<String, Integer> aliasPositions, final List<String> aliasTypes,
       final Map<String, Quantifier> nonBindingAliases) {
-    final Set<String> bound = aliasPositions.keySet();
+    /*
+     * The tuple's aliases plus any accumulate the rule folds. Declaring the accumulate is what
+     * makes a condition able to compare a total against something other than a literal -- `having`
+     * takes a literal, and nothing may join to an accumulate alias, so an expression is the only
+     * route. RecomputingAgenda.bindingsFor is the other half, and the two have to agree about which
+     * names exist or the compiler accepts an expression the matcher cannot resolve.
+     */
+    final Set<String> bound = new LinkedHashSet<>(aliasPositions.keySet());
+    nonBindingAliases.forEach((alias, quantifier) -> {
+      if (quantifier == Quantifier.ACCUMULATE) {
+        bound.add(alias);
+      }
+    });
     /*
      * The prefix follows "<rule>: <alias>.<field>", which is what the DSL matches on to put a line
      * number on a compiler diagnostic. Written any other way the message still arrives, but located
@@ -1022,6 +1223,17 @@ public final class RuleCompiler {
      * $ref was correctly rejected.
      */
     final Set<String> bound = new LinkedHashSet<>(whenAliases);
+    /*
+     * Accumulate aliases are declared up front, unlike insert aliases below, and the asymmetry is
+     * the reason above read backwards: an insert alias names a fact that does not exist until a
+     * later action creates it, while an accumulate names a fold over facts that already do. There
+     * is no ordering to respect, so an expression in the first action may read it.
+     */
+    nonBindingAliases.forEach((alias, quantifier) -> {
+      if (quantifier == Quantifier.ACCUMULATE) {
+        bound.add(alias);
+      }
+    });
     for (final ActionDefinition action : rule.then()) {
       for (final ValueExpr value : valuesOf(action)) {
         if (!(value instanceof ExpressionValue expression)
@@ -1088,6 +1300,10 @@ public final class RuleCompiler {
         // and reads as "there is no such alias", which is the one thing an author can see is
         // false. An expression is where it matters most -- the alias is spelled inside free-form
         // text, so a typo really is the first thing to suspect.
+        if (nonBindingAliases.get(alias) == Quantifier.ACCUMULATE) {
+          // Legal: §6.4's bindings resolve it to the folded value, as an action's $ref does.
+          continue;
+        }
         diagnostics.add(where + ": reads alias '" + alias + "', which "
             + (nonBindingAliases.containsKey(alias)
                 ? "is a " + nonBindingAliases.get(alias) + " pattern, which binds no fact, so an"

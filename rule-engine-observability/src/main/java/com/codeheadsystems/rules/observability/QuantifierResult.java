@@ -15,14 +15,19 @@ import java.util.Optional;
  * "3 considered, 3 matched" line against a pattern asserting that nothing matches, which reads as
  * success at the precise moment it means failure.
  *
- * <p><strong>One record for both quantifiers rather than one apiece.</strong> They ask opposite
+ * <p><strong>One record for all three rather than one apiece.</strong> They ask different
  * questions -- a negation is defeated by a fact that satisfies it, a universal by a fact in scope
- * that fails it -- but they answer with the same three numbers and the same example, and a reader
- * comparing "what suppressed my rule" wants one list rather than two to cross-reference.
- * {@link #kind} is what says which reading applies, and it is what {@link #describe} switches on.
+ * that fails it, an accumulate by an answer its {@code having} rejects -- but they answer with the
+ * same numbers, and a reader asking "what suppressed my rule" wants one list rather than three to
+ * cross-reference. {@link #kind} is what says which reading applies, and it is what
+ * {@link #describe} switches on.
  *
- * @param kind the quantifier this pattern carries: {@link Quantifier#NOT_EXISTS} or
- *     {@link Quantifier#FOR_ALL}
+ * <p>An accumulate has no {@link #example}: what suppressed the match is the <em>answer</em>, not
+ * any one fact in the scope, and naming an arbitrary contributor would point the author at a fact
+ * that is doing nothing wrong. The answer itself is in the verdict.
+ *
+ * @param kind the quantifier this pattern carries: {@link Quantifier#NOT_EXISTS},
+ *     {@link Quantifier#FOR_ALL} or {@link Quantifier#ACCUMULATE}
  * @param alias the pattern's name. It binds nothing -- nothing in the rule may reference it -- but
  *     the author wrote it and it is how they will recognise which quantifier this is
  * @param factType the type the quantifier ranges over
@@ -67,10 +72,19 @@ public record QuantifierResult(Quantifier kind, String alias, String factType, i
    */
   public String describe() {
     final StringBuilder text = new StringBuilder()
-        // "not" and "all", not the enum's spelling: the line sits under the pattern lines, which
-        // read "o: Order", and the prefix has to scan as part of that column rather than as a
+        // "not", "all" and "fold", not the enum's spelling: the line sits under the pattern lines,
+        // which read "o: Order", and the prefix has to scan as part of that column rather than as a
         // constant name.
-        .append(kind == Quantifier.NOT_EXISTS ? "not " : "all ")
+        // Exhaustive and without a default, so a new Quantifier constant fails this compile rather
+        // than silently rendering as one of these. EXISTS_AT_LEAST_ONE never reaches here -- a
+        // positive pattern is a PatternResult -- and says so rather than sharing a branch.
+        .append(switch (kind) {
+          case NOT_EXISTS -> "not ";
+          case FOR_ALL -> "all ";
+          case ACCUMULATE -> "fold ";
+          case EXISTS_AT_LEAST_ONE -> throw new IllegalStateException(
+              "a positive pattern is reported as a PatternResult, not a QuantifierResult");
+        })
         .append(alias).append(": ").append(factType).append(" — ")
         .append(population).append(" present");
     if (suppressed == 0) {

@@ -50,7 +50,20 @@ final class References {
    * @param alias the alias being referenced
    * @param field the dotted field path on that alias's fact
    */
-  record Ref(String alias, String field) {}
+  record Ref(String alias, String field) {
+
+    /**
+     * Whether this reference names a whole alias rather than a field of one.
+     *
+     * <p>True only for the accumulate case, and only where a caller asked for it: an accumulate
+     * alias binds a value, so there is no field to name (§2.5's second amendment).
+     *
+     * @return whether the field half is absent
+     */
+    boolean wholeAlias() {
+      return field.isEmpty();
+    }
+  }
 
   /**
    * Whether a value is in the shape of a reference.
@@ -110,6 +123,26 @@ final class References {
    */
   static Optional<Ref> readRef(final JsonNode operand, final String pointer,
       final Diagnostics diagnostics) {
+    return readRef(operand, pointer, false, diagnostics);
+  }
+
+  /**
+   * Reads a reference operand, optionally allowing a bare alias.
+   *
+   * <p><strong>A bare alias is legal in a value position and never in a constraint</strong>, and the
+   * asymmetry is the whole reason this parameter exists. An accumulate alias binds a value, which
+   * an action or a §6.4 expression can use as it stands; a join cannot, because a join compares two
+   * facts and a value is not one. Passing {@code false} from the constraint side keeps the old
+   * message -- "a $ref must be 'alias.field'" -- for the position where it is still the whole truth.
+   *
+   * @param operand the value, already known to be {@linkplain #isRef reference-shaped}
+   * @param pointer the operand's JSON Pointer, for diagnostics
+   * @param wholeAliasAllowed whether a name with no dot is acceptable here
+   * @param diagnostics collects problems
+   * @return the reference, or empty when it was malformed
+   */
+  static Optional<Ref> readRef(final JsonNode operand, final String pointer,
+      final boolean wholeAliasAllowed, final Diagnostics diagnostics) {
     if (operand.size() > 1) {
       diagnostics.error(DslError.MALFORMED_REFERENCE, pointer,
           "a $ref is the whole operand; this one also carries " + otherKeys(operand, REF)
@@ -125,9 +158,17 @@ final class References {
     }
     final String text = target.stringValue();
     final int dot = text.indexOf('.');
+    if (dot < 0 && wholeAliasAllowed && !text.isEmpty()) {
+      // An accumulate's answer. Whether the alias really is one is the compiler's question, not
+      // this module's -- it can see the rule's patterns and this cannot.
+      return Optional.of(new Ref(text, ""));
+    }
     if (dot < 1 || dot == text.length() - 1) {
       diagnostics.error(DslError.MALFORMED_REFERENCE, pointer,
-          "a $ref must be 'alias.field', got '" + text + "'");
+          wholeAliasAllowed
+              ? "a $ref must be 'alias.field', or a bare alias for an accumulate's answer; got '"
+                  + text + "'"
+              : "a $ref must be 'alias.field', got '" + text + "'");
       return Optional.empty();
     }
     return Optional.of(new Ref(text.substring(0, dot), text.substring(dot + 1)));

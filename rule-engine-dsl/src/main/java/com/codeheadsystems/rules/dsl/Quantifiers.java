@@ -11,13 +11,12 @@ import java.util.Optional;
  * exactly as {@code notIn} is {@code NOT_IN}. Absent means {@code exists}, which is what every
  * pattern written before this key existed meant and must keep meaning.
  *
- * <p><strong>Only the implemented quantifiers are spellable.</strong> §2.5's enum still reserves
- * {@code ACCUMULATE} and §1 defers it, and the temptation is to accept it here so the compiler's
- * "not implemented, see §1" message reaches the author. It is refused for a reason that outlives
- * the message: {@code rules.v1} is a published schema, and admitting a spelling for a feature that
- * does not exist promises a shape the version implementing it may not want. A rule file naming it
- * is rejected by the schema, and this class says the same thing in words that name §1's interim
- * answer.
+ * <p><strong>Only the implemented quantifiers are spellable</strong>, which as of §2.5's second
+ * amendment is all four §2.5 names. The rule outlives the current state and is worth keeping:
+ * {@code rules.v1} is a published schema, and admitting a spelling for a feature that does not
+ * exist promises a shape the version implementing it may not want. {@code collect} is the aggregate
+ * §1 still defers and the spelling an author is now most likely to try; the schema rejects it, and
+ * this class says the same thing in words that name the interim answer.
  */
 final class Quantifiers {
 
@@ -29,6 +28,9 @@ final class Quantifiers {
 
   /** The universal of §2.5's amendment, landed as Phase 6's second slice. */
   private static final String FOR_ALL = "forAll";
+
+  /** The aggregate of §2.5's second amendment, landed as Phase 6's fourth slice. */
+  private static final String ACCUMULATE = "accumulate";
 
   private Quantifiers() {
     throw new UnsupportedOperationException("no instances");
@@ -53,10 +55,14 @@ final class Quantifiers {
     if (FOR_ALL.equals(written)) {
       return Optional.of(Quantifier.FOR_ALL);
     }
+    if (ACCUMULATE.equals(written)) {
+      return Optional.of(Quantifier.ACCUMULATE);
+    }
     diagnostics.error(DslError.UNKNOWN_QUANTIFIER, pointer,
         "'" + written + "' is not a quantifier; write '" + EXISTS + "' (the default), '"
-            + NOT_EXISTS + "' or '" + FOR_ALL + "'. §1 defers 'accumulate', and gives the interim"
-            + " answer for it: compute it at ingestion and insert the answer as a fact");
+            + NOT_EXISTS + "', '" + FOR_ALL + "' or '" + ACCUMULATE + "'. §2.5 names four and this"
+            + " engine implements all four; 'collect' is the aggregate §1 still defers, and its"
+            + " interim answer is to gather at ingestion and insert the result as a fact");
     return Optional.empty();
   }
 }

@@ -68,6 +68,15 @@ public enum DslError {
   UNKNOWN_QUANTIFIER("unknown-quantifier", true),
 
   /**
+   * A pattern's {@code accumulate} block does not say exactly one thing (§2.5's second amendment).
+   *
+   * <p>Not shielded, and cannot be: the schema types every key and can require the block beside
+   * {@code quantifier: accumulate}, but "exactly one of these five" and "this operator can test an
+   * aggregate" are statements about meaning rather than about shape.
+   */
+  MALFORMED_ACCUMULATE("malformed-accumulate", false),
+
+  /**
    * A {@code then} block names a verb that is not one of §6.2.2's five.
    *
    * <p>{@linkplain #shieldedBySchema() Shielded}: the schema enumerates the five.

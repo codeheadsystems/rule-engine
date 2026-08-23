@@ -94,9 +94,9 @@ class DslDiagnosticsTest {
       Actions.actionOf(
           new ThenNode("sendEmail", null, null, null, null, null, null, null, null, null, null),
           "", diagnostics);
-      // 'accumulate' rather than 'forAll': forAll is implemented as of §2.5's amendment and the
-      // schema spells it, so it is no longer a code this gate shields. accumulate still is.
-      Quantifiers.of("accumulate", "", diagnostics);
+      // 'collect': every quantifier §2.5 names is implemented now, so the spelling that still
+      // reaches this gate is one the enum does not have at all.
+      Quantifiers.of("collect", "", diagnostics);
 
       assertThat(raised).extracting(DslDiagnostic::error)
           .containsExactlyInAnyOrder(DslError.UNKNOWN_OPERATOR, DslError.MALFORMED_OPERAND,
@@ -440,9 +440,9 @@ class DslDiagnosticsTest {
     @Test
     @DisplayName("with a quantifier this engine does not implement is refused at the schema gate")
     void unknownQuantifier() {
-      // 'accumulate', not 'forAll': §2.5's amendment implements the latter and the schema now
-      // spells it. What this test guards is unchanged -- a quantifier §1 still defers is stopped by
-      // the schema, before the component that would otherwise report it in words.
+      // 'collect', because all four of §2.5's quantifiers are implemented now. What this test
+      // guards is unchanged -- a spelling the engine does not have is stopped by the schema, before
+      // the component that would otherwise report it in words.
       final DslDiagnostic diagnostic = only("""
           apiVersion: rules.v1
           rules:
@@ -450,7 +450,7 @@ class DslDiagnosticsTest {
               when:
                 - fact: Order
                   as: o
-                  quantifier: accumulate
+                  quantifier: collect
               then: [{ action: emit, event: e }]
           """);
 
@@ -617,13 +617,30 @@ class DslDiagnosticsTest {
           when: [{ fact: Order, as: o }]
           then: [{ action: sendEmail, to: "ops@example.com" }]
       """,
-      // UNKNOWN_QUANTIFIER, if the schema's quantifier enum ever stopped enumerating. §1 defers
-      // forAll, which is the spelling an author is most likely to try.
+      // UNKNOWN_QUANTIFIER, if the schema's quantifier enum ever stopped enumerating. All four of
+      // §2.5's are implemented now, so this needs a spelling that is not one -- `collect` is the
+      // aggregate §1 still defers and the one an author is most likely to try.
       """
       apiVersion: rules.v1
       rules:
         - id: unknown-quantifier
-          when: [{ fact: Order, as: o, quantifier: forAll }]
+          when: [{ fact: Order, as: o, quantifier: collect }]
+          then: [{ action: emit, event: e }]
+      """,
+      // MALFORMED_ACCUMULATE: an accumulate block computing two things at once. Unshielded --
+      // the schema types every key and cannot say "exactly one of these five".
+      """
+      apiVersion: rules.v1
+      rules:
+        - id: two-functions
+          when:
+            - fact: Order
+              as: o
+            - fact: LineItem
+              as: n
+              quantifier: accumulate
+              accumulate: { sum: "qty", count: true }
+              where: { orderId: { eq: { $ref: o.id } } }
           then: [{ action: emit, event: e }]
       """,
       """

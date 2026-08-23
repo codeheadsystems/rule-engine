@@ -1,16 +1,23 @@
 package com.codeheadsystems.rules.agenda;
 
+import com.codeheadsystems.rules.expr.ExpressionBindings;
+import com.codeheadsystems.rules.fact.Fact;
+import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.fact.WorkingMemory;
 import com.codeheadsystems.rules.listener.RuleEngineListener;
 import com.codeheadsystems.rules.listener.SuppressReason;
+import com.codeheadsystems.rules.match.Accumulators;
 import com.codeheadsystems.rules.match.Activation;
 import com.codeheadsystems.rules.match.ActivationKey;
 import com.codeheadsystems.rules.match.Conditions;
 import com.codeheadsystems.rules.match.Negations;
 import com.codeheadsystems.rules.match.Tuple;
 import com.codeheadsystems.rules.match.Universals;
+import com.codeheadsystems.rules.rule.AggregateTest;
+import com.codeheadsystems.rules.rule.CompiledAccumulate;
 import com.codeheadsystems.rules.rule.CompiledPattern;
 import com.codeheadsystems.rules.rule.CompiledRule;
+import com.codeheadsystems.rules.value.Comparisons;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Iterator;
@@ -19,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.MissingNode;
 
 /**
@@ -398,10 +406,13 @@ public abstract class RecomputingAgenda implements Agenda {
     final List<Activation> required = rule.hasUniversals()
         ? requirements(rule, present)
         : present;
-    if (required.isEmpty() || !rule.hasExpressionTests()) {
-      return required;
+    final List<Activation> aggregated = rule.hasAccumulates() && !required.isEmpty()
+        ? havings(rule, required)
+        : required;
+    if (aggregated.isEmpty() || !rule.hasExpressionTests()) {
+      return aggregated;
     }
-    return conditions(rule, required);
+    return conditions(rule, aggregated);
   }
 
   /**
@@ -437,6 +448,57 @@ public abstract class RecomputingAgenda implements Agenda {
       }
     }
     return surviving;
+  }
+
+  /**
+   * Drops the matches whose rule folds a scope into an answer a {@code having} rejects (§2.5's
+   * {@code ACCUMULATE}).
+   *
+   * <p>Here for the reasons {@link #absences} and {@link #requirements} are here, and with the same
+   * boundaries: the accumulated type must not be one the session evicts, because evicting facts
+   * silently changes the answer rather than costing a firing, and a rule that fired on a total is
+   * not undone when the total moves unless what it concluded was inserted logically (§4.4).
+   *
+   * <p>An accumulate with no {@code having} is not evaluated here at all. It binds and nothing
+   * more, so there is nothing to filter on and folding the scope would be work spent on an answer
+   * only the right-hand side will read -- and it will read it then, from working memory.
+   *
+   * @param rule the rule
+   * @param matches its complete tuples
+   * @return the tuples every {@code having} holds for
+   */
+  private List<Activation> havings(final CompiledRule rule, final List<Activation> matches) {
+    final List<Activation> surviving = new ArrayList<>(matches.size());
+    for (final Activation activation : matches) {
+      if (rule.accumulates().stream().allMatch(accumulate -> holds(accumulate, activation))) {
+        surviving.add(activation);
+      }
+    }
+    return surviving;
+  }
+
+  /**
+   * Whether one accumulate's answer passes its own {@code having}.
+   *
+   * @param accumulate the compiled accumulate
+   * @param activation the complete positive binding
+   * @return true when there is no test, or the answer passes it
+   */
+  private boolean holds(final CompiledAccumulate accumulate, final Activation activation) {
+    final Optional<AggregateTest> having = accumulate.having();
+    if (having.isEmpty()) {
+      return true;
+    }
+    final JsonNode answer =
+        Accumulators.evaluate(accumulate, activation.tuple().boundFacts(), workingMemory);
+    /*
+     * A missing answer -- an empty scope under MIN, MAX or AVERAGE -- is put through the same
+     * comparison every other absent value goes through rather than short-circuited. §2.6.1 already
+     * decides what each operator does with an absent value, and deciding again here would give the
+     * engine two answers to "is absent greater than 10". It says no, and `ne` says yes, which is
+     * exactly what a `hasField` pairing is for.
+     */
+    return Comparisons.test(having.get().op(), answer, having.get().literal());
   }
 
   /**
@@ -534,10 +596,37 @@ public abstract class RecomputingAgenda implements Agenda {
    * @return true when no condition rejected it
    */
   private boolean holdsFor(final CompiledRule rule, final Activation activation) {
-    return Conditions.holdFor(rule,
-        alias -> activation.tuple().aliases().contains(alias)
-            ? activation.tuple().payloadOf(alias, workingMemory)
-            : MissingNode.getInstance());
+    return Conditions.holdFor(rule, bindingsFor(rule, activation.tuple().boundFacts(),
+        activation.tuple().aliases(), workingMemory));
+  }
+
+  /**
+   * What a §6.4 expression sees for one tuple: its aliases, and any accumulate the rule folds.
+   *
+   * <p>The accumulate half is what lets a condition read a total, which is the only way to test one
+   * against another value rather than against a literal -- {@code having} takes a literal, and
+   * nothing may join to an accumulate alias. Folded per read from working memory, as
+   * {@code RhsExecutor.payloadOf} does, so nothing stale is held.
+   *
+   * @param rule the rule being matched
+   * @param bound the handle ids the tuple binds, in pattern order
+   * @param aliases the tuple's alias names, in the same order
+   * @param memory the working memory to read and fold from
+   * @return the bindings
+   */
+  static ExpressionBindings bindingsFor(final CompiledRule rule, final long[] bound,
+      final List<String> aliases, final WorkingMemory memory) {
+    return alias -> {
+      final int position = aliases.indexOf(alias);
+      if (position >= 0) {
+        return memory.get(new FactHandle(bound[position]))
+            .map(Fact::payload)
+            .orElseGet(MissingNode::getInstance);
+      }
+      return rule.accumulateNamed(alias)
+          .map(accumulate -> Accumulators.evaluate(accumulate, bound, memory))
+          .orElseGet(MissingNode::getInstance);
+    };
   }
 
   /**

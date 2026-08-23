@@ -1,6 +1,9 @@
 package com.codeheadsystems.rules.testkit;
 
+import com.codeheadsystems.rules.rule.Accumulate;
 import com.codeheadsystems.rules.rule.ActionDefinition;
+import com.codeheadsystems.rules.rule.AggregateFunction;
+import com.codeheadsystems.rules.rule.AggregateTest;
 import com.codeheadsystems.rules.rule.CallFunction;
 import com.codeheadsystems.rules.rule.Constraint;
 import com.codeheadsystems.rules.rule.Emit;
@@ -11,8 +14,8 @@ import com.codeheadsystems.rules.rule.JoinConstraint;
 import com.codeheadsystems.rules.rule.Literal;
 import com.codeheadsystems.rules.rule.Operator;
 import com.codeheadsystems.rules.rule.PatternDefinition;
-import com.codeheadsystems.rules.rule.Quantifier;
 import com.codeheadsystems.rules.rule.PayloadField;
+import com.codeheadsystems.rules.rule.Quantifier;
 import com.codeheadsystems.rules.rule.RangeConstraint;
 import com.codeheadsystems.rules.rule.RetractFact;
 import com.codeheadsystems.rules.rule.RuleDefinition;
@@ -57,6 +60,44 @@ public final class Rules {
    */
   public static RuleBuilder rule(final String id) {
     return new RuleBuilder(id);
+  }
+
+  /**
+   * Builds an accumulate spec with no test on the answer: it binds and nothing more.
+   *
+   * @param function what to compute
+   * @param field the dotted field to fold over
+   * @return the spec
+   */
+  public static Accumulate fold(final AggregateFunction function, final String field) {
+    return new Accumulate(function, Optional.of(field), Optional.empty());
+  }
+
+  /**
+   * Builds an accumulate spec whose answer must pass a test for the rule to match.
+   *
+   * @param function what to compute
+   * @param field the dotted field to fold over
+   * @param op how to compare the answer
+   * @param literal what to compare it against
+   * @return the spec
+   */
+  public static Accumulate fold(final AggregateFunction function, final String field,
+      final Operator op, final Object literal) {
+    return new Accumulate(function, Optional.of(field),
+        Optional.of(new AggregateTest(op, node(literal))));
+  }
+
+  /**
+   * Builds a {@code count} spec, which reads no field.
+   *
+   * @param op how to compare the count, or null for no test
+   * @param literal what to compare it against, ignored when {@code op} is null
+   * @return the spec
+   */
+  public static Accumulate count(final Operator op, final Object literal) {
+    return new Accumulate(AggregateFunction.COUNT, Optional.empty(),
+        op == null ? Optional.empty() : Optional.of(new AggregateTest(op, node(literal))));
   }
 
   /**
@@ -248,6 +289,52 @@ public final class Rules {
       final PatternBuilder pattern = new PatternBuilder();
       constraints.accept(pattern);
       when.add(new PatternDefinition(alias, factType, Quantifier.FOR_ALL, pattern.constraints));
+      return this;
+    }
+
+    /**
+     * Declares a pattern that folds a scope into a value and binds it (§2.5's second amendment).
+     *
+     * <p><strong>Every constraint selects the scope</strong> -- joins and literals alike, which is
+     * where this differs from {@link #forAll}. A universal splits them because it has a requirement
+     * to assert about each fact; an accumulate has no such half, so "the total of the
+     * <em>physical</em> line items of this order" is expressible where the universal equivalent is
+     * not.
+     *
+     * <p><strong>The alias binds a value, not a fact</strong>, and the value is folded from working
+     * memory at each read rather than stored. That is what keeps §3.2.2's invariant -- an aggregate
+     * held in a materialised tuple would be stale the instant any fact in its scope moved. The
+     * consequence is what may reference it: an action's {@code $ref}, a §6.4 expression, and the
+     * accumulate's own {@code having}. What may <em>not</em> is a join from another pattern, because
+     * a join compares two facts and there is no fact on this side.
+     *
+     * <p>Where its fact type is one the rule already binds, §1's implicit inequality applies to the
+     * scope: "the total of this customer's <em>other</em> orders" is what a same-type accumulate
+     * means.
+     *
+     * <p><strong>An empty scope answers differently per function.</strong> {@code count} and
+     * {@code sum} answer zero, which are their identities; {@code min}, {@code max} and
+     * {@code average} answer <em>absent</em>, because the mean of nothing is not a number and
+     * answering zero would make "average below 10" true for a customer with no orders. §2.6.1
+     * decides what each operator does with an absent value.
+     *
+     * <p><strong>Do not accumulate over a type the session evicts</strong> (§4.4). Eviction changes
+     * the answer rather than costing a firing, which is the same family of hazard negation and
+     * {@code forAll} carry and is arguably the worst of the three: a total that is quietly wrong is
+     * harder to notice than a rule that quietly stops firing.
+     *
+     * @param alias the name the answer binds to
+     * @param factType the fact type to fold over
+     * @param accumulate what to compute, and optionally what to require of the answer
+     * @param constraints the conditions selecting what contributes
+     * @return this builder
+     */
+    public RuleBuilder accumulate(final String alias, final String factType,
+        final Accumulate accumulate, final Consumer<PatternBuilder> constraints) {
+      final PatternBuilder pattern = new PatternBuilder();
+      constraints.accept(pattern);
+      when.add(new PatternDefinition(alias, factType, Quantifier.ACCUMULATE, pattern.constraints,
+          Optional.of(accumulate)));
       return this;
     }
 

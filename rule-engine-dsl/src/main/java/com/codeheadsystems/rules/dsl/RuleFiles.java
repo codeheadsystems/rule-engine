@@ -7,6 +7,7 @@ import com.codeheadsystems.rules.rule.ActionDefinition;
 import com.codeheadsystems.rules.rule.Constraint;
 import com.codeheadsystems.rules.rule.ExpressionConstraint;
 import com.codeheadsystems.rules.rule.PatternDefinition;
+import com.codeheadsystems.rules.rule.Accumulate;
 import com.codeheadsystems.rules.rule.Quantifier;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
@@ -217,8 +218,16 @@ public final class RuleFiles {
         constraints.addAll(
             OperatorMaps.constraintsOf(field.get(), entry.getValue(), at, diagnostics));
       }
+      /*
+       * Read whether or not the quantifier resolved, so a rule file with both an unspellable
+       * quantifier and a malformed accumulate reports both in one pass rather than one edit at a
+       * time -- the same reason the constraints above are walked regardless.
+       */
+      final Optional<Accumulate> accumulate = Accumulates.of(
+          pattern.accumulate(), pointer + "/accumulate", diagnostics);
       quantifier.ifPresent(quantified -> patterns.add(
-          new PatternDefinition(pattern.as(), pattern.fact(), quantified, constraints)));
+          new PatternDefinition(pattern.as(), pattern.fact(), quantified, constraints,
+              accumulate)));
     }
     return patterns;
   }

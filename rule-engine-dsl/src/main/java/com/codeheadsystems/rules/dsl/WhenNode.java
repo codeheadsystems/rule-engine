@@ -28,7 +28,7 @@ import tools.jackson.databind.JsonNode;
  *     diagnostic that says where it arrives, rather than falling out of the schema as an unknown key
  */
 record WhenNode(String fact, String as, String quantifier, Map<String, JsonNode> where,
-    String condition) {
+    String condition, AccumulateNode accumulate) {
 
   /**
    * Canonical constructor. Copies {@code where} into an insertion-ordered map.
@@ -43,6 +43,8 @@ record WhenNode(String fact, String as, String quantifier, Map<String, JsonNode>
    * @param quantifier the quantifier as written, or null
    * @param where the operator maps
    * @param condition the CEL expression, or null
+   * @param accumulate what an {@code accumulate} pattern computes, or null. The schema admits it
+   *     only beside {@code quantifier: accumulate}; the compiler is what refuses the two apart
    */
   WhenNode {
     where = where == null

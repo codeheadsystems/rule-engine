@@ -146,14 +146,15 @@ class RuleFileSchemaTest {
     }
 
     @Test
-    @DisplayName("a quantifier section 1 still defers is rejected by the schema")
+    @DisplayName("a quantifier spelling this engine does not have is rejected by the schema")
     void unknownQuantifier() {
       /*
-       * §2.5's enum reserves ACCUMULATE and §1 defers it, and the schema deliberately does not
-       * spell it: rules.v1 is published, and a spelling for a feature that does not exist promises
-       * a shape the version implementing it may not want. FOR_ALL was in this sentence until §2.5's
-       * amendment implemented it, at which point the schema gained the spelling -- which is the
-       * order these two are meant to change in.
+       * Every quantifier §2.5's enum names is implemented and spellable now, so what this guards
+       * is the closure of the set rather than a particular deferral: rules.v1 is published, and a
+       * spelling for something that does not exist promises a shape a later version may not want.
+       * FOR_ALL and ACCUMULATE were both in this sentence until their amendments landed, at which
+       * point the schema gained each spelling -- which is the order these two are meant to change
+       * in.
        *
        * An enum violation names the permitted values rather than the offending one -- the same
        * shape the verb enum above produces -- so what makes it navigable is the location, which is
@@ -161,7 +162,7 @@ class RuleFileSchemaTest {
        */
       assertThat(reject(file("""
           id: r
-          when: [{ fact: Order, as: o, quantifier: accumulate }]
+          when: [{ fact: Order, as: o, quantifier: collect }]
           then: [{ action: emit, event: e }]
           """))).anySatisfy(diagnostic -> {
             assertThat(diagnostic.error()).isEqualTo(DslError.SCHEMA_VIOLATION);
