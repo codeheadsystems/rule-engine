@@ -348,4 +348,146 @@ class DslEquivalenceTest {
           handBuilt, ORDERS);
     }
   }
+
+  @Nested
+  @DisplayName("a negated pattern")
+  class Negation {
+
+    /** Order 1 has no payment; order 2 has one. */
+    private static final Consumer<RuleSession> ORDERS_AND_PAYMENTS = session -> {
+      session.insert("Order", Facts.json("""
+          {"id": 1, "status": "PENDING", "customerId": 7}"""));
+      session.insert("Order", Facts.json("""
+          {"id": 2, "status": "PENDING", "customerId": 8}"""));
+      session.insert("Payment", Facts.json("""
+          {"orderId": 2, "amount": 50}"""));
+    };
+
+    @Test
+    @DisplayName("joined to a bound alias matches the builder's notExists")
+    void unpaidOrder() {
+      final FiringSequence fired = DslEquivalence.assertEquivalent(
+          file("""
+                - id: unpaid-order
+                  when:
+                    - fact: Order
+                      as: o
+                      where:
+                        status: { eq: "PENDING" }
+                    - fact: Payment
+                      as: p
+                      quantifier: notExists
+                      where:
+                        orderId: { eq: { $ref: o.id } }
+                  then:
+                    - action: emit
+                      event: unpaid
+                      payload: { orderId: { $ref: o.id } }
+              """),
+          List.of(Rules.rule("unpaid-order")
+              .when("o", "Order", pattern -> pattern.eq("status", "PENDING"))
+              .notExists("p", "Payment", pattern -> pattern.ref("orderId", "o.id"))
+              .then(actions -> actions.emit("unpaid", "orderId", Rules.ref("o.id")))
+              .build()),
+          ORDERS_AND_PAYMENTS);
+
+      assertThat(fired.steps())
+          .as("the unpaid order fires and the paid one does not")
+          .hasSize(1);
+    }
+
+    @Test
+    @DisplayName("of a type the rule already binds carries §1's implicit inequality across too")
+    void sameTypeNegation() {
+      final FiringSequence fired = DslEquivalence.assertEquivalent(
+          file("""
+                - id: only-order-for-customer
+                  when:
+                    - fact: Order
+                      as: o
+                    - fact: Order
+                      as: other
+                      quantifier: notExists
+                      where:
+                        customerId: { eq: { $ref: o.customerId } }
+                  then:
+                    - action: emit
+                      event: sole
+                      payload: { orderId: { $ref: o.id } }
+              """),
+          List.of(Rules.rule("only-order-for-customer")
+              .when("o", "Order")
+              .notExists("other", "Order", pattern -> pattern.ref("customerId", "o.customerId"))
+              .then(actions -> actions.emit("sole", "orderId", Rules.ref("o.id")))
+              .build()),
+          ORDERS_AND_PAYMENTS);
+
+      assertThat(fired.steps())
+          .as("both orders are the only one for their own customer; neither counts as its own"
+              + " counterexample")
+          .hasSize(2);
+    }
+
+    @Test
+    @DisplayName("declared before the alias it joins to, which the reference says is legal")
+    void negationDeclaredFirst() {
+      /*
+       * The reference claims a negated pattern "could equally be written before the Order it
+       * references", which is true because the compiler assigns positions to positive patterns
+       * only and compiles negations afterwards, against all of them. A claim in a doc that no
+       * fixture exercises is a claim waiting to stop being true.
+       */
+      final FiringSequence fired = DslEquivalence.assertEquivalent(
+          file("""
+                - id: unpaid-order-negation-first
+                  when:
+                    - fact: Payment
+                      as: p
+                      quantifier: notExists
+                      where:
+                        orderId: { eq: { $ref: o.id } }
+                    - fact: Order
+                      as: o
+                      where:
+                        status: { eq: "PENDING" }
+                  then:
+                    - action: emit
+                      event: unpaid
+                      payload: { orderId: { $ref: o.id } }
+              """),
+          List.of(Rules.rule("unpaid-order-negation-first")
+              .notExists("p", "Payment", pattern -> pattern.ref("orderId", "o.id"))
+              .when("o", "Order", pattern -> pattern.eq("status", "PENDING"))
+              .then(actions -> actions.emit("unpaid", "orderId", Rules.ref("o.id")))
+              .build()),
+          ORDERS_AND_PAYMENTS);
+
+      assertThat(fired.steps())
+          .as("the same one firing the same rule produces with the patterns the other way round")
+          .hasSize(1);
+    }
+
+    @Test
+    @DisplayName("written as an explicit 'exists' is the default, and the default is unchanged")
+    void explicitExistsIsTheDefault() {
+      DslEquivalence.assertEquivalent(
+          file("""
+                - id: pending
+                  when:
+                    - fact: Order
+                      as: o
+                      quantifier: exists
+                      where:
+                        status: { eq: "PENDING" }
+                  then:
+                    - action: emit
+                      event: pending
+              """),
+          List.of(Rules.rule("pending")
+              .when("o", "Order", pattern -> pattern.eq("status", "PENDING"))
+              .then(actions -> actions.emit("pending"))
+              .build()),
+          ORDERS_AND_PAYMENTS);
+    }
+  }
 }

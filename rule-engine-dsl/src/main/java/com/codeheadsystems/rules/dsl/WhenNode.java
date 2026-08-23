@@ -17,11 +17,18 @@ import tools.jackson.databind.JsonNode;
  *
  * @param fact the fact type this pattern matches
  * @param as the alias it binds
+ * @param quantifier how the pattern is quantified (§2.5), as the DSL spells it, or null for the
+ *     default. Held as the written string rather than as {@link
+ *     com.codeheadsystems.rules.rule.Quantifier}: an unknown spelling has to be reported against
+ *     the line that wrote it, and Jackson's own enum-coercion failure names neither the key nor
+ *     §1's interim answer. {@link Quantifiers} makes the judgement, as {@link OperatorMaps} does
+ *     for an operator key
  * @param where the operator maps, field name to operator map, in document order
  * @param condition the CEL escape hatch of §6.4, or null. Parsed so that it can be rejected with a
  *     diagnostic that says where it arrives, rather than falling out of the schema as an unknown key
  */
-record WhenNode(String fact, String as, Map<String, JsonNode> where, String condition) {
+record WhenNode(String fact, String as, String quantifier, Map<String, JsonNode> where,
+    String condition) {
 
   /**
    * Canonical constructor. Copies {@code where} into an insertion-ordered map.
@@ -33,6 +40,7 @@ record WhenNode(String fact, String as, Map<String, JsonNode> where, String cond
    *
    * @param fact the fact type
    * @param as the alias
+   * @param quantifier the quantifier as written, or null
    * @param where the operator maps
    * @param condition the CEL expression, or null
    */

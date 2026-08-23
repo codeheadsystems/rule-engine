@@ -279,7 +279,7 @@ public final class RuleCompiler {
           + " that binds a fact");
     }
 
-    validateActions(rule, aliasPositions.keySet());
+    validateActions(rule, aliasPositions.keySet(), negatedAliases);
 
     /*
      * Aliases an insertFact introduces count as bound for an expression, exactly as they do for a
@@ -287,7 +287,7 @@ public final class RuleCompiler {
      * can name it, and an expression is a later action's value like any other.
      */
     final Map<String, CompiledExpression> valueExpressions =
-        compileValueExpressions(rule, aliasPositions.keySet());
+        compileValueExpressions(rule, aliasPositions.keySet(), negatedAliases);
 
     if (diagnostics.size() != before) {
       return Optional.empty();
@@ -324,8 +324,8 @@ public final class RuleCompiler {
             compileJoin(rule, pattern, position, join, aliasPositions, aliasTypes, negatedAliases)
                 .ifPresent(joinTests::add);
         case ExpressionConstraint expression ->
-            compileCondition(rule, pattern, expression, aliasPositions, aliasTypes)
-                .ifPresent(expressionTests::add);
+            compileCondition(rule, pattern, expression, aliasPositions, aliasTypes,
+                negatedAliases).ifPresent(expressionTests::add);
         case FieldConstraint field ->
             compileField(rule, pattern, field).ifPresent(alphaTests::add);
         case RangeConstraint range ->
@@ -557,31 +557,47 @@ public final class RuleCompiler {
    *
    * @param rule the rule
    * @param lhsAliases the aliases the left-hand side binds
+   * @param negatedAliases the aliases a NOT_EXISTS pattern names, which bind nothing and so are
+   *     neither bound nor absent -- a distinction the diagnostic has to make
    */
-  private void validateActions(final RuleDefinition rule, final Set<String> lhsAliases) {
+  private void validateActions(final RuleDefinition rule, final Set<String> lhsAliases,
+      final Set<String> negatedAliases) {
     final Set<String> bound = new LinkedHashSet<>(lhsAliases);
     for (final ActionDefinition action : rule.then()) {
       switch (action) {
         case SetField setField -> {
-          requireAlias(rule, bound, setField.targetAlias(), "setField target");
-          requireValue(rule, bound, setField.value());
+          requireAlias(rule, bound, negatedAliases, setField.targetAlias(), "setField target");
+          requireValue(rule, bound, negatedAliases, setField.value());
         }
         case InsertFact insert -> {
-          insert.payload().forEach(field -> requireValue(rule, bound, field.value()));
+          insert.payload().forEach(
+              field -> requireValue(rule, bound, negatedAliases, field.value()));
           insert.alias().ifPresent(alias -> {
-            if (!bound.add(alias)) {
+            /*
+             * A negated alias is checked BEFORE `bound`, because it is in neither set: it names no
+             * fact, so it was never added to `bound`, and an unguarded add would therefore succeed
+             * and quietly hand the name to the inserted fact. Every later action naming it would
+             * then resolve -- to the opposite of what the rule says, a fact this rule created
+             * standing in for one whose absence it asserted.
+             */
+            if (negatedAliases.contains(alias)) {
+              diagnostics.add(rule.id() + ": insertFact binds alias '" + alias
+                  + "', which names a NOT_EXISTS pattern. One name cannot mean both the fact whose"
+                  + " absence this rule asserts and the fact this action creates");
+            } else if (!bound.add(alias)) {
               diagnostics.add(rule.id() + ": insertFact binds alias '" + alias
                   + "', which is already bound");
             }
           });
         }
         case RetractFact retract ->
-            requireAlias(rule, bound, retract.targetAlias(), "retractFact target");
+            requireAlias(rule, bound, negatedAliases, retract.targetAlias(), "retractFact target");
         case Emit emit -> {
           if (emit.eventType().isBlank()) {
             diagnostics.add(rule.id() + ": emit needs an event type");
           }
-          emit.payload().forEach(field -> requireValue(rule, bound, field.value()));
+          emit.payload().forEach(
+              field -> requireValue(rule, bound, negatedAliases, field.value()));
         }
         case CallFunction call -> {
           options.declaredFunctions().ifPresent(declared -> {
@@ -590,7 +606,7 @@ public final class RuleCompiler {
                   + "', which is not registered. Known functions: " + new TreeSet<>(declared));
             }
           });
-          call.args().forEach(field -> requireValue(rule, bound, field.value()));
+          call.args().forEach(field -> requireValue(rule, bound, negatedAliases, field.value()));
         }
       }
     }
@@ -601,15 +617,23 @@ public final class RuleCompiler {
    *
    * @param rule the rule
    * @param bound the aliases bound so far
+   * @param negatedAliases the aliases a NOT_EXISTS pattern names, which bind nothing
    * @param alias the alias to check
    * @param what a description of where the alias appeared
    */
-  private void requireAlias(final RuleDefinition rule, final Set<String> bound, final String alias,
-      final String what) {
-    if (!bound.contains(alias)) {
-      diagnostics.add(rule.id() + ": " + what + " names alias '" + alias
-          + "', which is not bound by 'when' or by an earlier insertFact");
+  private void requireAlias(final RuleDefinition rule, final Set<String> bound,
+      final Set<String> negatedAliases, final String alias, final String what) {
+    if (bound.contains(alias)) {
+      return;
     }
+    // The same three cases the $ref resolver above distinguishes, for the same reason: an alias
+    // the rule plainly writes, reported as one the rule does not have, sends an author looking for
+    // a typo that is not there. A negated alias is written in 'when' and binds nothing.
+    diagnostics.add(rule.id() + ": " + what + " names alias '" + alias + "', which "
+        + (negatedAliases.contains(alias)
+            ? "is a NOT_EXISTS pattern. A negated pattern binds no fact, so nothing can reference"
+                + " it"
+            : "is not bound by 'when' or by an earlier insertFact"));
   }
 
   /**
@@ -617,17 +641,18 @@ public final class RuleCompiler {
    *
    * @param rule the rule
    * @param bound the aliases bound so far
+   * @param negatedAliases the aliases a NOT_EXISTS pattern names, which bind nothing
    * @param value the expression to check
    */
   private void requireValue(final RuleDefinition rule, final Set<String> bound,
-      final ValueExpr value) {
+      final Set<String> negatedAliases, final ValueExpr value) {
     switch (value) {
       case Literal ignored -> {
         // A constant references nothing.
       }
-      case FieldRef ref -> requireAlias(rule, bound, ref.alias(), "$ref");
+      case FieldRef ref -> requireAlias(rule, bound, negatedAliases, ref.alias(), "$ref");
       case ExpressionValue expression -> expression.referencedAliases()
-          .forEach(alias -> requireAlias(rule, bound, alias, "expression"));
+          .forEach(alias -> requireAlias(rule, bound, negatedAliases, alias, "expression"));
     }
   }
 
@@ -835,7 +860,8 @@ public final class RuleCompiler {
    */
   private Optional<ExpressionTest> compileCondition(final RuleDefinition rule,
       final PatternDefinition pattern, final ExpressionConstraint constraint,
-      final Map<String, Integer> aliasPositions, final List<String> aliasTypes) {
+      final Map<String, Integer> aliasPositions, final List<String> aliasTypes,
+      final Set<String> negatedAliases) {
     final Set<String> bound = aliasPositions.keySet();
     /*
      * The prefix follows "<rule>: <alias>.<field>", which is what the DSL matches on to put a line
@@ -850,7 +876,7 @@ public final class RuleCompiler {
      * not an exotic name, and whose registration would win.
      */
     final String where = rule.id() + ": " + pattern.alias() + ": condition";
-    if (!checkAliases(where, constraint.referencedAliases(), bound)) {
+    if (!checkAliases(where, constraint.referencedAliases(), bound, negatedAliases)) {
       return Optional.empty();
     }
     try {
@@ -924,7 +950,7 @@ public final class RuleCompiler {
    * @return the compiled programs by source text
    */
   private Map<String, CompiledExpression> compileValueExpressions(final RuleDefinition rule,
-      final Set<String> whenAliases) {
+      final Set<String> whenAliases, final Set<String> negatedAliases) {
     final Map<String, CompiledExpression> programs = new LinkedHashMap<>();
     /*
      * Grown as the actions are walked, not gathered up front. §6.2.2 allocates an insertFact's
@@ -944,7 +970,7 @@ public final class RuleCompiler {
         // Keyed per operand, so the diagnostic lands on the line the expression is written on
         // rather than on the rule's id. The DSL registers the matching key at the same pointer.
         final String where = rule.id() + ": expression " + expression.expression();
-        if (!checkAliases(where, expression.referencedAliases(), bound)) {
+        if (!checkAliases(where, expression.referencedAliases(), bound, negatedAliases)) {
           continue;
         }
         try {
@@ -958,6 +984,8 @@ public final class RuleCompiler {
         }
       }
       if (action instanceof InsertFact insert) {
+        // Unguarded against a negated alias on purpose, unlike validateActions above: that check
+        // already rejects the rule, and repeating it here would report one defect twice.
         insert.alias().ifPresent(bound::add);
       }
     }
@@ -986,14 +1014,24 @@ public final class RuleCompiler {
    * @param where the diagnostic prefix
    * @param referenced the aliases the expression reads
    * @param bound every alias the rule binds
+   * @param negatedAliases the aliases a NOT_EXISTS pattern names, which bind nothing
    * @return true when every referenced alias is bound
    */
   private boolean checkAliases(final String where, final Set<String> referenced,
-      final Set<String> bound) {
+      final Set<String> bound, final Set<String> negatedAliases) {
     boolean valid = true;
     for (final String alias : referenced) {
       if (!bound.contains(alias)) {
-        diagnostics.add(where + ": reads alias '" + alias + "', which this rule does not bind");
+        // The third case again (§1's negation), for the same reason the $ref resolver and the
+        // action validator both make it: "this rule does not bind it" is true of a negated alias
+        // and reads as "there is no such alias", which is the one thing an author can see is
+        // false. An expression is where it matters most -- the alias is spelled inside free-form
+        // text, so a typo really is the first thing to suspect.
+        diagnostics.add(where + ": reads alias '" + alias + "', which "
+            + (negatedAliases.contains(alias)
+                ? "is a NOT_EXISTS pattern. A negated pattern binds no fact, so an expression has"
+                    + " nothing to read from it"
+                : "this rule does not bind"));
         valid = false;
       }
     }

@@ -12,6 +12,7 @@ and the engine disagree, this page is wrong.
 - [Three things to know before you start](#three-things-to-know-before-you-start)
 - [Your first rule](#your-first-rule)
 - [Matching two facts together](#matching-two-facts-together)
+- [Asking that a fact not exist](#asking-that-a-fact-not-exist)
 - [Doing something](#doing-something)
 - [Running it](#running-it)
 - [When it does not fire](#when-it-does-not-fire)
@@ -183,6 +184,47 @@ total: { gt: { $ref: c.creditLimit } }
 
 Do not worry about which pattern to write first for speed. The engine picks the binding order fresh
 on every fire cycle, smallest set first — the order you write is for readability.
+
+## Asking that a fact not exist
+
+Add `quantifier: notExists` to a pattern and it asserts an absence instead of a match. The rule
+below fires for every pending order with no payment against it:
+
+```yaml
+apiVersion: rules.v1
+rules:
+  - id: unpaid-order
+    when:
+      - fact: Order
+        as: o
+        where:
+          status: { eq: "PENDING" }
+      - fact: Payment
+        as: p
+        quantifier: notExists
+        where:
+          orderId: { eq: { $ref: o.id } }
+    then:
+      - action: emit
+        event: order.unpaid
+        payload: { orderId: { $ref: o.id } }
+```
+
+**The negated pattern binds nothing.** `p` is a name for the fact being looked for, so its `where`
+can be written; nothing else may use it. A `then` action naming `p` is a compile error, because
+there is no such fact to act on — that is the point of the rule.
+
+**Two things to know before you rely on it**, both of which are about facts arriving later.
+
+*A rule that fired because something was absent does not un-fire when it turns up.* There is no
+truth maintenance here. If the payment arriving has to undo the conclusion, make the conclusion a
+fact — `action: insertFact` with `fact: OrderUnpaid` — and write a second rule that retracts it when
+the payment appears.
+
+*Never negate a fact type your session evicts.* Eviction bounds a long-lived session by dropping
+facts, and a dropped fact is indistinguishable from one that was never there — so a cap on
+`Payment` makes this rule say a paid order is unpaid. Everywhere else in the engine eviction costs
+you a firing at worst. Cap the types you bind.
 
 ## Doing something
 

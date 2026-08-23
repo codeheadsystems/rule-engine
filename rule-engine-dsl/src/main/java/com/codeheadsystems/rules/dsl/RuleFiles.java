@@ -7,6 +7,7 @@ import com.codeheadsystems.rules.rule.ActionDefinition;
 import com.codeheadsystems.rules.rule.Constraint;
 import com.codeheadsystems.rules.rule.ExpressionConstraint;
 import com.codeheadsystems.rules.rule.PatternDefinition;
+import com.codeheadsystems.rules.rule.Quantifier;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
 import java.util.ArrayList;
@@ -166,6 +167,14 @@ public final class RuleFiles {
     for (int index = 0; index < rule.when().size(); index++) {
       final WhenNode pattern = rule.when().get(index);
       final String pointer = rulePointer + "/when/" + index;
+      /*
+       * Read first and acted on last. An unspellable quantifier costs this pattern -- there is no
+       * honest default to fall back to, since guessing `exists` would compile a rule that asks the
+       * opposite of what it says -- but the constraints below are still walked, so their problems
+       * are reported in the same pass rather than one edit at a time.
+       */
+      final Optional<Quantifier> quantifier =
+          Quantifiers.of(pattern.quantifier(), pointer + "/quantifier", diagnostics);
       final List<Constraint> constraints = new ArrayList<>();
       if (pattern.condition() != null) {
         /*
@@ -180,6 +189,17 @@ public final class RuleFiles {
         assembly.byConstraint.put(rule.id() + ": " + pattern.as() + ": condition",
             new Assembly.ConstraintSite(
                 parsed.index().nearest(pointer + "/condition"), rule.id()));
+        /*
+         * The compiler refuses a condition on a negated pattern outright, and writes that one under
+         * a different prefix -- "<rule>: alias '<alias>': ..." rather than the "<rule>: <alias>:
+         * condition: ..." an ordinary condition diagnostic carries. Registered here so it lands on
+         * the condition rather than on the rule's id, which is the whole point of this module.
+         */
+        if (quantifier.orElse(null) == Quantifier.NOT_EXISTS) {
+          assembly.byConstraint.put(rule.id() + ": alias '" + pattern.as() + "'",
+              new Assembly.ConstraintSite(
+                  parsed.index().nearest(pointer + "/condition"), rule.id()));
+        }
       }
       for (final Map.Entry<String, JsonNode> entry : pattern.where().entrySet()) {
         final String at =
@@ -195,7 +215,8 @@ public final class RuleFiles {
         constraints.addAll(
             OperatorMaps.constraintsOf(field.get(), entry.getValue(), at, diagnostics));
       }
-      patterns.add(PatternDefinition.of(pattern.as(), pattern.fact(), constraints));
+      quantifier.ifPresent(quantified -> patterns.add(
+          new PatternDefinition(pattern.as(), pattern.fact(), quantified, constraints)));
     }
     return patterns;
   }
@@ -297,7 +318,10 @@ public final class RuleFiles {
      * arbitrary expression text. A rule id containing {@code ": expression "} can therefore collide
      * with another rule's expression key and take its location. Adversarial rather than accidental,
      * and recorded here rather than defended against: the cost of the collision is a diagnostic
-     * pointing at the wrong line, and the cost of a defence would be a key nobody can read.
+     * pointing at the wrong line, and the cost of a defence would be a key nobody can read. The
+     * negation key {@code "<ruleId>: alias '<alias>'"} has one of its own on the same terms -- an
+     * alias literally named {@code alias 'p'}, on a pattern carrying a condition, renders the same
+     * text as the key for a negated alias {@code p}.
      *
      * @param location where the constraint is in the file
      * @param ruleId the rule that wrote it

@@ -132,6 +132,10 @@ class RuleFileParseTest {
       final WhenNode order = rule.when().getFirst();
       assertThat(order.fact()).isEqualTo("Order");
       assertThat(order.as()).isEqualTo("o");
+      assertThat(order.quantifier())
+          .describedAs("absent, which §2.5's default makes 'exists' -- and must go on making it,"
+              + " since every pattern written before the key existed omits it")
+          .isNull();
       assertThat(order.condition()).isNull();
       assertThat(order.where()).containsOnlyKeys("total", "status");
       assertThat(order.where().get("total").get("gt").intValue()).isEqualTo(10_000);
@@ -142,6 +146,36 @@ class RuleFileParseTest {
       assertThat(emit.event()).isEqualTo("order.flagged");
       assertThat(emit.payload()).containsOnlyKeys("orderId", "reason");
       assertThat(emit.payload().get("orderId").get("$ref").stringValue()).isEqualTo("o.id");
+    }
+  }
+
+  @Nested
+  @DisplayName("the quantifier key")
+  class QuantifierKey {
+
+    @Test
+    @DisplayName("binds as written, for Quantifiers rather than Jackson to judge")
+    void bindsAsWritten() {
+      final RuleFileDocument document = read(RuleSource.yaml("rules.yaml", """
+          apiVersion: rules.v1
+          rules:
+            - id: unpaid
+              when:
+                - fact: Order
+                  as: o
+                - fact: Payment
+                  as: p
+                  quantifier: notExists
+                  where:
+                    orderId: { eq: { $ref: o.id } }
+              then:
+                - action: emit
+                  event: unpaid
+          """)).document();
+
+      final RuleNode rule = document.rules().getFirst();
+      assertThat(rule.when().getFirst().quantifier()).isNull();
+      assertThat(rule.when().get(1).quantifier()).isEqualTo("notExists");
     }
   }
 

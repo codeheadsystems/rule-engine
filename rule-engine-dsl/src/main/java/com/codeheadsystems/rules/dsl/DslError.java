@@ -59,6 +59,15 @@ public enum DslError {
   MALFORMED_OPERAND("malformed-operand", true),
 
   /**
+   * A pattern's {@code quantifier} is not one this engine implements (§2.5, §1).
+   *
+   * <p>{@linkplain #shieldedBySchema() Shielded}: the schema enumerates the two spellings. Raised
+   * anyway, and with a message the schema cannot give -- §1's interim answer for the quantifiers it
+   * defers.
+   */
+  UNKNOWN_QUANTIFIER("unknown-quantifier", true),
+
+  /**
    * A {@code then} block names a verb that is not one of §6.2.2's five.
    *
    * <p>{@linkplain #shieldedBySchema() Shielded}: the schema enumerates the five.

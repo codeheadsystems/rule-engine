@@ -17,6 +17,7 @@ page and the engine disagree, this page is wrong.
 - [The rule file](#the-rule-file)
 - [A rule](#a-rule)
 - [`when`: patterns and operator maps](#when-patterns-and-operator-maps)
+  - [Negation: `quantifier: notExists`](#negation-quantifier-notexists)
 - [The operator table](#the-operator-table)
 - [`$ref`, and the `$$` escape](#ref-and-the--escape)
 - [`then`: the five actions](#then-the-five-actions)
@@ -107,6 +108,7 @@ rules:
     when:
       - fact: Order            # required: the fact type
         as: o                  # required: the alias, unique within this rule
+        quantifier: exists     # optional: 'exists' (the default) or 'notExists'
         where:                 # optional: field name -> operator map
           total:  { gt: 10000 }
           status: { eq: "PENDING" }
@@ -132,6 +134,64 @@ ingestion — see [the guide](dsl-guide.md#flatten-collections-at-ingestion).
 **Distinct aliases bind distinct facts.** `Order as o1` and `Order as o2` in one rule find two
 *different* orders; the compiler inserts the inequality for you. This differs from OPS5, and it is
 the reading rule authors expect.
+
+### Negation: `quantifier: notExists`
+
+A pattern with `quantifier: notExists` asserts that no such fact exists. "No `Payment` for this
+`Order`" is in the first ten rules most people write:
+
+```yaml
+apiVersion: rules.v1
+rules:
+  - id: unpaid-order
+    when:
+      - fact: Order
+        as: o
+        where:
+          status: { eq: "PENDING" }
+      - fact: Payment
+        as: p
+        quantifier: notExists          # no Payment may satisfy the where below
+        where:
+          orderId: { eq: { $ref: o.id } }
+    then:
+      - action: emit
+        event: order.unpaid
+        payload: { orderId: { $ref: o.id } }
+```
+
+`quantifier` takes `exists` (the default, and what every pattern without the key means) or
+`notExists`. `forAll` and `accumulate` are §1 deferrals and are rejected by the schema; the interim
+answer for both is to compute the answer at ingestion and insert it as a fact.
+
+**A negated pattern binds nothing.** Its alias exists so that its own `where` can be written, and
+nothing else in the rule may name it — not a `$ref` from another pattern, not a `then` action, and
+not an `insertFact` looking for a name to bind its new fact to. All three are compile errors, and
+each says *why* rather than claiming the alias does not exist.
+
+**It may join to any alias the rule binds**, in either direction of declaration: the negated
+pattern above could equally be written before the `Order` it references. What it cannot do is stand
+alone — a rule needs at least one pattern that binds a fact, so a rule that is nothing but
+negations is rejected.
+
+**Negating a type the rule already binds means "no *other* one."** `Order as o` plus a negated
+`Order as other` asks whether a *different* order exists, by the same implicit inequality that
+governs two positive aliases. A fact is never its own counterexample.
+
+**A `condition:` on a negated pattern is refused.** It would compile and never run — the §6.4
+post-filter walks the patterns that bind — so the negation would silently be broader than written.
+Say it with the pattern's own `where`, which is what decides whether the fact exists.
+
+**There is no truth maintenance.** A rule that fired because something was absent is *not* undone
+when that thing arrives. The absence ending makes the match ineligible from then on, which is not
+the same as retracting what it did. If you need the retraction, model the conclusion as a fact and
+retract it from a second rule.
+
+**Never negate a fact type the session evicts.** An evicted fact and an absent fact are
+indistinguishable to a negation, so a cap on `Payment` makes the rule above announce that a paid
+order is unpaid. Everywhere else eviction can only cost you a firing; here it manufactures a false
+conclusion. Cap the types you bind, not the ones whose absence you assert — see
+[`SessionOptions.eviction`](../README.md#concurrency).
 
 ### Two operators on one field
 
@@ -447,14 +507,15 @@ Fix `schema-violation` errors first.
 | `empty-range` | A `between` with neither `from` nor `to` |
 | `malformed-operand` | An operand of the wrong shape for its operator |
 | `unknown-action` | A `then` verb outside the five |
+| `unknown-quantifier` | A pattern's `quantifier` outside `exists` and `notExists` |
 | `malformed-action` | An action names a field path that will not compile, such as `a..b` |
 | `condition-not-implemented` | The CEL escape hatch; see below |
 | `semantic` | Everything the compiler checks: forward references, unknown aliases, duplicate ids, duplicate aliases, invalid regexes, malformed `where` and `$ref` field paths, unregistered function names |
 
-`unknown-operator`, `malformed-operand` and `unknown-action` are stated by the rule-file schema as
-well, and the schema runs first — so in practice you will see `schema-violation` for those. They
-exist as separate codes because the DSL compiler checks them too rather than assuming the gate ahead
-of it ran.
+`unknown-operator`, `malformed-operand`, `unknown-action` and `unknown-quantifier` are stated by the
+rule-file schema as well, and the schema runs first — so in practice you will see
+`schema-violation` for those. They exist as separate codes because the DSL compiler checks them too
+rather than assuming the gate ahead of it ran.
 
 ## The compiler report
 
@@ -689,9 +750,10 @@ time, insert it as a fact.
 
 ## Not implemented yet
 
-Deferred *in the rule-file DSL*, each with an interim answer in §1 of the spec: negation (`NOT_EXISTS`), accumulation,
+Deferred, each with an interim answer in §1 of the spec: accumulation, backward chaining, truth
+maintenance, `forAll`, and temporal operators. The short version of all of them is the same:
+compute it at ingestion and insert the answer as a fact.
 
-> Negation is implemented in the engine (see README) and reachable from the
-> `Rules` builder in `-testkit`. What is deferred is the rule-file surface for it.
-backward chaining, truth maintenance, and temporal operators. The short version of all of them is the
-same: compute it at ingestion and insert the answer as a fact.
+Negation is *not* on that list any more — [`quantifier: notExists`](#negation-quantifier-notexists)
+is implemented, with the two boundaries that section names: no truth maintenance, and never over an
+evicted type.

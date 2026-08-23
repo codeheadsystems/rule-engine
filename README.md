@@ -111,7 +111,12 @@ three matchers agree about it by construction rather than by testing. Two bounda
 and both are documented on `Rules.notExists`: there is no truth maintenance, so a rule that fired
 because something was absent is not undone when that thing arrives; and a negated type must not be
 one a session evicts, because an evicted fact and an absent one are indistinguishable to a negation.
-It is currently reachable from the `Rules` builder, not from a rule file.
+It is written in a rule file as `quantifier: notExists` on a pattern, and from the `Rules` builder
+as `notExists`; `docs/dsl-reference.md` carries the rule-file half. The compiler refuses what a
+negated alias cannot do -- be referenced by a `$ref`, be named by an action, carry a §6.4
+`condition`, or stand as a rule's only pattern -- and says why in each case, because an alias the
+author can see in front of them, reported as one the rule does not have, sends them looking for a
+typo that is not there.
 
 **What does not exist:** accumulation, truth maintenance, `FOR_ALL` and CEP, which are §1 non-goals
 with documented interim answers.

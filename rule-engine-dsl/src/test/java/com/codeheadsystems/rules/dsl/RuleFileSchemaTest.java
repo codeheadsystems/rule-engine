@@ -146,6 +146,30 @@ class RuleFileSchemaTest {
     }
 
     @Test
+    @DisplayName("a quantifier outside the implemented pair is rejected, forAll included")
+    void unknownQuantifier() {
+      /*
+       * §2.5's enum reserves FOR_ALL and ACCUMULATE and §1 defers them, and the schema deliberately
+       * does not spell either: rules.v1 is published, and a spelling for a feature that does not
+       * exist promises a shape the version implementing it may not want.
+       *
+       * An enum violation names the permitted values rather than the offending one -- the same
+       * shape the verb enum above produces -- so what makes it navigable is the location, which is
+       * the key's own line and not the rule's.
+       */
+      assertThat(reject(file("""
+          id: r
+          when: [{ fact: Order, as: o, quantifier: forAll }]
+          then: [{ action: emit, event: e }]
+          """))).anySatisfy(diagnostic -> {
+            assertThat(diagnostic.error()).isEqualTo(DslError.SCHEMA_VIOLATION);
+            assertThat(diagnostic.message()).contains("notExists");
+            assertThat(diagnostic.location().orElseThrow().pointer())
+                .isEqualTo("/rules/0/when/0/quantifier");
+          });
+    }
+
+    @Test
     @DisplayName("an unknown top-level file key is rejected")
     void unknownFileKey() {
       assertThat(reject("""
@@ -301,6 +325,19 @@ class RuleFileSchemaTest {
           when:
             - { fact: Order, as: o }
             - { fact: Customer, as: c, where: { id: { eq: { $ref: o.customerId } } } }
+          then: [{ action: emit, event: e }]
+          """));
+    }
+
+    @Test
+    @DisplayName("both spellings of the quantifier key, which Quantifiers maps and §2.5 defines")
+    void quantifierPasses() {
+      accept(file("""
+          id: r
+          when:
+            - { fact: Order, as: o, quantifier: exists }
+            - { fact: Payment, as: p, quantifier: notExists,
+                where: { orderId: { eq: { $ref: o.id } } } }
           then: [{ action: emit, event: e }]
           """));
     }

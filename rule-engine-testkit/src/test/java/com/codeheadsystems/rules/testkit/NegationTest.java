@@ -6,6 +6,7 @@ import com.codeheadsystems.rules.compiler.RuleCompilationException;
 import com.codeheadsystems.rules.compiler.RuleCompiler;
 import com.codeheadsystems.rules.evict.EvictionPolicy;
 import com.codeheadsystems.rules.fact.FactHandle;
+import com.codeheadsystems.rules.rule.ExpressionConstraint;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
 import com.codeheadsystems.rules.session.RuleSession;
@@ -264,6 +265,84 @@ class NegationTest {
       Assertions.assertThatThrownBy(() -> RuleCompiler.compile(List.of(rule)))
           .isInstanceOf(RuleCompilationException.class)
           .hasMessageContaining("at least one pattern that binds a fact");
+    }
+
+    @Test
+    @DisplayName("a $ref to the negated alias, which names a fact no tuple holds")
+    void aReferenceToANegatedAliasIsRejected() {
+      final RuleDefinition rule = Rules.rule("dangling")
+          .when("o", "Order", pattern -> pattern.gt("total", 0))
+          .notExists("p", "Payment", pattern -> pattern.gt("amount", 0))
+          .when("c", "Customer", pattern -> pattern.ref("id", "p.customerId"))
+          .then(actions -> actions.emit("x"))
+          .build();
+
+      Assertions.assertThatThrownBy(() -> RuleCompiler.compile(List.of(rule)))
+          .isInstanceOf(RuleCompilationException.class)
+          .hasMessageContaining("is a NOT_EXISTS pattern")
+          .describedAs("not 'no such alias' -- the alias is written right there, and an author"
+              + " sent looking for a typo will not find one");
+    }
+
+    @Test
+    @DisplayName("a right-hand side naming the negated alias, told apart from an unbound one")
+    void anActionOnANegatedAliasIsRejected() {
+      /*
+       * The same three-way distinction the $ref resolver makes, on the other side of the rule. A
+       * negated alias reaches an action only through this path, and until negation had a rule-file
+       * surface nobody could write it by accident; now they can.
+       */
+      final RuleDefinition rule = Rules.rule("mutate-the-absent")
+          .when("o", "Order", pattern -> pattern.gt("total", 0))
+          .notExists("p", "Payment", pattern -> pattern.gt("amount", 0))
+          .then(actions -> actions.setField("p", "status", "VOID"))
+          .build();
+
+      Assertions.assertThatThrownBy(() -> RuleCompiler.compile(List.of(rule)))
+          .isInstanceOf(RuleCompilationException.class)
+          .hasMessageContaining("setField target names alias 'p', which is a NOT_EXISTS pattern");
+    }
+
+    @Test
+    @DisplayName("an insertFact that reuses the negated alias, which would shadow the negation")
+    void anInsertFactCannotStealANegatedAlias() {
+      /*
+       * The sharpest of the three, because it fails silently rather than loudly: the negated alias
+       * is in neither the bound set nor the taken set, so an unguarded insertFact alias would take
+       * it and every later action naming it would resolve -- to the fact this rule just created,
+       * standing in for the one whose absence it asserted.
+       */
+      final RuleDefinition rule = Rules.rule("shadow")
+          .when("o", "Order", pattern -> pattern.gt("total", 0))
+          .notExists("p", "Payment", pattern -> pattern.gt("amount", 0))
+          .then(actions -> actions
+              .insertFactAs("Payment", "p", "orderId", 1)
+              .setField("p", "status", "NEW"))
+          .build();
+
+      Assertions.assertThatThrownBy(() -> RuleCompiler.compile(List.of(rule)))
+          .isInstanceOf(RuleCompilationException.class)
+          .hasMessageContaining("which names a NOT_EXISTS pattern");
+    }
+
+    @Test
+    @DisplayName("an expression that reads the negated alias, which has nothing to read")
+    void anExpressionCannotReadANegatedAlias() {
+      // The §6.4 half of the same rule. Rejected before any expression compiler is consulted --
+      // the alias check runs first -- so this holds whether or not -cel is on the classpath.
+      final RuleDefinition rule = Rules.rule("read-the-absent")
+          .when("o", "Order", pattern -> pattern.constraint(
+              new ExpressionConstraint("p.amount > 0", java.util.Set.of("p"))))
+          .notExists("p", "Payment", pattern -> pattern.gt("amount", 0))
+          .then(actions -> actions.emit("x"))
+          .build();
+
+      // The tail, not the shared "is a NOT_EXISTS pattern" prefix: all three branches carry that,
+      // so asserting it would pass with this branch wired to the action wording -- and the wording
+      // is what this branch exists to add.
+      Assertions.assertThatThrownBy(() -> RuleCompiler.compile(List.of(rule)))
+          .isInstanceOf(RuleCompilationException.class)
+          .hasMessageContaining("so an expression has nothing to read from it");
     }
 
     @Test

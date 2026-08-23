@@ -94,10 +94,11 @@ class DslDiagnosticsTest {
       Actions.actionOf(
           new ThenNode("sendEmail", null, null, null, null, null, null, null, null, null),
           "", diagnostics);
+      Quantifiers.of("forAll", "", diagnostics);
 
       assertThat(raised).extracting(DslDiagnostic::error)
           .containsExactlyInAnyOrder(DslError.UNKNOWN_OPERATOR, DslError.MALFORMED_OPERAND,
-              DslError.UNKNOWN_ACTION);
+              DslError.UNKNOWN_ACTION, DslError.UNKNOWN_QUANTIFIER);
     }
 
     private tools.jackson.databind.JsonNode operatorMap(final String yaml) {
@@ -431,6 +432,114 @@ class DslDiagnosticsTest {
   }
 
   @Nested
+  @DisplayName("a negated pattern")
+  class Negation {
+
+    @Test
+    @DisplayName("with a quantifier this engine does not implement is refused at the schema gate")
+    void unknownQuantifier() {
+      final DslDiagnostic diagnostic = only("""
+          apiVersion: rules.v1
+          rules:
+            - id: quantified
+              when:
+                - fact: Order
+                  as: o
+                  quantifier: forAll
+              then: [{ action: emit, event: e }]
+          """);
+
+      assertThat(diagnostic.error()).isEqualTo(DslError.SCHEMA_VIOLATION);
+      assertThat(diagnostic.location().orElseThrow().line())
+          .as("the quantifier's own line, not the rule's id")
+          .isEqualTo(7);
+    }
+
+    @Test
+    @DisplayName("carrying a condition is refused by the compiler, against the condition's line")
+    void conditionOnANegation() {
+      /*
+       * The compiler refuses this one (a condition on a negated pattern would compile and never
+       * run) and writes it under a prefix no other diagnostic uses: "<rule>: alias '<alias>': ...".
+       * If that wording moves, this test is what notices -- the message would still be raised, and
+       * would silently fall back to pointing at the rule's id.
+       */
+      final List<DslDiagnostic> found = reject("""
+          apiVersion: rules.v1
+          rules:
+            - id: negated-condition
+              when:
+                - fact: Order
+                  as: o
+                - fact: Payment
+                  as: p
+                  quantifier: notExists
+                  condition: "p.amount > 0"
+              then: [{ action: emit, event: e }]
+          """);
+
+      assertThat(found).anySatisfy(diagnostic -> {
+        assertThat(diagnostic.message()).contains("a condition on a NOT_EXISTS pattern");
+        assertThat(diagnostic.location().orElseThrow().line()).isEqualTo(10);
+      });
+    }
+
+    @Test
+    @DisplayName("named by an action is refused too, which is the other half of the same rule")
+    void actionOnANegatedAlias() {
+      // The reference states the $ref case and the action case in one breath; this is the second.
+      // It locates to the rule's id rather than to the action, as every action diagnostic does --
+      // asserted so that a later change to that fallback is a decision rather than a surprise.
+      final DslDiagnostic diagnostic = only("""
+          apiVersion: rules.v1
+          rules:
+            - id: mutate-the-absent
+              when:
+                - fact: Order
+                  as: o
+                - fact: Payment
+                  as: p
+                  quantifier: notExists
+              then:
+                - action: setField
+                  target: p
+                  field: status
+                  value: "VOID"
+          """);
+
+      assertThat(diagnostic.message())
+          .contains("setField target names alias 'p', which is a NOT_EXISTS pattern");
+      assertThat(diagnostic.location().orElseThrow().line()).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("referenced by another pattern is located at the $ref that reached for it")
+    void referenceToANegatedAlias() {
+      final DslDiagnostic diagnostic = only("""
+          apiVersion: rules.v1
+          rules:
+            - id: dangling
+              when:
+                - fact: Order
+                  as: o
+                - fact: Payment
+                  as: p
+                  quantifier: notExists
+                - fact: Customer
+                  as: c
+                  where:
+                    id: { eq: { $ref: p.customerId } }
+              then: [{ action: emit, event: e }]
+          """);
+
+      assertThat(diagnostic.message()).contains("is a NOT_EXISTS pattern");
+      assertThat(diagnostic.location().orElseThrow().line())
+          .as("the constraint that made the reference, which is what the author has to edit")
+          .isEqualTo(13);
+    }
+  }
+
+  @Nested
   @DisplayName("reporting")
   class Reporting {
 
@@ -481,10 +590,11 @@ class DslDiagnosticsTest {
       // SCHEMA_VIOLATION
       "apiVersion: rules.v1\nrules:\n  - saliance: 3\n",
       /*
-       * The three shielded codes each need a fixture that ATTEMPTS them, or
+       * The four shielded codes each need a fixture that ATTEMPTS them, or
        * shieldedErrorsAreUnreachable asserts only that a corpus which never tries something did not
-       * achieve it -- and a schema that quietly lost `additionalProperties: false` or its verb enum
-       * would sail through. These three are what make that test load-bearing.
+       * achieve it -- and a schema that quietly lost `additionalProperties: false`, its verb enum
+       * or its quantifier enum would sail through. These four are what make that test
+       * load-bearing.
        */
       // UNKNOWN_OPERATOR, if the schema's closed operator set ever stopped closing it.
       """
@@ -501,6 +611,15 @@ class DslDiagnosticsTest {
         - id: unknown-action
           when: [{ fact: Order, as: o }]
           then: [{ action: sendEmail, to: "ops@example.com" }]
+      """,
+      // UNKNOWN_QUANTIFIER, if the schema's quantifier enum ever stopped enumerating. §1 defers
+      // forAll, which is the spelling an author is most likely to try.
+      """
+      apiVersion: rules.v1
+      rules:
+        - id: unknown-quantifier
+          when: [{ fact: Order, as: o, quantifier: forAll }]
+          then: [{ action: emit, event: e }]
       """,
       """
       apiVersion: rules.v1
