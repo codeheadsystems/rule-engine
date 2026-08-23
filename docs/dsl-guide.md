@@ -236,6 +236,7 @@ module and an explicit registration, because it gives up the indexed fast path.
 apiVersion: rules.v1
 rules:
   - id: interesting-order
+    noLoop: true                                     # required: see the fourth bullet below
     when:
       - fact: Order
         as: o
@@ -256,7 +257,7 @@ surviving candidate, so what `where` removes is work the condition never does.
 `$expr` on the right is the cheap one: it runs once per firing. It is also the better answer to
 "I need to compute a value" than `callFunction`, which runs at commit time and is not transactional.
 
-Three things will bite you if nobody says them:
+Four things will bite you if nobody says them:
 
 - **An absent field is an error here, not a false.** Everything else in this guide treats absence as
   a value; CEL does not. Write `has(o.coupon) && o.coupon != ''`.
@@ -267,6 +268,12 @@ Three things will bite you if nobody says them:
   policy on this side. Guard what you read.
 - **You cannot read a clock.** That is on purpose — the engine promises the same facts produce the
   same firings, and a rule that can read the time breaks it. Insert the time as a fact.
+- **A condition makes every field of the fact "read", so a rule that writes to its own fact needs
+  `noLoop`.** A condition can read anything on the aliases it binds, and the compiler will not try to
+  work out which paths — under-declaring by one path loses a firing silently, so it declares the
+  whole payload. The consequence is that *any* update to that fact counts as a change the rule cares
+  about, including to a field nothing reads. The example above sets `band` on the very order it
+  matched, so without `noLoop` it un-refracts itself and fires again. That is why it is there.
 
 See [the reference](dsl-reference.md#the-expression-escape-hatch) for registration and cost limits.
 

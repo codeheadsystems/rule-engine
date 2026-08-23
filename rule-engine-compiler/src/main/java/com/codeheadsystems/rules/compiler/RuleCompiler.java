@@ -880,14 +880,29 @@ public final class RuleCompiler {
        * update to a fact type carrying a condition propagates. §3.4.2's fast path is untouched,
        * because an identical payload short-circuits before the trie is consulted at all.
        *
-       * EVERY referenced alias, not this pattern's type: a condition on the Order pattern reading
-       * c.creditLimit is made false by an update to the Customer, and recording only the Order
-       * would leave that update silently un-propagated -- the same defect, one alias over.
+       * EVERY alias the RULE BINDS, not merely the ones the constraint declares. That is broader
+       * than it was, and the narrower version was silently wrong for every rule written in the DSL.
+       *
+       * ExpressionConstraint.referencedAliases is documented as "optional, and advisory" -- the
+       * expression language does the real check against the variables it was handed, and the DSL
+       * deliberately passes an EMPTY set, because populating it would change §5.6's content hash and
+       * make the same rule authored in YAML and in Java carry different versions. Recording roots
+       * from that set therefore recorded nothing at all for a rule file: a YAML condition reading
+       * o.total, on a pattern whose `where` block happened not to constrain /total, produced tested
+       * paths that did not include it, so an update taking total from 100 to 5000 changed no tested
+       * path, propagated nothing, and never fired. That is precisely the Phase 3 defect the
+       * paragraph above describes as fixed -- fixed for hand-built definitions only, which is all
+       * ConditionTestedPathsTest exercised. It hid because an alpha constraint on the same path
+       * covers for it, which is the common shape.
+       *
+       * So the advisory set is not consulted here. A field whose contract says it may be empty
+       * cannot be what a correctness property rests on, and the fail-safe reading of "we do not know
+       * which aliases this expression reads" is "assume all of them". This is the same
+       * correct-but-conservative move as recording the root rather than the read paths, one level
+       * up, and it costs what that costs: an update to any fact a conditioned rule binds propagates.
        */
-      for (final String alias : constraint.referencedAliases()) {
-        // checkAliases above has already established every referenced alias is bound, so the
-        // position is never null here.
-        recordConditionRoot(rule.id(), aliasTypes.get(aliasPositions.get(alias)));
+      for (final String factType : aliasTypes) {
+        recordConditionRoot(rule.id(), factType);
       }
       return Optional.of(new ExpressionTest(constraint, program));
     } catch (final ExpressionCompilationException rejected) {

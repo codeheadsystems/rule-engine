@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.codeheadsystems.rules.compiler.CompilerOptions;
+import com.codeheadsystems.rules.dsl.RuleFiles;
+import com.codeheadsystems.rules.dsl.RuleSource;
 import com.codeheadsystems.rules.compiler.RuleCompiler;
 import com.codeheadsystems.rules.fact.DefaultWorkingMemory;
 import com.codeheadsystems.rules.fact.FactHandle;
@@ -94,6 +96,58 @@ class ConditionTestedPathsTest {
         .describedAs("update on %s must match retract+insert", strategy)
         .isEqualTo(viaRetractInsert)
         .isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("a condition in a RULE FILE makes its type tested, which it did not")
+  void aDslConditionRecordsItsRoot() throws Exception {
+    /*
+     * The defect this whole class exists to prevent, arriving through the door the class did not
+     * watch. Every case here built its RuleDefinition by hand and passed the referenced aliases
+     * explicitly -- and roots were recorded from exactly that set, so the tests passed while the
+     * DSL, which is how rules are meant to be authored, recorded nothing at all.
+     *
+     * ExpressionConstraint.referencedAliases is documented as optional and advisory, and RuleFiles
+     * passes it empty on purpose: populating it would change §5.6's content hash and make the same
+     * rule authored in YAML and in Java carry different versions. So a correctness property must
+     * not rest on it, and no longer does.
+     *
+     * The `where` block deliberately constrains a DIFFERENT field from the one the condition reads.
+     * With `total` constrained as well, an alpha test records /total and covers for the bug -- which
+     * is the common shape, and why this went unnoticed.
+     */
+    final CompiledRuleSet rules = RuleFiles.compile(
+        List.of(RuleSource.yaml("conditions.yaml", """
+            apiVersion: rules.v1
+            rules:
+              - id: big-open-order
+                when:
+                  - fact: Order
+                    as: o
+                    where:
+                      status: { eq: "OPEN" }
+                    condition: "o.total > 1000"
+                then: [{ action: emit, event: big }]
+            """)),
+        withCel());
+
+    assertThat(rules.testedPaths().changedPaths("Order",
+        Facts.obj("status", "OPEN", "total", 100),
+        Facts.obj("status", "OPEN", "total", 5_000)))
+        .describedAs("the condition reads /total, so a change to it is a change the rule tests")
+        .isNotEmpty();
+
+    try (RuleSession session = rules.newSession()) {
+      final FactHandle order =
+          session.insert("Order", Facts.obj("status", "OPEN", "total", 100));
+      assertThat(session.fireAllRules().firedCount()).describedAs("100 is not over 1000").isZero();
+
+      session.update(order, Facts.obj("status", "OPEN", "total", 5_000));
+
+      assertThat(session.fireAllRules().firedCount())
+          .describedAs("the condition is true now, and an update is not a silent no-op")
+          .isEqualTo(1);
+    }
   }
 
   @Test
