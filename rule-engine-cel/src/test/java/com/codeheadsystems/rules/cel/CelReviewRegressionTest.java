@@ -313,6 +313,75 @@ class CelReviewRegressionTest {
     }
 
     @Test
+    @DisplayName("a negation is applied before the condition, and the counts prove which ran first")
+    void negationRunsBeforeTheCondition() {
+      /*
+       * §1's NOT_EXISTS and §6.4's conditions both remove tuples that satisfied every pattern and
+       * every join, and RecomputingAgenda.postFilter applies absences() first -- so a tuple an
+       * absence defeats is never offered to the condition at run time. The explainer has to apply
+       * them in the same order or it reports a rejection the engine never made.
+       *
+       * The three orders below distinguish the two orderings by arithmetic. Order 3 fails BOTH: it
+       * has a payment and its total is below the threshold. Under the engine's order it is one of
+       * two suppressed by the negation; under the reverse it would be one of two rejected by the
+       * condition. Only one of those readings can be right, and the counts say which.
+       */
+      final CompiledRuleSet rules = compile(Rules.rule("unpaid-and-big")
+          .when("o", "Order", pattern -> pattern.constraint(
+              new ExpressionConstraint("o.total > 1000", Set.of("o"))))
+          .notExists("p", "Payment", pattern -> pattern.ref("orderId", "o.id"))
+          .then(actions -> actions.emit("e")).build());
+
+      try (RuleSession session = rules.newSession()) {
+        session.insert("Order", Facts.json("{\"id\": 1, \"total\": 5000}"));
+        session.insert("Order", Facts.json("{\"id\": 2, \"total\": 5}"));
+        session.insert("Order", Facts.json("{\"id\": 3, \"total\": 5}"));
+        session.insert("Payment", Facts.json("{\"orderId\": 1}"));
+        session.insert("Payment", Facts.json("{\"orderId\": 3}"));
+        assertThat(session.fireAllRules().fired()).isEmpty();
+
+        final Explanation why = new MatchExplainer(rules, session).explain("unpaid-and-big");
+
+        assertThat(why.verdict()).hasValueSatisfying(verdict -> assertThat(verdict)
+            .as("orders 1 and 3, the negation having claimed 3 before the condition saw it")
+            .contains("2 combination(s) matched every pattern and join")
+            .contains("no Payment matches 'p'")
+            .as("order 2 alone; the clause is additional to the count above, not another view of it")
+            .contains("a further 1 were rejected by a 'condition' expression"));
+        assertThat(why.negations()).singleElement().satisfies(negation ->
+            assertThat(negation.suppressed()).isEqualTo(2));
+      }
+    }
+
+    @Test
+    @DisplayName("a negation and an unevaluable condition are reported as the different problems they are")
+    void negationAndAThrowingConditionAreBothNamed() {
+      // The urgent half of §6.4's two outcomes survives being reported alongside a negation: at run
+      // time an expression that cannot be evaluated does not filter a match, it throws and stops the
+      // fire cycle, so telling the author their facts were "rejected" points them at their data.
+      final CompiledRuleSet rules = compile(Rules.rule("boom-and-unpaid")
+          .when("o", "Order", pattern -> pattern.constraint(
+              new ExpressionConstraint("o.missingField > 1", Set.of("o"))))
+          .notExists("p", "Payment", pattern -> pattern.ref("orderId", "o.id"))
+          .then(actions -> actions.emit("e")).build());
+
+      try (RuleSession session = rules.newSession()) {
+        session.insert("Order", Facts.json("{\"id\": 1, \"total\": 5}"));
+        session.insert("Order", Facts.json("{\"id\": 2, \"total\": 5}"));
+        session.insert("Payment", Facts.json("{\"orderId\": 1}"));
+
+        final String why = new MatchExplainer(rules, session).explain("boom-and-unpaid").describe();
+
+        assertThat(why)
+            .contains("no Payment matches 'p'")
+            .contains("could not be evaluated")
+            .contains("stops the fire cycle")
+            .as("the joins held and the patterns matched; blaming either is a wrong lead")
+            .doesNotContain("no combination of them satisfies");
+      }
+    }
+
+    @Test
     @DisplayName("does not claim exhaustiveness when the search ran out of budget")
     void truncatedSearchIsNotADefiniteNegative() {
       /*

@@ -353,11 +353,31 @@ survivors and has forgotten the casualties. So it re-evaluates constraints one a
 working memory — slower by every measure, and the only way to know which constraint did the
 eliminating.
 
-**It cannot see negations, and will answer a negated rule wrongly.** A `NOT_EXISTS` pattern is not
-in the rule's pattern list — deliberately, so that nothing downstream has to know to skip it — so the
-explainer reports a rule suppressed by an absence as having eligible matches. That is a known gap
-rather than an oversight: closing it means evaluating the negations here as the agenda does. Until
-then, if a negated rule is silent, the absence it asserts is the first thing to check by hand.
+**It sees negations, and names the fact that is in the way.** A `NOT_EXISTS` pattern is not in the
+rule's pattern list — deliberately, so that nothing downstream has to know to skip it — so for a
+while the explainer reported a rule suppressed by an absence as having eligible matches, which is
+the opposite of the truth. It now evaluates the negations against each complete match, before the
+§6.4 conditions, using the same `Negations` predicate the agenda decides with rather than a second
+copy of the semantics:
+
+```java
+// rule unpaid-shipped-order: 1 combination(s) matched every pattern and join, but the rule asserts that no Payment matches 'p' and fact #2 does (§1's NOT_EXISTS)
+//   o: Order — 1 considered, 1 matched
+//   not p: Payment — 1 present, suppressed 1 match(es) — e.g. fact #2
+```
+
+`Explanation.negations()` carries one entry per negated pattern whether or not it suppressed
+anything, and the numbers run the other way from a pattern's: how many facts of the type are
+*present*, and how many matches their presence removed.
+
+It still cannot *detect* §4.4's hazard — over a type the session evicts, an evicted fact and an
+absent one are indistinguishable, so this re-asks the same question of the same working memory and
+is fooled identically. What it does is put the count in front of you, which is the part that changes
+what you do next:
+
+```
+// rule unpaid-shipped-order: 1 match(es); all eligible, none has fired yet — WARNING: 2 Payment fact(s) evicted this session, and this rule asserts their absence: an evicted fact and an absent one are indistinguishable to a negation, so this match may be a false conclusion (§4.4)
+```
 
 Pin the facts you are actually asking about when you have them, which is the sharper question:
 

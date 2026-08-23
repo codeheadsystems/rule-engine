@@ -4,6 +4,7 @@ import com.codeheadsystems.rules.expr.ExpressionBindings;
 import com.codeheadsystems.rules.fact.Fact;
 import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.match.ActivationKey;
+import com.codeheadsystems.rules.match.Negations;
 import com.codeheadsystems.rules.rule.AlphaTest;
 import com.codeheadsystems.rules.rule.CompiledPattern;
 import com.codeheadsystems.rules.rule.CompiledRule;
@@ -46,20 +47,35 @@ import tools.jackson.databind.node.MissingNode;
  * <p>{@link #explain(String)} asks "why did nothing match", and reports per pattern over all
  * candidates. The right tool when a rule is silent.
  *
- * <p><strong>It does not know about negation, and will answer a negated rule wrongly.</strong> A
- * {@code NOT_EXISTS} pattern is not in {@code CompiledRule.patterns()} -- deliberately, so that the
- * planner, the join walk and the streaming matcher's pattern sites need not know it exists -- and
- * everything here walks that list. So a rule suppressed because the fact whose absence it asserts is
- * present reports "N match(es); all eligible, none has fired yet", which is the opposite of the
- * truth, and the offending fact appears nowhere. §7.2's whole claim is that this answers "why did R
- * not fire" better than a trace can; for a negated rule it currently does not, and that is a known
- * gap rather than an oversight. Fixing it means evaluating the negations here as the agenda does --
- * see {@code RecomputingAgenda.absences}.
- *
  * <p>{@link #explain(String, Map)} asks the sharper and more common question: "I am looking at
  * <em>these specific facts</em> and I expected them to match — what stopped them?" With the bindings
  * pinned, every pattern has exactly one candidate, so the answer is a single chain of constraint
  * evaluations ending at the first false. This is the overload rule authors actually reach for.
+ *
+ * <h2>Negation</h2>
+ *
+ * <p>A {@code NOT_EXISTS} pattern is not in {@code CompiledRule.patterns()} -- deliberately, so that
+ * the join planner, the join walk and the streaming matcher's pattern sites need not know negation
+ * exists -- so the walk above cannot see one, and for a while this class could not either. A rule
+ * suppressed because the fact whose absence it asserts is <em>present</em> reported "N match(es); all
+ * eligible, none has fired yet": the opposite of the truth, with the offending fact named nowhere.
+ * That was §7.2's claim failing on precisely the rules §1 calls "the first ten rules most people
+ * write".
+ *
+ * <p>So negations are evaluated here too, against each complete tuple and <strong>before</strong> the
+ * §6.4 conditions, which is the order {@code RecomputingAgenda.postFilter} applies them in. The
+ * predicate itself is not re-implemented: it is {@link Negations#witness}, the same code the agenda
+ * decides with. That sharing is the point rather than a convenience -- a diagnostic that disagrees
+ * with the engine it is diagnosing sends an author to fix a rule that is already correct -- and it is
+ * also what supplies the part an author cannot derive, the {@link NegationResult#exampleWitness()}
+ * that says <em>which</em> fact is standing in the way.
+ *
+ * <p>Two limits remain, and both are properties of negation rather than of this class. Because a
+ * negated pattern binds nothing, there is no candidate population to report survivors and casualties
+ * over, so {@link NegationResult} answers different questions from {@link PatternResult} and is kept
+ * in a separate list. And an evicted fact is indistinguishable from an absent one (§4.4), so over an
+ * evicted type this explains exactly what the engine does -- which is the wrong answer, identically
+ * arrived at.
  */
 public final class MatchExplainer {
 
@@ -117,8 +133,8 @@ public final class MatchExplainer {
     // answer -- which is the one an author is least able to work out for themselves.
     final Matches matches = matches(rule, survivorsByAlias);
     final List<PatternResult> annotated = withJoinNotes(rule, results, matches);
-    return new Explanation(ruleId, annotated, verdict(rule, annotated, matches),
-        matches.complete());
+    return new Explanation(ruleId, annotated, matches.negations(),
+        verdict(rule, annotated, matches), matches.complete());
   }
 
   /**
@@ -145,8 +161,36 @@ public final class MatchExplainer {
     }
     final Matches matches = matches(rule, survivorsByAlias);
     final List<PatternResult> annotated = withJoinNotes(rule, results, matches);
-    return new Explanation(ruleId, annotated, verdict(rule, annotated, matches),
+    /*
+     * A pinned alias naming a negation leads, the way analysePinned's notes do: the question is
+     * malformed and answering the one that was meant would be a guess. It became worth saying only
+     * once negations were reported -- the output now prints "not p: Payment", which is an invitation
+     * to pin `p`, and before this the answer to doing so was silence.
+     */
+    return new Explanation(ruleId, annotated, matches.negations(),
+        pinnedNegatedAlias(rule, proposedBindings).or(() -> verdict(rule, annotated, matches)),
         matches.complete());
+  }
+
+  /**
+   * Whether the caller pinned an alias belonging to a negated pattern.
+   *
+   * @param rule the rule
+   * @param proposedBindings the facts the caller pinned, by alias
+   * @return the diagnostic, or empty when every pinned alias binds something
+   */
+  private static Optional<String> pinnedNegatedAlias(final CompiledRule rule,
+      final Map<String, FactHandle> proposedBindings) {
+    for (final CompiledPattern negation : rule.negations()) {
+      if (proposedBindings.containsKey(negation.alias())) {
+        // Named, not merely reported as unknown: the compiler refuses a $ref to a negated alias
+        // with the same distinction, because an alias the author can see, reported as one the rule
+        // does not have, sends them hunting a typo that is not there.
+        return Optional.of("'" + negation.alias() + "' is a NOT_EXISTS pattern: it binds no fact,"
+            + " so pinning it constrains nothing (§1)");
+      }
+    }
+    return Optional.empty();
   }
 
   /**
@@ -256,10 +300,11 @@ public final class MatchExplainer {
       // before it ever reaches the budget-aware wording, emitting one here would make that wording
       // unreachable for every rule with a join and turn a lower bound into a definite negative.
       /*
-       * `matches.found()` excludes tuples a §6.4 condition removed, so an empty match set no longer
-       * implies the joins failed -- and blaming a join that in fact holds sends the author to
-       * inspect correct code. Same lesson as the budget guard beside it: only claim "nothing
-       * joined" when nothing else can account for the emptiness.
+       * `matches.found()` excludes tuples a §6.4 condition removed and tuples an asserted absence
+       * suppressed, so an empty match set no longer implies the joins failed -- and blaming a join
+       * that in fact holds sends the author to inspect correct code. Same lesson as the budget
+       * guard beside it: only claim "nothing joined" when nothing else can account for the
+       * emptiness.
        */
       final boolean joined = pattern.joinTests().isEmpty() || result.survivors().isEmpty()
           || !matches.complete() || matches.removedEverything();
@@ -340,11 +385,46 @@ public final class MatchExplainer {
         payloads.computeIfAbsent(handle, id ->
             session.get(new FactHandle(id)).map(Fact::payload).orElse(null))));
     final int[] budget = {WORK_LIMIT};
-    final int[] outcomes = {0, 0};
+    // Snapshotted once, not per tuple. factsOfType copies (§ its own contract), and asking it again
+    // for every complete tuple turned an O(population) check into an O(population) allocation.
+    final List<List<Fact>> negated = rule.negations().stream()
+        .map(negation -> session.workingMemory().factsOfType(negation.factType()).toList())
+        .toList();
+    final Tally tally = new Tally(negated);
     extend(rule, survivorsByAlias, payloads, 0, new long[rule.patterns().size()], found, budget,
-        outcomes);
-    return new Matches(found, budget[0] > 0 && found.size() < MATCH_LIMIT,
-        outcomes[0], outcomes[1]);
+        tally);
+    /*
+     * Whether a guard actually stopped the walk, rather than whether the budget happens to be
+     * spent. The two differ now that one tuple can spend hundreds of budget units -- a negation is
+     * charged for every candidate it scans, where a candidate step is charged one -- so the budget
+     * can run out on the final tuple of a walk that then finished. That is not a truncation, and
+     * inferring one would put "there may be a match" on a search that proved there is not.
+     */
+    return new Matches(found, !tally.truncated(),
+        tally.rejectedByCondition(), tally.failedToEvaluate(), tally.suppressed(),
+        negationResults(rule, tally));
+  }
+
+  /**
+   * One result per negated pattern, whether or not it suppressed anything.
+   *
+   * <p>Reported even when it suppressed nothing, because "the rule asserts no {@code Payment} exists
+   * and none does" is evidence the author needs in order to stop suspecting the negation and look
+   * elsewhere. A list that appeared only on the failing case would leave them unable to tell a
+   * negation that held from a negation this class forgot to check.
+   *
+   * @param rule the rule
+   * @param tally what the walk accumulated
+   * @return the per-negation results, in declaration order
+   */
+  private static List<NegationResult> negationResults(final CompiledRule rule, final Tally tally) {
+    final List<NegationResult> results = new ArrayList<>(rule.negations().size());
+    for (int index = 0; index < rule.negations().size(); index++) {
+      final CompiledPattern negation = rule.negations().get(index);
+      results.add(new NegationResult(negation.alias(), negation.factType(),
+          tally.population(index).size(), tally.suppressedBy(index), tally.witnessOf(index)));
+    }
+    return results;
   }
 
   /**
@@ -357,13 +437,18 @@ public final class MatchExplainer {
    * @param bound the handles bound so far
    * @param found the matches collected so far
    * @param budget remaining candidate examinations, decremented in place
-   * @param outcomes counts, in place, complete tuples a §6.4 condition rejected [0] and ones
-   *     whose condition could not be evaluated at all [1]
+   * @param tally what became of the complete tuples, accumulated in place
    */
   private void extend(final CompiledRule rule, final Map<String, List<Long>> survivorsByAlias,
       final Map<Long, JsonNode> payloads, final int position, final long[] bound,
-      final List<long[]> found, final int[] budget, final int[] outcomes) {
+      final List<long[]> found, final int[] budget, final Tally tally) {
+    // Unreachable as the callers stand -- a parent guarantees budget >= 1 before recursing and
+    // re-checks after -- and kept as a guard rather than an assertion because the alternative is a
+    // recursion whose bound lives entirely in its callers. It truncates for the same reason they
+    // do, so relaxing a parent guard later cannot silently turn an abandoned subtree into a
+    // complete search.
     if (found.size() >= MATCH_LIMIT || budget[0] <= 0) {
+      tally.truncate();
       return;
     }
     if (position == rule.patterns().size()) {
@@ -374,16 +459,29 @@ public final class MatchExplainer {
        * exact inverse of the defect commit d973982 fixed, and worse, because §7.2 exists to answer
        * "why did my rule not fire" and a phantom match sends the author looking somewhere else.
        */
+      /*
+       * Negations before conditions, which is the order RecomputingAgenda.postFilter applies them
+       * in -- absences() and then conditions(). It decides the counts as well as the answer: a
+       * tuple an asserted absence defeats is never offered to the condition at run time, so
+       * counting it as condition-rejected here would report a rejection the engine never made.
+       */
+      if (defeatedByNegation(rule, bound, budget, tally)) {
+        return;
+      }
       switch (conditionOutcome(rule, bound, payloads)) {
         case HELD -> found.add(bound.clone());
-        case REJECTED -> outcomes[0]++;
-        case FAILED -> outcomes[1]++;
+        case REJECTED -> tally.rejectByCondition();
+        case FAILED -> tally.failToEvaluate();
       }
       return;
     }
     final CompiledPattern pattern = rule.patterns().get(position);
-    for (final long candidate : survivorsByAlias.getOrDefault(pattern.alias(), List.of())) {
+    final List<Long> candidates = survivorsByAlias.getOrDefault(pattern.alias(), List.of());
+    for (int index = 0; index < candidates.size(); index++) {
+      final long candidate = candidates.get(index);
       if (--budget[0] <= 0) {
+        // This candidate was never looked at, so the walk really did leave something behind.
+        tally.truncate();
         return;
       }
       if (pattern.conflictsWith(bound, candidate)
@@ -391,10 +489,201 @@ public final class MatchExplainer {
         continue;
       }
       bound[position] = candidate;
-      extend(rule, survivorsByAlias, payloads, position + 1, bound, found, budget, outcomes);
+      extend(rule, survivorsByAlias, payloads, position + 1, bound, found, budget, tally);
       if (found.size() >= MATCH_LIMIT || budget[0] <= 0) {
+        /*
+         * Only a truncation if a candidate at this level remains. Spending the last of the budget
+         * inside the FINAL candidate's subtree, which then finished, leaves nothing unexamined --
+         * and reporting it as truncation is how a search that proved a rule cannot match ends up
+         * saying "there may be a match". Negation made that reachable rather than theoretical: a
+         * scan can spend hundreds of budget units on one tuple, where a candidate step spends one.
+         */
+        if (index < candidates.size() - 1) {
+          tally.truncate();
+        }
         return;
       }
+    }
+  }
+
+  /**
+   * Whether any absence this rule asserts is defeated for one complete tuple (§1's amendment).
+   *
+   * <p>The predicate is {@link Negations#scan}, which {@link Negations#witness} is the agenda's
+   * one-line wrapper over. Re-implementing it here would
+   * put a second copy of negation semantics against exactly the case where a disagreement is
+   * hardest to notice: an explanation that contradicts the engine, on a rule the author already
+   * believes is broken.
+   *
+   * <p><strong>Charged against the work budget for the candidates it actually examined.</strong>
+   * Some charge is required: a rule with many complete tuples over a large negated type multiplies
+   * the two, which is the shape of the blow-up {@link #WORK_LIMIT} exists to stop. Charging the
+   * population's size instead was tried and is worse than it looks -- a scan short-circuits on the
+   * first witness, so a rule whose absences are defeated early paid for a walk it never took, and
+   * the search stopped to report "there may be a match" on a case where it had already found the
+   * exact, nameable answer. {@link Negations#scan} reports the real number, which is bounded by the
+   * same worst case and never overstates it.
+   *
+   * <p>Attributed to the <em>first</em> negation that defeats the tuple and then stopped, so the
+   * per-negation counts sum to the matches lost rather than double-counting a tuple two negations
+   * each defeat. Same reason {@link #firstFailing} reports one constraint: an author fixes one
+   * thing at a time.
+   *
+   * @param rule the rule
+   * @param bound the handles bound, in pattern order
+   * @param budget remaining candidate examinations, decremented in place
+   * @param tally where the suppression is recorded
+   * @return whether some asserted absence does not hold
+   */
+  private boolean defeatedByNegation(final CompiledRule rule, final long[] bound,
+      final int[] budget, final Tally tally) {
+    for (int index = 0; index < rule.negations().size(); index++) {
+      final Negations.Scan scan = Negations.scan(rule.negations().get(index), bound,
+          tally.population(index), session.workingMemory());
+      budget[0] -= scan.examined();
+      if (scan.witness().isPresent()) {
+        tally.suppress(index, scan.witness().orElseThrow().handle().id());
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * What became of the complete tuples the walk reached, accumulated across the recursion.
+   *
+   * <p>Mutable, and threaded through {@link #extend} as an {@code int[]} was before it. Naming the
+   * fields is what the array stopped being able to do once a third outcome joined "a condition
+   * rejected it" and "a condition could not be evaluated" -- and the negated populations belong
+   * here too, because they are read once per complete tuple and are per-negation state exactly as
+   * the counts are.
+   */
+  private static final class Tally {
+
+    /** No fact has this handle id, so it is unambiguously "nothing recorded yet". */
+    private static final long NO_WITNESS = -1L;
+
+    private final List<List<Fact>> populations;
+    private final int[] suppressedBy;
+    private final long[] witnessOf;
+    private int rejectedByCondition;
+    private int failedToEvaluate;
+    private int suppressed;
+    private boolean truncated;
+
+    /**
+     * Starts a tally over a rule's negated populations.
+     *
+     * @param populations the facts of each negated pattern's type, in declaration order
+     */
+    private Tally(final List<List<Fact>> populations) {
+      this.populations = populations;
+      this.suppressedBy = new int[populations.size()];
+      this.witnessOf = new long[populations.size()];
+      java.util.Arrays.fill(witnessOf, NO_WITNESS);
+    }
+
+    /**
+     * The facts one negated pattern must be checked against.
+     *
+     * @param index the negation's declaration position
+     * @return its type's population, snapshotted when the walk started
+     */
+    private List<Fact> population(final int index) {
+      return populations.get(index);
+    }
+
+    /**
+     * Records that one negation removed one otherwise-complete tuple.
+     *
+     * @param index the negation's declaration position
+     * @param witnessHandle the handle of the fact that defeated the asserted absence
+     */
+    private void suppress(final int index, final long witnessHandle) {
+      suppressedBy[index]++;
+      suppressed++;
+      if (witnessOf[index] == NO_WITNESS) {
+        // First witness kept, not last: the walk runs in the rule's written order, so the first is
+        // reproducible and the last depends on where a budget happened to stop.
+        witnessOf[index] = witnessHandle;
+      }
+    }
+
+    /**
+     * Records a tuple a §6.4 condition answered false for.
+     */
+    private void rejectByCondition() {
+      rejectedByCondition++;
+    }
+
+    /**
+     * Records a tuple a §6.4 condition could not be evaluated against at all.
+     */
+    private void failToEvaluate() {
+      failedToEvaluate++;
+    }
+
+    /**
+     * How many tuples one negation removed.
+     *
+     * @param index the negation's declaration position
+     * @return the count
+     */
+    private int suppressedBy(final int index) {
+      return suppressedBy[index];
+    }
+
+    /**
+     * The fact that defeated one negation, if any did.
+     *
+     * @param index the negation's declaration position
+     * @return the witness handle id
+     */
+    private Optional<Long> witnessOf(final int index) {
+      return witnessOf[index] == NO_WITNESS ? Optional.empty() : Optional.of(witnessOf[index]);
+    }
+
+    /**
+     * How many tuples a §6.4 condition answered false for.
+     *
+     * @return the count
+     */
+    private int rejectedByCondition() {
+      return rejectedByCondition;
+    }
+
+    /**
+     * How many tuples a §6.4 condition could not be evaluated against.
+     *
+     * @return the count
+     */
+    private int failedToEvaluate() {
+      return failedToEvaluate;
+    }
+
+    /**
+     * How many tuples the rule's negations removed between them.
+     *
+     * @return the count
+     */
+    private int suppressed() {
+      return suppressed;
+    }
+
+    /**
+     * Records that a guard stopped the walk with combinations left unexamined.
+     */
+    private void truncate() {
+      truncated = true;
+    }
+
+    /**
+     * Whether any count in this tally is a lower bound rather than a total.
+     *
+     * @return true when the walk stopped early
+     */
+    private boolean truncated() {
+      return truncated;
     }
   }
 
@@ -431,14 +720,25 @@ public final class MatchExplainer {
    * @param failedToEvaluate how many a condition could not be evaluated for at all. A different
    *     answer entirely, and the more urgent one: at run time that is not a filtered-out match, it
    *     is an exception that stops the fire cycle
+   * @param suppressedByNegation how many otherwise-complete tuples an asserted absence removed
+   *     between them (§1's {@code NOT_EXISTS}). Counted apart from the condition outcomes because
+   *     the fix is a different one: a condition sends the author to their expression, a negation
+   *     sends them to a fact that exists and that they expected not to
+   * @param negations one result per negated pattern, in declaration order; empty for a rule that
+   *     asserts no absence
    */
   private record Matches(List<long[]> found, boolean complete, int rejectedByCondition,
-      int failedToEvaluate) {
+      int failedToEvaluate, int suppressedByNegation, List<NegationResult> negations) {
 
     /**
-     * Whether a §6.4 condition is why nothing matched.
+     * Whether something after the joins is why nothing matched.
      *
-     * @return true when conditions removed every complete tuple
+     * <p>Covers negation as well as §6.4's conditions, and it has to. Both remove tuples that
+     * satisfied every pattern and every join, so either one leaving the match set empty would
+     * otherwise be reported as "no combination satisfies the joins" -- blaming constraints that in
+     * fact held, and sending the author to inspect correct code.
+     *
+     * @return true when a negation or a condition removed every complete tuple
      */
     private boolean removedEverything() {
       /*
@@ -448,7 +748,8 @@ public final class MatchExplainer {
        * exactly the defect commit 10588b2 fixed by hand ("stop it reporting a budget as a count").
        * Falling through leaves refractionVerdict's budget wording, which is already careful.
        */
-      return complete && found.isEmpty() && rejectedByCondition + failedToEvaluate > 0;
+      return complete && found.isEmpty()
+          && rejectedByCondition + failedToEvaluate + suppressedByNegation > 0;
     }
   }
 
@@ -482,6 +783,60 @@ public final class MatchExplainer {
     return matches.rejectedByCondition() + " combination(s) were rejected by a 'condition'"
         + " expression and " + matches.failedToEvaluate() + " could not be evaluated at all,"
         + " the latter throwing and stopping the fire cycle at run time (§6.4)";
+  }
+
+  /**
+   * How to say that an asserted absence is why nothing matched (§1's {@code NOT_EXISTS}).
+   *
+   * <p>The verdict a rule author is least able to reach on their own, and the one this class used
+   * to get exactly backwards. Every pattern matched, every join held, and the rule is silent
+   * because something the author asserted was <em>not</em> there is -- so the answer has to name it.
+   * A sentence saying only "a negation suppressed the match" leaves them scanning the whole
+   * population of a type for a fact they believe is absent.
+   *
+   * <p>The count is the <em>total</em> the rule's negations suppressed, because the condition
+   * clauses appended after it count tuples the negations let through -- the numbers have to
+   * partition the complete tuples rather than overlap. Only the named example is attributed, to the
+   * negation that suppressed the most, as {@code firstFailure} attributes a pattern's casualties;
+   * ties keep the earlier declaration so two runs read the same. The rest are in
+   * {@link Explanation#negations()} for anyone who needs them.
+   *
+   * @param matches what the walk found
+   * @return the verdict
+   */
+  private static String negationVerdict(final Matches matches) {
+    final NegationResult worst = matches.negations().stream()
+        .max((left, right) -> Integer.compare(left.suppressed(), right.suppressed()))
+        .orElseThrow();
+    /*
+     * The headline is the TOTAL suppressed, not the worst negation's share, because the clauses
+     * appended below count tuples the negations let through -- so the three numbers have to
+     * partition the complete tuples rather than overlap. Only the named example comes from the
+     * worst one.
+     */
+    final StringBuilder text = new StringBuilder()
+        .append(matches.suppressedByNegation())
+        .append(" combination(s) matched every pattern and join, but the rule asserts that no ")
+        .append(worst.factType()).append(" matches '").append(worst.alias()).append("' and ")
+        .append(worst.exampleWitness().map(handle -> "fact #" + handle + " does")
+            .orElse("one does"))
+        .append(" (§1's NOT_EXISTS)");
+    /*
+     * The condition counts are tuples the negations let through and something else then removed, so
+     * they are additional to the number above rather than another view of it. Kept as a trailing
+     * clause rather than folded into conditionVerdict's sentence, which opens by claiming the
+     * combinations it counts are all of them.
+     */
+    if (matches.rejectedByCondition() > 0) {
+      text.append("; a further ").append(matches.rejectedByCondition())
+          .append(" were rejected by a 'condition' expression (§6.4)");
+    }
+    if (matches.failedToEvaluate() > 0) {
+      text.append("; a further ").append(matches.failedToEvaluate())
+          .append(" could not be evaluated by a 'condition' expression at all, which at run time")
+          .append(" throws and stops the fire cycle (§6.4)");
+    }
+    return text.toString();
   }
 
   /**
@@ -566,7 +921,12 @@ public final class MatchExplainer {
      * answer: the joins did hold, and something after them said no.
      */
     if (matches.removedEverything()) {
-      return Optional.of(conditionVerdict(matches));
+      // Negation first when both applied, because it is the earlier gate: the tuples it removed
+      // were never offered to the condition, so a condition-shaped verdict would describe a
+      // filtering that did not happen to them.
+      return Optional.of(matches.suppressedByNegation() > 0
+          ? negationVerdict(matches)
+          : conditionVerdict(matches));
     }
     for (final PatternResult result : results) {
       if (result.joinNote().isPresent()) {
@@ -628,6 +988,44 @@ public final class MatchExplainer {
   }
 
   /**
+   * A warning for a rule that matched while the session was evicting a type it negates.
+   *
+   * <p><strong>This clause inverts the rule the note beside it follows, and deliberately.</strong>
+   * {@link #evictionNote(CompiledRule)} is attached only where a rule did <em>not</em> match,
+   * because a clause on every explanation of every capped session stops being read. A negated type
+   * is the opposite case: eviction there can only ever cost the rule a <em>suppression</em>, so the
+   * danger is precisely when the rule <em>did</em> match. §4.4 is blunt about what that means --
+   * everywhere else eviction costs a firing, here it manufactures a false conclusion, and the
+   * engine announces that a paid order is unpaid.
+   *
+   * <p>The explainer cannot detect it, because it re-asks the same question of the same working
+   * memory and is fooled identically. What it can do is put the count in front of the reader, which
+   * is the part that changes what they do next.
+   *
+   * @param rule the rule being explained
+   * @return a trailing warning, or empty text when no negated type has lost facts
+   */
+  private String negatedEvictionWarning(final CompiledRule rule) {
+    if (!rule.hasNegations()) {
+      return "";
+    }
+    final Map<String, Long> evicted = evictedByType();
+    final StringBuilder text = new StringBuilder();
+    final Set<String> named = new LinkedHashSet<>();
+    for (final CompiledPattern negation : rule.negations()) {
+      final long count = evicted.getOrDefault(negation.factType(), 0L);
+      if (count == 0L || !named.add(negation.factType())) {
+        continue;
+      }
+      text.append(text.isEmpty() ? " — WARNING: " : ", ")
+          .append(count).append(' ').append(negation.factType()).append(" fact(s) evicted");
+    }
+    return text.isEmpty() ? "" : text.append(" this session, and this rule asserts their absence:"
+        + " an evicted fact and an absent one are indistinguishable to a negation, so this match"
+        + " may be a false conclusion (§4.4)").toString();
+  }
+
+  /**
    * This session's per-type eviction counts.
    *
    * <p>{@link RuleSession#stats()} assembles a record and copies this map to answer, so it is worth
@@ -661,13 +1059,20 @@ public final class MatchExplainer {
   private Optional<String> refractionVerdict(final CompiledRule rule, final Matches matches) {
     if (matches.found().isEmpty()) {
       /*
-       * The eviction clause belongs to THIS branch and to none of the others, and an earlier
-       * version of it was appended to all five. The four below say the rule matched -- "all already
-       * fired" is a rule working exactly as intended -- and a session with a cap has a permanently
-       * non-zero evicted count, so gluing the clause onto them puts it on every explanation of
-       * every rule for the rest of that session's life. "A clause that is always there stops being
-       * read" is the reason it is empty when nothing was evicted; appending it to the success paths
-       * recreates that failure precisely where the note matters most.
+       * The eviction clause for a PATTERNED type belongs to THIS branch and to none of the
+       * others, and an earlier version of it was appended to all five. The four below say the rule
+       * matched -- "all already fired" is a rule working exactly as intended -- and a session with
+       * a cap has a permanently non-zero evicted count, so gluing the clause onto them puts it on
+       * every explanation of every rule for the rest of that session's life. "A clause that is
+       * always there stops being read" is the reason it is empty when nothing was evicted;
+       * appending it to the success paths recreates that failure precisely where the note matters
+       * most.
+       *
+       * A NEGATED type is the exact inverse and the four branches below DO carry a warning for it;
+       * see negatedEvictionWarning, which argues why. The two are not in conflict: eviction of a
+       * type the rule needs can only cost it a match, so the note belongs where it found none,
+       * while eviction of a type the rule asserts the absence of can only manufacture one, so the
+       * warning belongs where it found some.
        *
        * Not on the budget-exhausted case either: the search did not finish, so what the session let
        * go of is not the story. There may well be a match.
@@ -675,7 +1080,15 @@ public final class MatchExplainer {
       return Optional.of(matches.complete()
           ? "every pattern matched individually, but no combination of them satisfies the rule's"
               + " cross-fact constraints" + evictionNote(rule)
-          : "no match found before the search budget ran out; there may be one");
+          // A truncated search cannot claim a negation is THE answer -- removedEverything() is
+          // what does that, and it requires a finished walk -- but it can say what it saw. Without
+          // this clause a heavily-suppressed rule falls back to a sentence that mentions nothing
+          // the author can act on, which is the failure this whole section exists to stop.
+          : "no match found before the search budget ran out; there may be one"
+              + (matches.suppressedByNegation() > 0
+                  ? " (at least " + matches.suppressedByNegation() + " combination(s) examined so"
+                      + " far were suppressed by an absence the rule asserts)"
+                  : ""));
     }
     final List<String> fired = new ArrayList<>();
     int eligible = 0;
@@ -694,16 +1107,17 @@ public final class MatchExplainer {
     // budget itself as the count -- a confidently stated wrong number.
     final String total = (matches.complete() ? "" : "at least ") + matches.found().size();
     if (firedCount == 0) {
-      return Optional.of(total + " match(es); all eligible, none has fired yet");
+      return Optional.of(total + " match(es); all eligible, none has fired yet"
+          + negatedEvictionWarning(rule));
     }
     final String examples = String.join(", ", fired)
         + (firedCount > fired.size() ? ", and " + (firedCount - fired.size()) + " more" : "");
     if (eligible == 0) {
       return Optional.of("matched, but refracted — " + total
-          + " match(es), all already fired: " + examples);
+          + " match(es), all already fired: " + examples + negatedEvictionWarning(rule));
     }
     return Optional.of(total + " match(es): " + firedCount + " already fired (" + examples
-        + "), " + eligible + " still eligible");
+        + "), " + eligible + " still eligible" + negatedEvictionWarning(rule));
   }
 
   /**

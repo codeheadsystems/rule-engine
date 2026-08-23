@@ -33,6 +33,17 @@ class MatchExplainerTest {
       .then(actions -> actions.emit("order.flagged", "orderId", Rules.ref("o.id")))
       .build();
 
+  /**
+   * §1's own example of "the first ten rules most people write": no {@code Payment} for this
+   * {@code Order}. The negated pattern joins back to the bound one, which is what makes it a
+   * question about <em>this</em> order rather than about payments in general.
+   */
+  private static final RuleDefinition UNPAID = Rules.rule("unpaid-shipped-order")
+      .when("o", "Order", pattern -> pattern.eq("status", "SHIPPED"))
+      .notExists("p", "Payment", pattern -> pattern.ref("orderId", "o.id"))
+      .then(actions -> actions.emit("order.unpaid", "orderId", Rules.ref("o.id")))
+      .build();
+
   @Test
   @DisplayName("a fact type nothing has inserted is named as the reason")
   void noFactsOfAType() {
@@ -709,6 +720,380 @@ class MatchExplainerTest {
           .contains("rule high-value-order-review")
           .contains("o: Order")
           .contains("c: Customer");
+    }
+  }
+
+  @Test
+  @DisplayName("a present fact defeating an asserted absence is the verdict, and is named")
+  void absenceDefeatedIsTheVerdict() {
+    /*
+     * The gap §1's amendment recorded rather than fixed. Everything an author can see is fine --
+     * the Order matches, there is nothing else to look at -- and this class used to answer "1
+     * match(es); all eligible, none has fired yet", which is not merely unhelpful but the opposite
+     * of the truth, with the Payment responsible named nowhere.
+     */
+    final CompiledRuleSet rules = Engine.compile(UNPAID);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("Order", Facts.obj("id", 1, "status", "SHIPPED"));
+      final FactHandle payment = session.insert("Payment", Facts.obj("orderId", 1, "amount", 50));
+
+      // What the engine actually does, so the explanation below is checked against a fact rather
+      // than against an expectation: the absence does not hold, so nothing fires.
+      assertThat(session.fireAllRules().firedCount()).isZero();
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain(UNPAID.id());
+
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict -> assertThat(verdict)
+          .contains("1 combination(s) matched every pattern and join")
+          .contains("no Payment matches 'p'")
+          .describedAs("the part the author cannot derive: WHICH fact is in the way")
+          .contains("fact #" + payment.id())
+          .doesNotContain("eligible"));
+      assertThat(explanation.negations()).singleElement().satisfies(negation -> {
+        assertThat(negation.alias()).isEqualTo("p");
+        assertThat(negation.factType()).isEqualTo("Payment");
+        assertThat(negation.present()).isEqualTo(1);
+        assertThat(negation.suppressed()).isEqualTo(1);
+        assertThat(negation.exampleWitness()).contains(payment.id());
+      });
+    }
+  }
+
+  @Test
+  @DisplayName("an absence that holds is reported and not blamed")
+  void absenceThatHoldsIsNotBlamed() {
+    // The other half, and the reason a negation is reported even when it suppressed nothing: an
+    // author who has just been told a Payment is in the way needs to be able to see, next time,
+    // that it no longer is -- rather than a list that goes silent and leaves them unsure it ran.
+    final CompiledRuleSet rules = Engine.compile(UNPAID);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("Order", Facts.obj("id", 1, "status", "SHIPPED"));
+      // A payment for a different order: present, but it does not satisfy the negated pattern's
+      // join, so the absence this rule asserts still holds.
+      session.insert("Payment", Facts.obj("orderId", 999, "amount", 50));
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain(UNPAID.id());
+
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict ->
+          assertThat(verdict).contains("eligible"));
+      assertThat(explanation.negations()).singleElement().satisfies(negation -> {
+        assertThat(negation.present()).isEqualTo(1);
+        assertThat(negation.suppressed()).isZero();
+        assertThat(negation.exampleWitness()).isEmpty();
+      });
+      // The half a one-directional test misses. Sharing the predicate with the agenda is only worth
+      // anything if the explainer is checked against the engine in BOTH directions: saying "eligible"
+      // about a rule the engine will not fire is the same class of defect as the one this closed.
+      assertThat(session.fireAllRules().firedCount())
+          .describedAs("the explainer said eligible, so the engine must agree")
+          .isEqualTo(1);
+    }
+  }
+
+  @Test
+  @DisplayName("a negation must not be reported as a join failure")
+  void negationDoesNotBlameTheJoins() {
+    /*
+     * The regression evaluating negations here opens. withJoinNotes infers "no combination
+     * satisfies the joins" from an empty match set, and once negations can empty it, that inference
+     * blames constraints that in fact held -- sending the author to inspect a join that is correct
+     * while the Payment sits there unmentioned. Same lesson the §6.4 condition case taught.
+     */
+    final RuleDefinition joinedAndNegated = Rules.rule("unpaid-high-risk-order")
+        .when("o", "Order", pattern -> pattern.eq("status", "SHIPPED"))
+        .when("c", "Customer", pattern -> pattern.ref("id", "o.customerId"))
+        .notExists("p", "Payment", pattern -> pattern.ref("orderId", "o.id"))
+        .then(actions -> actions.emit("order.unpaid", "orderId", Rules.ref("o.id")))
+        .build();
+    final CompiledRuleSet rules = Engine.compile(joinedAndNegated);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("Order", Facts.obj("id", 1, "status", "SHIPPED", "customerId", 7));
+      session.insert("Customer", Facts.obj("id", 7, "riskTier", "HIGH"));
+      session.insert("Payment", Facts.obj("orderId", 1, "amount", 50));
+
+      final Explanation explanation = new MatchExplainer(rules, session)
+          .explain(joinedAndNegated.id());
+
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict -> assertThat(verdict)
+          .contains("no Payment matches 'p'")
+          .describedAs("the join held; blaming it sends the author to correct code")
+          .doesNotContain("no combination of them satisfies"));
+      assertThat(explanation.patterns())
+          .describedAs("no pattern carries a join note, because no join failed")
+          .allSatisfy(pattern -> assertThat(pattern.joinNote()).isEmpty());
+    }
+  }
+
+  @Test
+  @DisplayName("a negated pattern of a bound type does not report the bound fact as its own witness")
+  void negatedSameTypeKeepsTheImplicitInequality() {
+    // §1's implicit inequality reaches negations too: "no OTHER order for this customer" is what
+    // the author means. An explainer that missed it would announce every order as blocking itself,
+    // which is a verdict that can never be acted on.
+    final RuleDefinition onlyOrder = Rules.rule("customers-only-order")
+        .when("o", "Order", pattern -> pattern.eq("status", "NEW"))
+        .notExists("other", "Order", pattern -> pattern.ref("customerId", "o.customerId"))
+        .then(actions -> actions.emit("order.only", "orderId", Rules.ref("o.id")))
+        .build();
+    final CompiledRuleSet rules = Engine.compile(onlyOrder);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("Order", Facts.obj("id", 1, "status", "NEW", "customerId", 7));
+
+      assertThat(new MatchExplainer(rules, session).explain(onlyOrder.id()).negations())
+          .describedAs("the one order does not block itself")
+          .singleElement()
+          .satisfies(negation -> assertThat(negation.suppressed()).isZero());
+
+      final FactHandle second = session.insert("Order",
+          Facts.obj("id", 2, "status", "NEW", "customerId", 7));
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain(onlyOrder.id());
+
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict -> assertThat(verdict)
+          .contains("2 combination(s)")
+          .contains("no Order matches 'other'"));
+      assertThat(explanation.negations()).singleElement().satisfies(negation -> {
+        assertThat(negation.suppressed())
+            .describedAs("each order is blocked by the other")
+            .isEqualTo(2);
+        assertThat(negation.exampleWitness()).contains(second.id());
+      });
+    }
+  }
+
+  @Test
+  @DisplayName("a pinned binding answers the negation question too")
+  void pinnedBindingHitsTheNegation() {
+    final CompiledRuleSet rules = Engine.compile(UNPAID);
+    try (RuleSession session = rules.newSession()) {
+      final FactHandle order = session.insert("Order", Facts.obj("id", 1, "status", "SHIPPED"));
+      final FactHandle payment = session.insert("Payment", Facts.obj("orderId", 1, "amount", 50));
+      // Noise: an order the author is not asking about, with its own blocking payment.
+      session.insert("Order", Facts.obj("id", 2, "status", "SHIPPED"));
+      session.insert("Payment", Facts.obj("orderId", 2, "amount", 10));
+
+      final Explanation explanation = new MatchExplainer(rules, session)
+          .explain(UNPAID.id(), Map.of("o", order));
+
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict -> assertThat(verdict)
+          .contains("1 combination(s)")
+          .describedAs("the payment blocking THIS order, not the other one")
+          .contains("fact #" + payment.id()));
+    }
+  }
+
+  @Test
+  @DisplayName("negations render alongside the patterns, and say which way their numbers run")
+  void negationRendering() {
+    final CompiledRuleSet rules = Engine.compile(UNPAID);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("Order", Facts.obj("id", 1, "status", "SHIPPED"));
+      session.insert("Payment", Facts.obj("orderId", 1, "amount", 50));
+
+      final String rendered = new MatchExplainer(rules, session).explain(UNPAID.id()).describe();
+
+      assertThat(rendered)
+          .contains("o: Order")
+          // "present" and "suppressed", never "considered"/"matched": a negated pattern has no
+          // candidates and no survivors, and borrowing that vocabulary would read as success.
+          .contains("not p: Payment")
+          .contains("1 present")
+          .contains("suppressed 1 match(es)");
+    }
+  }
+
+  @Test
+  @DisplayName("a rule asserting no absence has an empty negation list")
+  void noNegationsIsAnEmptyList() {
+    final CompiledRuleSet rules = Engine.compile(REVIEW);
+    try (RuleSession session = rules.newSession()) {
+      assertThat(new MatchExplainer(rules, session).explain(REVIEW.id()).negations()).isEmpty();
+    }
+  }
+
+  @Test
+  @DisplayName("a negation is charged for the scan it made, not for the population it might have")
+  void negationIsChargedForWhatItExamined() {
+    /*
+     * A negation has to be charged against the work budget -- many complete tuples over a large
+     * negated type multiply, which is the blow-up WORK_LIMIT exists to stop -- but charging the
+     * population's size is the wrong number. A scan short-circuits on the first witness, so a rule
+     * whose absences are defeated early would pay for a walk it never took, and the search would
+     * stop to say "there may be a match" on exactly the case where it had the exact answer in hand.
+     * 600 orders each blocked by one of 600 payments: the real cost is well inside the budget.
+     */
+    final CompiledRuleSet rules = Engine.compile(UNPAID);
+    try (RuleSession session = rules.newSession()) {
+      for (int id = 0; id < 600; id++) {
+        session.insert("Order", Facts.obj("id", id, "status", "SHIPPED"));
+        session.insert("Payment", Facts.obj("orderId", id, "amount", 1));
+      }
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain(UNPAID.id());
+
+      assertThat(explanation.complete())
+          .describedAs("the scans short-circuit, so the budget was never really spent")
+          .isTrue();
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict -> assertThat(verdict)
+          .contains("600 combination(s) matched every pattern and join")
+          .contains("no Payment matches 'p'")
+          .describedAs("the exact answer, where charging the population gave up instead")
+          .doesNotContain("search budget"));
+      assertThat(explanation.negations()).singleElement().satisfies(negation ->
+          assertThat(negation.suppressed()).isEqualTo(600));
+    }
+  }
+
+  @Test
+  @DisplayName("a search the negations really did exhaust says what it saw, not just that it gave up")
+  void truncatedByNegationStillPointsSomewhere() {
+    /*
+     * The other side of the charge. Here the scans are genuinely long -- 700 payments for orders
+     * that do not exist sit ahead of every real witness -- so the budget runs out for real. A
+     * truncated walk cannot claim the negation is THE answer, since removedEverything() requires a
+     * finished search, but it can say what it saw. Without that clause the author gets a sentence
+     * naming nothing they can act on, which is the failure this whole diagnostic exists to stop.
+     *
+     * The two numbers are chosen against WORK_LIMIT and want re-checking if it moves: each tuple
+     * costs the 700-deep junk prefix plus its own witness, so the budget of 250 000 runs out around
+     * tuple 330 of the 400. Enough margin either side that the walk is unambiguously truncated and
+     * unambiguously got far enough to suppress something first.
+     */
+    final CompiledRuleSet rules = Engine.compile(UNPAID);
+    try (RuleSession session = rules.newSession()) {
+      for (int id = 0; id < 400; id++) {
+        session.insert("Order", Facts.obj("id", id, "status", "SHIPPED"));
+      }
+      // Scanned first and matching nothing, so every scan wades through all of them.
+      for (int junk = 0; junk < 700; junk++) {
+        session.insert("Payment", Facts.obj("orderId", 5_000 + junk, "amount", 1));
+      }
+      for (int id = 0; id < 400; id++) {
+        session.insert("Payment", Facts.obj("orderId", id, "amount", 1));
+      }
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain(UNPAID.id());
+
+      assertThat(explanation.complete()).isFalse();
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict -> assertThat(verdict)
+          .contains("search budget ran out")
+          .contains("suppressed by an absence the rule asserts"));
+      assertThat(explanation.negations()).singleElement().satisfies(negation -> {
+        assertThat(negation.present()).isEqualTo(1_100);
+        assertThat(negation.suppressed())
+            .describedAs("a lower bound, which is what the complete flag above is for")
+            .isPositive();
+      });
+    }
+  }
+
+  @Test
+  @DisplayName("two negations split the suppressions without double-counting a tuple both defeat")
+  void twoNegationsAttributeWithoutOverlap() {
+    /*
+     * NegationResult documents its counts as summing to the matches lost rather than double-counting
+     * a tuple two negations each defeat, and negationVerdict's headline is the total while its named
+     * example is the worst contributor. Both are claims about arithmetic, and neither was reachable
+     * with one negation in the suite.
+     */
+    final RuleDefinition unsettled = Rules.rule("unsettled-order")
+        .when("o", "Order", pattern -> pattern.eq("status", "SHIPPED"))
+        .notExists("p", "Payment", pattern -> pattern.ref("orderId", "o.id"))
+        .notExists("r", "Refund", pattern -> pattern.ref("orderId", "o.id"))
+        .then(actions -> actions.emit("order.unsettled", "orderId", Rules.ref("o.id")))
+        .build();
+    final CompiledRuleSet rules = Engine.compile(unsettled);
+    try (RuleSession session = rules.newSession()) {
+      for (int id = 1; id <= 3; id++) {
+        session.insert("Order", Facts.obj("id", id, "status", "SHIPPED"));
+      }
+      session.insert("Payment", Facts.obj("orderId", 1, "amount", 5));
+      session.insert("Refund", Facts.obj("orderId", 2, "amount", 5));
+      // Defeated by both. Attributed to the first in declaration order and counted once.
+      session.insert("Payment", Facts.obj("orderId", 3, "amount", 5));
+      session.insert("Refund", Facts.obj("orderId", 3, "amount", 5));
+
+      assertThat(session.fireAllRules().firedCount()).isZero();
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain(unsettled.id());
+
+      assertThat(explanation.negations()).satisfiesExactly(
+          payment -> {
+            assertThat(payment.alias()).isEqualTo("p");
+            assertThat(payment.suppressed()).describedAs("orders 1 and 3").isEqualTo(2);
+          },
+          refund -> {
+            assertThat(refund.alias()).isEqualTo("r");
+            assertThat(refund.suppressed())
+                .describedAs("order 2 only; order 3 was already spoken for")
+                .isEqualTo(1);
+          });
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict -> assertThat(verdict)
+          .describedAs("the total, so the number partitions the complete tuples")
+          .contains("3 combination(s) matched every pattern and join")
+          .describedAs("the example comes from the negation that suppressed the most")
+          .contains("no Payment matches 'p'"));
+    }
+  }
+
+  @Test
+  @DisplayName("evicting a negated type warns that a match may be a false conclusion")
+  void evictedNegatedTypeIsAWarning() {
+    /*
+     * §4.4's sharpest hazard, and the one case where the eviction clause belongs on a verdict that
+     * says the rule matched. Everywhere else eviction costs a firing; over a negated type it
+     * manufactures one, because an evicted fact and an absent fact are indistinguishable to a
+     * negation. The explainer cannot detect it -- it re-asks the same question of the same working
+     * memory and is fooled identically -- but the count is what changes what the reader does next.
+     */
+    final CompiledRuleSet rules = Engine.compile(UNPAID);
+    try (RuleSession session = rules.newSession(SessionOptions.builder()
+        .eviction(EvictionPolicy.perType(Map.of("Payment", 1)))
+        .build())) {
+      session.insert("Order", Facts.obj("id", 1, "status", "SHIPPED"));
+      // The payment that really does settle order 1, followed by two that do not. The cap lets it
+      // go, and the engine now believes a paid order is unpaid.
+      session.insert("Payment", Facts.obj("orderId", 1, "amount", 50));
+      session.insert("Payment", Facts.obj("orderId", 998, "amount", 1));
+      session.insert("Payment", Facts.obj("orderId", 999, "amount", 1));
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain(UNPAID.id());
+
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict -> assertThat(verdict)
+          .contains("eligible")
+          .contains("WARNING")
+          .contains("2 Payment fact(s) evicted")
+          .contains("may be a false conclusion"));
+    }
+  }
+
+  @Test
+  @DisplayName("a rule with no eviction gets no warning, so the one above stays readable")
+  void noEvictionMeansNoWarning() {
+    final CompiledRuleSet rules = Engine.compile(UNPAID);
+    try (RuleSession session = rules.newSession()) {
+      session.insert("Order", Facts.obj("id", 1, "status", "SHIPPED"));
+
+      assertThat(new MatchExplainer(rules, session).explain(UNPAID.id()).verdict())
+          .hasValueSatisfying(verdict -> assertThat(verdict).doesNotContain("WARNING"));
+    }
+  }
+
+  @Test
+  @DisplayName("pinning a negated alias is answered, not silently ignored")
+  void pinningANegatedAliasIsAnswered() {
+    // The output now prints "not p: Payment", which is an invitation to pin `p`. Before this the
+    // answer was silence -- the alias is in no pattern, so the pin matched nothing and vanished.
+    final CompiledRuleSet rules = Engine.compile(UNPAID);
+    try (RuleSession session = rules.newSession()) {
+      final FactHandle payment = session.insert("Payment", Facts.obj("orderId", 1, "amount", 50));
+      session.insert("Order", Facts.obj("id", 1, "status", "SHIPPED"));
+
+      assertThat(new MatchExplainer(rules, session)
+          .explain(UNPAID.id(), Map.of("p", payment)).verdict())
+          .hasValueSatisfying(verdict -> assertThat(verdict)
+              .contains("'p' is a NOT_EXISTS pattern")
+              .contains("binds no fact"));
     }
   }
 }

@@ -307,8 +307,10 @@ concurrently" an extra artifact to discover.
 - **Negation has no truth maintenance, and must never be used over an evicted type** (§4.4). An
   evicted fact and an absent fact are indistinguishable to a negation, so a cap on the negated type
   stops costing a firing and starts asserting a false conclusion. This is the sharpest semantic
-  hazard in the engine; `MatchExplainer` also cannot see negations and will report a rule suppressed
-  by an absence as having eligible matches.
+  hazard in the engine. `MatchExplainer` cannot *detect* it — it re-asks the same question of the
+  same working memory and is fooled identically — but it does warn on any verdict where a rule
+  matched while a type it negates was being evicted, which is the one case the eviction clause
+  belongs on a *successful* match rather than a silent rule.
 
 ## Conventions
 

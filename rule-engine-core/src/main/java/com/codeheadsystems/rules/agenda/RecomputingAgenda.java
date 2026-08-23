@@ -7,12 +7,11 @@ import com.codeheadsystems.rules.listener.RuleEngineListener;
 import com.codeheadsystems.rules.listener.SuppressReason;
 import com.codeheadsystems.rules.match.Activation;
 import com.codeheadsystems.rules.match.ActivationKey;
+import com.codeheadsystems.rules.match.Negations;
 import com.codeheadsystems.rules.match.Tuple;
-import com.codeheadsystems.rules.rule.AlphaTest;
 import com.codeheadsystems.rules.rule.CompiledPattern;
 import com.codeheadsystems.rules.rule.CompiledRule;
 import com.codeheadsystems.rules.rule.ExpressionTest;
-import com.codeheadsystems.rules.rule.JoinTest;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Iterator;
@@ -21,7 +20,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.MissingNode;
 
 /**
@@ -432,58 +430,17 @@ public abstract class RecomputingAgenda implements Agenda {
   /**
    * Whether any fact satisfies a negated pattern against one binding.
    *
-   * <p>Scans working memory for the type rather than probing a pattern memory or an index, which is
-   * deliberate for a first cut: it is the one implementation all three matchers can share, and the
-   * naive oracle has no memories to probe. It is O(facts of the negated type) per match per fire
-   * cycle, which is the same cost profile the naive matcher has always had and is the thing a real
-   * {@code NotNode} would fix.
+   * <p>Delegated to {@link com.codeheadsystems.rules.match.Negations} rather than written here,
+   * because §7.2's {@code MatchExplainer} has to answer the same question to explain a rule that
+   * did not fire. Two copies of this predicate could disagree, and the disagreement would surface
+   * as a diagnostic contradicting the engine it is diagnosing.
    *
    * @param negation the negated pattern
    * @param activation the complete positive binding
    * @return true when the absence does not hold
    */
   private boolean exists(final CompiledPattern negation, final Activation activation) {
-    final long[] bound = activation.tuple().boundFacts();
-    final Iterator<com.codeheadsystems.rules.fact.Fact> candidates =
-        workingMemory.factsOfType(negation.factType()).iterator();
-    while (candidates.hasNext()) {
-      final com.codeheadsystems.rules.fact.Fact candidate = candidates.next();
-      if (negation.conflictsWith(bound, candidate.handle().id())) {
-        // §1's implicit inequality: a negated pattern of a type the rule already binds asks about
-        // some OTHER fact, not about the one already bound.
-        continue;
-      }
-      if (matchesNegation(negation, candidate.payload(), bound)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Whether one candidate satisfies a negated pattern's own tests against a binding.
-   *
-   * @param negation the negated pattern
-   * @param payload the candidate's payload
-   * @param bound the handles bound by the positive tuple
-   * @return whether this candidate is the fact whose absence was asserted
-   */
-  private boolean matchesNegation(final CompiledPattern negation, final JsonNode payload,
-      final long[] bound) {
-    for (final AlphaTest test : negation.alphaTests()) {
-      if (!test.test(payload)) {
-        return false;
-      }
-    }
-    for (final JoinTest test : negation.joinTests()) {
-      final Optional<com.codeheadsystems.rules.fact.Fact> other =
-          workingMemory.get(new com.codeheadsystems.rules.fact.FactHandle(
-              bound[test.otherIndex()]));
-      if (other.isEmpty() || !test.test(payload, other.get().payload())) {
-        return false;
-      }
-    }
-    return true;
+    return Negations.witness(negation, activation.tuple().boundFacts(), workingMemory).isPresent();
   }
 
   /**

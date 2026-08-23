@@ -160,7 +160,13 @@ Read this before §2. Two of these bullets — collection flattening and negatio
 >
 > **The ordering dependency this section states did not hold.** "Truth maintenance and negation want to land together" is the bullet on full truth maintenance, and negation landed alone. The cost is the first boundary above, and it is a real one — but pairing them would have deferred negation indefinitely behind a justification graph, for a feature §1 itself calls one of the first ten rules most people write.
 >
-> **Known gap, recorded rather than fixed:** §7.2's `MatchExplainer` walks the positive pattern list and so cannot see negations, which makes it report a rule suppressed by an absence as having eligible matches. §7.2's claim is that it answers "why did R *not* fire" better than a trace can; for a negated rule it currently does not.
+> **The explainer gap is closed, and how it was closed is the point.** §7.2's `MatchExplainer` walks the positive pattern list, so for a while it could not see negations at all: a rule suppressed because the fact whose absence it asserts is *present* was reported as having eligible matches — the opposite of the truth, with the offending fact named nowhere. §7.2's whole claim is that it answers "why did R *not* fire" better than a trace can, and it was failing that on precisely the rules this section calls the first ten most people write.
+>
+> It now evaluates negations against each complete tuple, **before** the §6.4 conditions, which is the order the agenda applies them in — a tuple an absence defeats is never offered to a condition at run time, so counting it as condition-rejected would report a filtering the engine never performed. The predicate is not re-implemented: `Negations.witness` is extracted to `-core` and is the same code `RecomputingAgenda` decides with. **Sharing it is the requirement rather than the convenience.** A diagnostic that disagrees with the engine it is diagnosing is worse than one that says nothing, because it sends an author to fix a rule that is already correct — and negation is exactly where a second copy would drift unnoticed, which is the argument this amendment already made against writing a `NotNode` twice.
+>
+> It answers with the *witness* rather than a boolean, which costs the agenda nothing and is the whole value to the explainer: "some `Payment` exists" says the rule is suppressed, "fact #7" says what to go and look at. Negations are reported in their own list rather than folded into the pattern results, because a negated pattern binds nothing and so has neither the candidate population nor the survivors a `PatternResult` exists to carry — a "3 considered, 3 matched" line against a pattern asserting that nothing matches reads as success at the moment it means failure.
+>
+> **One limit is not closed and cannot be by this route:** over a type the session evicts, an evicted fact and an absent one remain indistinguishable, so the explainer explains exactly what the engine does — which is the wrong answer, identically arrived at. That is the eviction boundary above, not a defect in the diagnostic. What it can do is say so, and it does: a rule that *matched* while a type it negates was being evicted carries a warning naming the count. This is the one place §4.4's eviction clause belongs on a verdict announcing success rather than on a silent rule, and the inversion is the point — everywhere else eviction costs a firing, so a clause on every explanation of every capped session would stop being read; over a negated type it manufactures one, so the danger is precisely when the rule matched.
 
 **One open modeling question v1 must answer explicitly**, because it comes up in week one: when a rule has two patterns of the same fact type (`Order as o1`, `Order as o2`), may one fact bind both aliases? **No.** Distinct aliases in one rule bind distinct facts; the compiler inserts an implicit inequality between same-type aliases. This matches what rule authors expect ("find two different orders…"), differs from OPS5, and must be documented prominently because the other reading is defensible and silently produces self-matches.
 
@@ -1550,14 +1556,19 @@ public interface MatchExplainer {
 
 public record Explanation(
     String ruleId,
-    List<PatternResult> patterns,   // one per LHS pattern, in declaration order
-    Optional<String> verdict        // "no Customer fact of this type exists"
+    List<PatternResult> patterns,   // one per POSITIVE pattern, in declaration order
+    List<NegationResult> negations, // one per NOT_EXISTS pattern; see §1's amendment
+    Optional<String> verdict,       // "no Customer fact of this type exists"
                                     // "3 Orders matched total>10000; all failed status EQ PENDING"
                                     // "matched, but refracted — already fired at recency 4471"
+    boolean complete                // false when a budget stopped the walk: counts are lower bounds
 ) {}
 
 /** What happened to one pattern: how many facts were considered, how many survived, and
- *  — the part that answers the question — which constraint eliminated the rest. */
+ *  — the part that answers the question — which constraint eliminated the rest.
+ *  A negated pattern has neither a candidate population nor survivors, so it gets its own
+ *  record whose numbers run the other way: how many facts are PRESENT, and how many complete
+ *  matches their presence suppressed. See §1's amendment. */
 public record PatternResult(
     String alias,
     String factType,
