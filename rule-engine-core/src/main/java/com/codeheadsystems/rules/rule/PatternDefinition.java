@@ -8,7 +8,8 @@ import java.util.Objects;
  *
  * @param alias the binding name, e.g. {@code o}
  * @param factType the fact type this pattern matches, e.g. {@code Order}
- * @param quantifier v1 accepts only {@link Quantifier#EXISTS_AT_LEAST_ONE}
+ * @param quantifier {@link Quantifier#EXISTS_AT_LEAST_ONE} or {@link Quantifier#NOT_EXISTS}; the
+ *     other two are reserved and the compiler rejects them (§1)
  * @param constraints the conditions, in declaration order. Implicitly AND-ed
  */
 public record PatternDefinition(
@@ -31,6 +32,10 @@ public record PatternDefinition(
 
   /**
    * Builds an ordinary positive pattern.
+   *
+   * <p>There is no matching factory for a negated one on purpose: {@link Quantifier#NOT_EXISTS}
+   * carries obligations an author has to read (it binds nothing, and §4.4 eviction over its type
+   * produces false conclusions), so it is written out in full at the one place that builds it.
    *
    * @param alias the binding name
    * @param factType the fact type

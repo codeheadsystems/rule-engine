@@ -377,6 +377,12 @@ Before that, check the three traps at the top of this page. A rule that "matches
 often an `eq: null` that meant `hasField: false`, and a rule that "matches everything" is very often
 a bare `ne`.
 
+**One thing it cannot answer: a rule with a `quantifier: notExists` pattern.** The explainer walks
+the patterns that bind facts, and a negated one binds none, so it will happily report eligible
+matches for a rule the negation is suppressing. A silent negated rule almost always means the fact
+whose absence it asserts is present — check that first, by querying the session for it. This is a
+known gap in the explainer, not a subtlety of your rule.
+
 ## Checking your rules in CI
 
 A rule set is source code. Treat it like source code.

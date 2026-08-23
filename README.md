@@ -172,7 +172,7 @@ rather than performing I/O. That is what makes rules testable without mocking an
 
 The Java builder above is the constraint AST written by hand. The DSL is how rules are meant to be
 authored — and the two are held to producing the same rule definitions, constraint for constraint,
-by `DslEquivalence`, the way the two matchers are held to identical firing sequences by
+by `DslEquivalence`, the way the three matchers are held to identical firing sequences by
 `MatcherEquivalence`.
 
 ```yaml
@@ -352,6 +352,12 @@ you want here: an index skips non-candidates without recording why, and a patter
 survivors and has forgotten the casualties. So it re-evaluates constraints one at a time against
 working memory — slower by every measure, and the only way to know which constraint did the
 eliminating.
+
+**It cannot see negations, and will answer a negated rule wrongly.** A `NOT_EXISTS` pattern is not
+in the rule's pattern list — deliberately, so that nothing downstream has to know to skip it — so the
+explainer reports a rule suppressed by an absence as having eligible matches. That is a known gap
+rather than an oversight: closing it means evaluating the negations here as the agenda does. Until
+then, if a negated rule is silent, the absence it asserts is the first thing to check by hand.
 
 Pin the facts you are actually asking about when you have them, which is the sharper question:
 

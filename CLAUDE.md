@@ -4,17 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## The spec is the source of truth
 
-`docs/rule-engine-spec.md` (1800 lines) specifies this engine in full. The code implements it
+`docs/rule-engine-spec.md` (~1900 lines) specifies this engine in full. The code implements it
 section by section, and comments cite section numbers (`§3.4.1`, `section 6.5`) as their
 justification. Before changing matching, agenda, update or RHS semantics, read the section that
 governs it — the answer to "why is it written this way" is almost always there, along with the
 alternatives that were rejected. If the code and the spec disagree, one of them is a defect; decide
 which and say so, do not silently pick.
 
-`README.md` documents what is built — Phases 0–2 (= v1), Phase 4's concurrency layer, Phase 5's DSL
-front end including its two optional halves (the CEL escape hatch §6.4 and `FactSchemas` §2.3), and
-the first slice of Phase 3's streaming matcher. §9 holds the
-roadmap and each phase's exit criteria.
+`README.md` documents what is built — Phases 0–2 (= v1), Phase 3's streaming matcher, Phase 4's
+concurrency layer, Phase 5's DSL front end including its two optional halves (the CEL escape hatch
+§6.4 and `FactSchemas` §2.3), and the first slice of Phase 6, `NOT_EXISTS`. §9 holds the roadmap and
+each phase's exit criteria; §11.2's differential propagation is Phase 3's one deliverable that is
+measured and deliberately not built.
 
 `docs/dsl-reference.md` and `docs/dsl-guide.md` document the rule-file DSL. Every rule file printed
 in either — and in README — is a fixture in `DocExamplesTest`; if a doc and the engine disagree, the
@@ -55,7 +56,7 @@ they're addressed.
 
 | Module | Contents |
 |---|---|
-| `rule-engine-core` | Fact model, working memory, both matchers, agenda, refraction, RHS execution, sessions |
+| `rule-engine-core` | Fact model, working memory, all three matchers, agenda, refraction, RHS execution, sessions |
 | `rule-engine-compiler` | `RuleDefinition` → `CompiledRuleSet`: validation, accessor/pattern compilation, `TestedPaths`, network build, version hash, `CompilerReport` |
 | `rule-engine-dsl` | JSON/YAML rule files → `RuleDefinition`; the `rules.v1` schema; located diagnostics |
 | `rule-engine-schema` | The optional `FactSchemas` of §2.3, backed by networknt JSON Schema |
@@ -116,17 +117,20 @@ The shared graph holds structure and plans; everything it *stores* lives in the 
 `SessionMemories`, a `NodeMemory[]` indexed by node id. Nothing may be added to `CompiledRuleSet`,
 `Network`, or a node that mutates after compile.
 
-### Two matchers, held to agreement
+### Three matchers, held to agreement
 
-Both are subclasses of `RecomputingAgenda`, which owns everything that decides *which* activation
-fires — dirty tracking, the recomputation loop, refraction at selection, the conflict-resolution
-comparator, strict-mode checks. Subclasses supply only `matchesOf(rule, ...)`: how matches are
-found. Keeping the divergence-capable code in one place is what makes the two matchers agree.
+All three are subclasses of `RecomputingAgenda`, which owns everything that decides *which*
+activation fires — dirty tracking, the recomputation loop, refraction at selection, negation
+(§1's `NOT_EXISTS`), the §6.4 condition post-filter, the conflict-resolution comparator, strict-mode
+checks. Subclasses supply only `matchesOf(rule, ...)`: how matches are found. Keeping the
+divergence-capable code in one place is what makes the three matchers agree — and note what that
+costs a test: anything answered in the base agrees *by construction*, so `MatcherEquivalence` can
+never fail for that reason. Assert what fired, not only that the three concur.
 
 - **`NaiveAgenda`** (`naive/`, Phase 0) — no network, no indexes, `O(rules × facts^arity)`. It is
   the **correctness oracle** and is deliberately still shipped. Selected with
   `SessionOptions.matching(MatchingStrategy.NAIVE)`. Never in production.
-- **`ReteAgenda`** (`rete/`, Phase 3, in progress) — joins materialised as facts arrive, in
+- **`ReteAgenda`** (`rete/`, Phase 3) — joins materialised as facts arrive, in
   `BetaMemory`, instead of recomputed per fire. Selected with `MatchingStrategy.RETE`, for
   long-lived streaming sessions. Shares the join walk with `NetworkAgenda` via `JoinEnumerator` —
   a pinned position makes the incremental result a subset of the full one *by construction*, which
@@ -142,7 +146,7 @@ found. Keeping the divergence-capable code in one place is what makes the two ma
   indexed joins ordered per fire cycle by `JoinPlan` (smallest memory first, connected before
   disconnected).
 
-Any change to matching must keep the two identical. `MatcherEquivalence.assertEquivalent` compares
+Any change to matching must keep all three identical. `MatcherEquivalence.assertEquivalent` compares
 whole firing *sequences* — which rule, on which facts, in what order, with what effects and events.
 Use it for new matching behaviour; `ShuffleHarness` covers §7.3's determinism contract.
 
@@ -178,8 +182,9 @@ how they drift apart**:
 
 1. **`rules.v1.json`** (in `-dsl` resources) — structure only: required keys, value types, unknown
    keys, which keys each action verb accepts. Runs first and hard-stops.
-2. **`OperatorMaps` / `Actions` / `References`** — what a schema cannot say: `$ref` vs the `$$`
-   escape vs a rejected `$`-key, a `between` with no bound, a malformed `alias.field`.
+2. **`OperatorMaps` / `Actions` / `References` / `Quantifiers`** — what a schema cannot say: `$ref`
+   vs the `$$` escape vs a rejected `$`-key, a `between` with no bound, a malformed `alias.field`,
+   a `quantifier` spelling and the §1 answer for the two it does not implement.
 3. **`RuleCompiler`, unchanged** — meaning: forward refs, unknown aliases, duplicate ids, regexes,
    function names.
 
@@ -229,7 +234,7 @@ remembering whenever equivalence testing is the argument for correctness here.
 
 **CEL (§6.4) evaluates in two places, and one of them is a structural decision.** A pattern
 `condition:` is a post-filter applied in **`RecomputingAgenda`, the shared base — not in either
-matcher**. Everything that decides which activation fires already lives there so the two matchers
+matcher**. Everything that decides which activation fires already lives there so the three matchers
 cannot diverge, and an expression is exactly what would drift if written twice; this way
 `MatcherEquivalence` holds by construction. An `$expr` value resolves in `RhsExecutor.resolve`, once
 per firing rather than once per candidate.
@@ -295,6 +300,15 @@ concurrently" an extra artifact to discover.
   between same-type aliases — and `JoinPlan` symmetrises it, because either end may be bound first.
 - **Collections are flattened at ingestion**, not matched inside a fact. JSON Pointer has no
   wildcard.
+- **A negated pattern binds nothing, and nothing may name its alias** — not a `$ref`, not an action,
+  not an `insertFact`'s `as`, not a §6.4 expression. All four are compile errors that say *which*
+  case it is, because an alias the author can see, reported as one the rule does not have, sends
+  them hunting a typo that is not there.
+- **Negation has no truth maintenance, and must never be used over an evicted type** (§4.4). An
+  evicted fact and an absent fact are indistinguishable to a negation, so a cap on the negated type
+  stops costing a firing and starts asserting a false conclusion. This is the sharpest semantic
+  hazard in the engine; `MatchExplainer` also cannot see negations and will report a rule suppressed
+  by an absence as having eligible matches.
 
 ## Conventions
 

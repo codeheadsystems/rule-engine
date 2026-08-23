@@ -136,7 +136,7 @@ Read this before §2. Two of these bullets — collection flattening and negatio
 
   **The supported answer, which you should design your ingestion around from the start:** flatten collections into separate facts. An `Order` with an `items[]` array becomes one `Order` fact plus N `LineItem` facts carrying `orderId`, joined normally. This is not merely a workaround — it is how you get indexing and incremental matching over collection elements at all. Retrofitting it later means rewriting every rule that touches a collection, so decide now.
 
-- **Negation and quantified patterns (`NOT_EXISTS`, `FOR_ALL`).** "No `Payment` exists for this `Order`" is in the first ten rules most people write, so this is a deferral to be up-front about. It is deferred because negation is genuinely harder than positive matching: a `NotNode` needs per-tuple match *counters*, correct behavior when the count crosses 1↔0 in both directions, and correct interaction with truth maintenance, since a match justified by an absence must be retracted the moment the absence ends. §2.5's `Quantifier` reserves the syntax and §3.2's `NetworkNode` reserves the node type. **Interim answer:** compute the absence at ingestion and insert an explicit marker fact (`OrderUnpaid`) — less elegant, but the logic sits somewhere you can unit-test directly.
+- **Negation and quantified patterns (`NOT_EXISTS`, `FOR_ALL`).** "No `Payment` exists for this `Order`" is in the first ten rules most people write, so this is a deferral to be up-front about. It is deferred because negation is genuinely harder than positive matching: a `NotNode` needs per-tuple match *counters*, correct behavior when the count crosses 1↔0 in both directions, and correct interaction with truth maintenance, since a match justified by an absence must be retracted the moment the absence ends. §2.5's `Quantifier` reserves the syntax and §3.2's `NetworkNode` reserves the node type. **Interim answer:** compute the absence at ingestion and insert an explicit marker fact (`OrderUnpaid`) — less elegant, but the logic sits somewhere you can unit-test directly. See the amendment below: `NOT_EXISTS` is built, and none of the machinery this paragraph prices was needed.
 
 - **Accumulation / aggregation (`ACCUMULATE`).** `sum`, `count`, `collect`, `average` over matching facts. Same reasoning — incremental aggregate maintenance under retract is its own correctness problem. **Interim answer:** aggregate at ingestion, insert the aggregate as a fact.
 
@@ -147,6 +147,20 @@ Read this before §2. Two of these bullets — collection flattening and negatio
 - **Temporal/CEP operators** (sliding windows, `after`/`within` sequencing). Leave room in `JoinConstraint`/`Operator`; don't build now. Time-windowed *eviction* is a separate concern from temporal *operators*, and §4.4's note on session growth surfaces argues the eviction half is needed sooner than this bullet implies — it is what bounds a long-lived session's memory, with or without temporal operators.
 
 - **Distributed evaluation across machines.** The immutability split in §5 makes this feasible later — a `CompiledRuleSet` is trivially shippable to other JVMs, sessions are cheap to spin up anywhere, and §2.1's `(sessionId, handle)` pair is already the identity you would need — but it is out of scope here.
+
+> **Amendment (Phase 6, first slice, as built).** **`NOT_EXISTS` is implemented.** `FOR_ALL`, `ACCUMULATE`, backward chaining, truth maintenance and the temporal operators are not, and the bullets above stand for them unchanged — the marker-fact interim answer included. What follows is only about negation, and it is worth reading against the bullet above rather than instead of it, because the bullet priced a feature that was not the one built.
+>
+> **None of the machinery the bullet names was needed, and that is a property of negation rather than a shortcut.** A negated pattern binds no alias and contributes no tuple position, so the predicate it computes is a function of a *complete* tuple and working memory — the same shape a §6.4 `condition` has. A `NotNode` placed in a join chain computes that same predicate over a *prefix*, and a prefix's bindings survive into the complete tuple, so the two answers coincide: placement is a pruning optimisation, not a semantics choice. Negation is therefore answered in `RecomputingAgenda`, the shared base where §4.1's selection logic already lives, and the naive oracle and both networks cannot disagree about it. A `NotNode` would be faster and would have to be written twice, against exactly the semantics where divergence is most likely and hardest to detect.
+>
+> **The per-tuple counters are replaced by dirty tracking.** The 1↔0 transitions the bullet worries about fall out of §4.1's existing mechanism: the compiled rule's fact types include the negated ones, so a `Payment` arriving or leaving marks the rule dirty and the absence is asked again. Leaving that out would have been the defect hardest to find — the rule would go on firing on an absence that had ended, silently and for as long as the session lived.
+>
+> **Positions are assigned to positive patterns only**, which is what keeps negation out of the rest of the engine. The join planner, the join walk, the streaming matcher's pattern sites and §7.2's explainer all read the pattern list, which holds only patterns that produce bindings. Negations compile against those same positions, so a negation may reference any bound alias in either direction of declaration, and a negated pattern of a type the rule already binds carries this section's implicit inequality — "no *other* order for this customer" is what an author means.
+>
+> **Two boundaries ship with it, and the second is not covered by this section's licence to defer truth maintenance.** There is no truth maintenance: a rule that fired because something was absent is not undone when that thing arrives, since refraction keys on the facts the match binds and the absent one is not among them. And **a negated type must not be one a session evicts** (§4.4): an evicted fact and an absent fact are indistinguishable to a negation, so a cap on `Payment` makes the engine announce that a paid order is unpaid. Everywhere else eviction can only cost a firing; here it manufactures a false conclusion, which is a different kind of wrong from a conclusion left unwithdrawn.
+>
+> **The ordering dependency this section states did not hold.** "Truth maintenance and negation want to land together" is the bullet on full truth maintenance, and negation landed alone. The cost is the first boundary above, and it is a real one — but pairing them would have deferred negation indefinitely behind a justification graph, for a feature §1 itself calls one of the first ten rules most people write.
+>
+> **Known gap, recorded rather than fixed:** §7.2's `MatchExplainer` walks the positive pattern list and so cannot see negations, which makes it report a rule suppressed by an absence as having eligible matches. §7.2's claim is that it answers "why did R *not* fire" better than a trace can; for a negated rule it currently does not.
 
 **One open modeling question v1 must answer explicitly**, because it comes up in week one: when a rule has two patterns of the same fact type (`Order as o1`, `Order as o2`), may one fact bind both aliases? **No.** Distinct aliases in one rule bind distinct facts; the compiler inserts an implicit inequality between same-type aliases. This matches what rule authors expect ("find two different orders…"), differs from OPS5, and must be documented prominently because the other reading is defensible and silently produces self-matches.
 
@@ -329,12 +343,14 @@ public record RuleDefinition(
 public record PatternDefinition(
     String alias,                   // binding name, e.g. "o"
     String factType,                // "Order"
-    Quantifier quantifier,          // v1: always EXISTS_AT_LEAST_ONE
+    Quantifier quantifier,          // EXISTS_AT_LEAST_ONE, or NOT_EXISTS (§1's amendment)
     List<Constraint> constraints
 ) {}
 
-/** v1 implements only the first. The rest are reserved so adding them later is a new enum
- *  constant plus a new node type, not a reshape of PatternDefinition. See §1. */
+/** The first two are implemented; FOR_ALL and ACCUMULATE are reserved so adding them later is a
+ *  new enum constant plus a new node type, not a reshape of PatternDefinition. §1 states what each
+ *  of those two costs and gives an interim answer; its amendment says why NOT_EXISTS needed no
+ *  node type at all. */
 public enum Quantifier { EXISTS_AT_LEAST_ONE, NOT_EXISTS, FOR_ALL, ACCUMULATE }
 
 public sealed interface Constraint
@@ -521,8 +537,10 @@ Primary sources, in reading order:
 #### 3.2.1 Declarations
 
 ```java
-// Sealed for exhaustiveness inside the engine. §1's deferred NotNode/AccumulateNode will be
-// added here, so downstream code must not rely on exhaustive switches over it.
+// Sealed for exhaustiveness inside the engine. §1's deferred AccumulateNode will be added here,
+// so downstream code must not rely on exhaustive switches over it. The NotNode this comment also
+// reserved was NOT built: negation binds nothing, so it is answered over the complete tuple in the
+// shared agenda base rather than as a node -- §1's amendment gives the argument.
 // NOTE: every permitted subtype must itself be sealed or non-sealed (JLS 8.1.1.2).
 public sealed interface NetworkNode
     permits EntryNode, AlphaNode, PatternNode, JoinNode, TerminalNode {
@@ -1698,7 +1716,7 @@ Concurrency helpers live in `-core`: `SessionActor` and the virtual-thread wrapp
 | 3 | Streaming sessions: `SessionOptions`-selectable persistent beta memory (Rete `JoinNode`), the Rete agenda shape and its `activate`/`deactivate` interface (§4.3), differential propagation (§11.2), `fireUntilHalt` + hardened `SessionActor` (§5.4), session fact-eviction (§4.4) | Long-lived session with streaming inserts amortizes join cost; **TREAT and Rete produce identical firing sequences on the same input** (§11.5) — established by differential test against the v1 engine, which by then is a shipped oracle, not a thought experiment; a streaming session under sustained insert-without-retract load reaches a steady-state heap |
 | 4 | Concurrency layer: immutability audited, virtual-thread helpers, hot-reload holder (§5.6) | N concurrent sessions on M cores scale near-linearly for the batch case; rule-set swap under load drops nothing and mixes nothing |
 | 5 | DSL front-end: JSON/YAML parsing, rule-file schema validation, operator-map compiler, `CompilerReport` (§7.4), optional CEL, optional `SchemaRegistry` | An author writes YAML, never touches Java, gets index-eligible rules by default, and gets a report naming every constraint that isn't |
-| 6 (stretch) | Negation/`NOT_EXISTS`, accumulate, truth maintenance, temporal/CEP, distributed sharding | Out of scope; §1 says what each costs and what the interim answer is |
+| 6 (stretch) | Negation/`NOT_EXISTS` ✔, accumulate, truth maintenance, temporal/CEP, distributed sharding | `NOT_EXISTS` is built — see §1's amendment, which also records what it cost to land it without truth maintenance. The rest is out of scope; §1 says what each costs and what the interim answer is |
 
 **Phase 1's `update` criterion has two halves, and they test different things.** The *correctness* half is now nearly structural — `update` on a changed tested path **is** retract+insert (§3.4.1) — so the gate is narrow and specific: the handle survives, refraction is cleared for exactly the rules testing a changed path and no others, and the retract half computes its index keys from the **old** payload. Test update-after-fire explicitly; a rule that fired, then had an untested field change, must not fire again, and a rule that fired, then had a tested field change, must. The *performance* half is the no-op path: assert on a counter that an update touching no tested path performs zero network traversals. Assert it, don't infer it — "no propagation happened" is trivially satisfied by an implementation that never propagates.
 
