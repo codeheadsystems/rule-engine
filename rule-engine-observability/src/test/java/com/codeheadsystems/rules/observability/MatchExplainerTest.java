@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.codeheadsystems.rules.evict.EvictionPolicy;
 import com.codeheadsystems.rules.fact.FactHandle;
+import com.codeheadsystems.rules.rule.AggregateFunction;
+import com.codeheadsystems.rules.rule.Operator;
 import com.codeheadsystems.rules.rule.Quantifier;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
@@ -1245,7 +1247,7 @@ class MatchExplainerTest {
           .contains("eligible")
           .contains("WARNING")
           .contains("1 LineItem fact(s) evicted")
-          .contains("quantifies over them")
+          .contains("this rule quantifies over them")
           .contains("may be a false conclusion"));
     }
   }
@@ -1279,8 +1281,8 @@ class MatchExplainerTest {
     final RuleDefinition bulk = Rules.rule("bulk")
         .when("o", "Order", pattern -> pattern.eq("status", "OPEN"))
         .accumulate("units", "LineItem",
-            Rules.fold(com.codeheadsystems.rules.rule.AggregateFunction.SUM, "qty",
-                com.codeheadsystems.rules.rule.Operator.GT, 100),
+            Rules.fold(AggregateFunction.SUM, "qty",
+                Operator.GT, 100),
             pattern -> pattern.ref("orderId", "o.id"))
         .then(actions -> actions.emit("order.bulk"))
         .build();
@@ -1319,8 +1321,8 @@ class MatchExplainerTest {
     final RuleDefinition bulk = Rules.rule("bulk")
         .when("o", "Order", pattern -> pattern.eq("status", "OPEN"))
         .accumulate("units", "LineItem",
-            Rules.fold(com.codeheadsystems.rules.rule.AggregateFunction.SUM, "qty",
-                com.codeheadsystems.rules.rule.Operator.GT, 100),
+            Rules.fold(AggregateFunction.SUM, "qty",
+                Operator.GT, 100),
             pattern -> pattern.ref("orderId", "o.id"))
         .then(actions -> actions.emit("order.bulk"))
         .build();
@@ -1338,6 +1340,148 @@ class MatchExplainerTest {
       assertThat(session.fireAllRules().firedCount())
           .describedAs("the explainer said eligible, so the engine must agree")
           .isEqualTo(1);
+    }
+  }
+
+  @Test
+  @DisplayName("a folded and a concluded type each warn, and each says what its own hazard costs")
+  void foldedAndConcludedTypesWarnInTheirOwnTerms() {
+    /*
+     * §9.1 enumerates four faces of §4.4's one hazard, and this warning was gated on the first two
+     * -- so evicting a type a rule FOLDS, or one it CONCLUDES, said nothing at all. Those are the
+     * two where the wrongness is quietest: a total short by whatever aged out, and a belief that
+     * cannot come back because its justification still holds and its rule is still refracted.
+     */
+    final RuleDefinition folds = Rules.rule("bulk")
+        .when("o", "Order", pattern -> pattern.eq("status", "OPEN"))
+        .accumulate("units", "LineItem",
+            Rules.fold(AggregateFunction.SUM, "qty"),
+            pattern -> pattern.ref("orderId", "o.id"))
+        .then(actions -> actions.emit("e", "units", Rules.ref("units")))
+        .build();
+    final CompiledRuleSet folding = Engine.compile(folds);
+    try (RuleSession session = folding.newSession(SessionOptions.builder()
+        .eviction(EvictionPolicy.perType(Map.of("LineItem", 1)))
+        .build())) {
+      session.insert("Order", Facts.obj("id", 1, "status", "OPEN"));
+      session.insert("LineItem", Facts.obj("orderId", 1, "qty", 10));
+      session.insert("LineItem", Facts.obj("orderId", 1, "qty", 20));
+
+      assertThat(new MatchExplainer(folding, session).explain(folds.id()).verdict())
+          .hasValueSatisfying(verdict -> assertThat(verdict)
+              .describedAs("the total is short by the ten that aged out, and nothing else says so")
+              .contains("WARNING")
+              .contains("1 LineItem fact(s) evicted")
+              .describedAs("and says what a FOLD's eviction costs, which is not what a"
+                  + " quantifier's costs -- a number, in either direction")
+              .contains("short by whatever aged out"));
+    }
+
+    final RuleDefinition concludes = Rules.rule("unpaid")
+        .when("o", "Order", pattern -> pattern.eq("status", "OPEN"))
+        .then(actions -> actions.insertLogical("OrderUnpaid", "orderId", Rules.ref("o.id")))
+        .build();
+    final CompiledRuleSet concluding = Engine.compile(concludes);
+    try (RuleSession session = concluding.newSession(SessionOptions.builder()
+        .eviction(EvictionPolicy.perType(Map.of("OrderUnpaid", 1)))
+        .build())) {
+      session.insert("Order", Facts.obj("id", 1, "status", "OPEN"));
+      session.insert("Order", Facts.obj("id", 2, "status", "OPEN"));
+      session.fireAllRules();
+
+      assertThat(new MatchExplainer(concluding, session).explain(concludes.id()).verdict())
+          .hasValueSatisfying(verdict -> assertThat(verdict)
+              .describedAs("a conclusion was evicted and can never be redrawn")
+              .contains("WARNING")
+              .contains("OrderUnpaid fact(s) evicted")
+              .describedAs("the match here is NOT in doubt -- the belief is gone, which is close to"
+                  + " the opposite of what a merged 'may be a false conclusion' would have said")
+              .contains("will not be redrawn")
+              .doesNotContain("this match may be a false conclusion"));
+    }
+  }
+
+  @Test
+  @DisplayName("a fold that found nothing gets the eviction note, not only the hazard warning")
+  void aFoldedTypeIsNamedOnTheSilentBranchToo() {
+    /*
+     * The one of §4.4's four that cuts both ways, and the one the placement rule did not cover. A
+     * negated or quantified type can only ever MANUFACTURE a match, so its warning belongs on the
+     * branches that found one. A folded type changes a number, and a smaller number crosses a
+     * `having` in whichever direction its operator faces -- so eviction can cost this rule a match.
+     * The scope is not a positive pattern, so evictionNote walked past it and this rule got no
+     * clause from either side.
+     */
+    final RuleDefinition bulk = Rules.rule("bulk")
+        .when("o", "Order", pattern -> pattern.eq("status", "OPEN"))
+        .accumulate("units", "LineItem",
+            Rules.fold(AggregateFunction.SUM, "qty",
+                Operator.GT, 100),
+            pattern -> pattern.ref("orderId", "o.id"))
+        .then(actions -> actions.emit("order.bulk"))
+        .build();
+    final CompiledRuleSet rules = Engine.compile(bulk);
+    try (RuleSession session = rules.newSession(SessionOptions.builder()
+        .eviction(EvictionPolicy.perType(Map.of("LineItem", 1)))
+        .build())) {
+      session.insert("Order", Facts.obj("id", 1, "status", "OPEN"));
+      session.insert("LineItem", Facts.obj("orderId", 1, "qty", 90));
+      session.insert("LineItem", Facts.obj("orderId", 1, "qty", 20));
+
+      assertThat(session.fireAllRules().firedCount())
+          .describedAs("110 units were inserted, but the cap left 20")
+          .isZero();
+
+      assertThat(new MatchExplainer(rules, session).explain(bulk.id()).verdict())
+          .hasValueSatisfying(verdict -> assertThat(verdict)
+              .describedAs("the rule is silent because of the cap, and the verdict has to say so")
+              .contains("1 LineItem fact(s) evicted this session"));
+    }
+  }
+
+  @Test
+  @DisplayName("a fold gets its eviction clause even when a negation suppressed more")
+  void theFoldIsNamedEvenWhenItIsNotTheTopSuppressor() {
+    /*
+     * The verdict attributes its named example to whichever quantifier suppressed the most, and an
+     * earlier version of the eviction clause borrowed that same choice. They are different
+     * questions: attribution is "whose example do I show", and this is "could the cap be why".
+     * Gating on `worst` meant a rule carrying both a negation and a fold, where the negation
+     * happened to suppress more, got no clause at all -- while its scope sat capped and the fold
+     * was a live candidate cause. Which is the silent-rule case the clause exists for.
+     */
+    final RuleDefinition both = Rules.rule("shippable")
+        .when("o", "Order", pattern -> pattern.eq("status", "OPEN"))
+        .notExists("h", "Hold", pattern -> pattern.ref("orderId", "o.id"))
+        .accumulate("units", "LineItem",
+            Rules.fold(AggregateFunction.SUM, "qty", Operator.GT, 100),
+            pattern -> pattern.ref("orderId", "o.id"))
+        .then(actions -> actions.emit("order.shippable"))
+        .build();
+    final CompiledRuleSet rules = Engine.compile(both);
+    try (RuleSession session = rules.newSession(SessionOptions.builder()
+        .eviction(EvictionPolicy.perType(Map.of("LineItem", 1)))
+        .build())) {
+      // Two orders are held, so the negation suppresses two; one order's fold falls short over a
+      // capped scope, so the fold suppresses one. `worst` is the negation.
+      for (int id = 1; id <= 2; id++) {
+        session.insert("Order", Facts.obj("id", id, "status", "OPEN"));
+        session.insert("Hold", Facts.obj("orderId", id));
+      }
+      session.insert("Order", Facts.obj("id", 3, "status", "OPEN"));
+      session.insert("LineItem", Facts.obj("orderId", 3, "qty", 90));
+      session.insert("LineItem", Facts.obj("orderId", 3, "qty", 20));
+
+      final Explanation explanation = new MatchExplainer(rules, session).explain(both.id());
+
+      assertThat(explanation.quantifiers())
+          .describedAs("the negation really is the top suppressor, or this proves nothing")
+          .satisfiesExactly(
+              negation -> assertThat(negation.suppressed()).isEqualTo(2),
+              fold -> assertThat(fold.suppressed()).isEqualTo(1));
+      assertThat(explanation.verdict()).hasValueSatisfying(verdict -> assertThat(verdict)
+          .describedAs("and the cap is still named, because it could be why order 3 is silent")
+          .contains("LineItem fact(s) evicted this session"));
     }
   }
 }

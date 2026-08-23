@@ -8,12 +8,14 @@ import com.codeheadsystems.rules.match.ActivationKey;
 import com.codeheadsystems.rules.match.Negations;
 import com.codeheadsystems.rules.match.Scan;
 import com.codeheadsystems.rules.match.Universals;
+import com.codeheadsystems.rules.rule.ActionDefinition;
 import com.codeheadsystems.rules.rule.AggregateTest;
 import com.codeheadsystems.rules.rule.AlphaTest;
 import com.codeheadsystems.rules.rule.CompiledAccumulate;
 import com.codeheadsystems.rules.rule.CompiledPattern;
 import com.codeheadsystems.rules.rule.CompiledRule;
 import com.codeheadsystems.rules.rule.ExpressionTest;
+import com.codeheadsystems.rules.rule.InsertFact;
 import com.codeheadsystems.rules.rule.JoinTest;
 import com.codeheadsystems.rules.rule.Quantifier;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
@@ -83,7 +85,7 @@ import tools.jackson.databind.node.MissingNode;
  * {@link PatternResult} and is kept in a separate list. And an evicted fact is indistinguishable
  * from one that was never there (§4.4), so over an evicted type this explains exactly what the
  * engine does -- which is the wrong answer, identically arrived at. What it can do is say so, and
- * {@code quantifiedEvictionWarning} is where it does.
+ * {@code evictionHazardWarning} is where it does.
  */
 public final class MatchExplainer {
 
@@ -887,10 +889,11 @@ public final class MatchExplainer {
    * ties keep the earlier position so two runs read the same. The rest are in
    * {@link Explanation#quantifiers()} for anyone who needs them.
    *
+   * @param rule the rule being explained
    * @param matches what the walk found
    * @return the verdict
    */
-  private static String quantifierVerdict(final Matches matches) {
+  private String quantifierVerdict(final CompiledRule rule, final Matches matches) {
     final QuantifierResult worst = matches.quantifiers().stream()
         .max((left, right) -> Integer.compare(left.suppressed(), right.suppressed()))
         .orElseThrow();
@@ -918,6 +921,24 @@ public final class MatchExplainer {
      * clause rather than folded into conditionVerdict's sentence, which opens by claiming the
      * combinations it counts are all of them.
      */
+    /*
+     * A FOLD is the one gate here that eviction can be the cause of. A negation or a universal is
+     * defeated by a fact that is PRESENT, and eviction only removes -- so it cannot be why either
+     * suppressed a match, and saying so would send the author to inspect a cap that is innocent. A
+     * fold answers a smaller number over an evicted scope, which crosses a `having` in whichever
+     * direction its operator faces. This is the third branch that needed the clause, and the two
+     * that already had it are the no-match and join-note ones.
+     *
+     * Asked of EVERY quantifier rather than of `worst`, and the distinction is the point: `worst`
+     * decides the verdict's attribution -- whose example gets named -- while this is a caveat about
+     * cause. A rule carrying both a negation and a fold, where the negation happened to suppress
+     * more, would otherwise get no clause at all even though its scope was capped and the fold is a
+     * live candidate.
+     */
+    if (matches.quantifiers().stream()
+        .anyMatch(each -> each.kind() == Quantifier.ACCUMULATE && each.suppressed() > 0)) {
+      text.append(evictionNote(rule));
+    }
     if (matches.rejectedByCondition() > 0) {
       text.append("; a further ").append(matches.rejectedByCondition())
           .append(" were rejected by a 'condition' expression (§6.4)");
@@ -1016,7 +1037,7 @@ public final class MatchExplainer {
       // removed were never offered to the condition, so a condition-shaped verdict would describe
       // a filtering that did not happen to them.
       return Optional.of(matches.suppressedByQuantifier() > 0
-          ? quantifierVerdict(matches)
+          ? quantifierVerdict(rule, matches)
           : conditionVerdict(matches));
     }
     for (final PatternResult result : results) {
@@ -1067,7 +1088,17 @@ public final class MatchExplainer {
     final Map<String, Long> evicted = evictedByType();
     final StringBuilder text = new StringBuilder();
     final Set<String> named = new LinkedHashSet<>();
-    for (final CompiledPattern pattern : rule.patterns()) {
+    /*
+     * An accumulate's scope belongs here as well as in the hazard warning, and it is the one of the
+     * four that cuts both ways. Evicting a negated or quantified type can only ever manufacture a
+     * match, so its note belongs on the branches that found one; evicting a FOLDED type changes a
+     * number, which can cost this rule a match as readily as hand it one -- and the scope is not a
+     * positive pattern, so without naming it here a rule whose only reference to LineItem is a fold
+     * gets no eviction clause at all on the branch this method exists for.
+     */
+    final List<CompiledPattern> patterned = new ArrayList<>(rule.patterns());
+    rule.accumulates().forEach(accumulate -> patterned.add(accumulate.scope()));
+    for (final CompiledPattern pattern : patterned) {
       final long count = evicted.getOrDefault(pattern.factType(), 0L);
       if (count == 0L || !named.add(pattern.factType())) {
         continue;
@@ -1079,9 +1110,13 @@ public final class MatchExplainer {
   }
 
   /**
-   * A warning for a rule that matched while the session was evicting a type it quantifies over.
+   * A warning for a rule that matched while the session was evicting a type §4.4 makes hazardous.
    *
-   * <p><strong>This clause inverts the rule the note beside it follows, and deliberately.</strong>
+   * <p><strong>This clause inverts the rule the note beside it follows, for three of the four
+   * categories.</strong> The fourth -- a folded type -- inverts nothing and appears in both, because
+   * eviction changes a number rather than an absence and a number can cross a {@code having} in
+   * either direction. Anyone adding a fifth category should decide which of those three shapes it
+   * has before deciding where its clause belongs.
    * {@link #evictionNote(CompiledRule)} is attached only where a rule did <em>not</em> match,
    * because a clause on every explanation of every capped session stops being read. A quantified
    * type is the opposite case: eviction there can only ever cost the rule a <em>suppression</em>,
@@ -1089,38 +1124,78 @@ public final class MatchExplainer {
    * means -- everywhere else eviction costs a firing, here it manufactures a false conclusion, and
    * the engine announces that a paid order is unpaid.
    *
-   * <p>It is sharper for a {@code FOR_ALL} than for a negation, which is why the wording covers
-   * both rather than naming negation. A negation over a half-evicted type may still find its
-   * witness; a universal over an emptied scope is <em>vacuously</em> true, so a cap that evicts the
-   * type entirely does not weaken the requirement but deletes it.
+   * <p>Every amendment calls its own case the sharpest, which is a sign that ranking them is not
+   * useful: a negation over a half-evicted type may still find its witness, a universal over an
+   * emptied scope is <em>vacuously</em> true, a fold over one is quietly short by whatever aged out,
+   * and a conclusion that was evicted never returns because its justification still holds and its
+   * rule is still refracted. The wording names the family rather than picking a winner.
    *
    * <p>The explainer cannot detect it, because it re-asks the same question of the same working
    * memory and is fooled identically. What it can do is put the count in front of the reader, which
    * is the part that changes what they do next.
    *
    * @param rule the rule being explained
-   * @return a trailing warning, or empty text when no negated type has lost facts
+   * @return a trailing warning naming each category that has lost facts, or empty text when none
+   *     has
    */
-  private String quantifiedEvictionWarning(final CompiledRule rule) {
-    if (!rule.hasNegations() && !rule.hasUniversals()) {
-      return "";
-    }
+  private String evictionHazardWarning(final CompiledRule rule) {
     final Map<String, Long> evicted = evictedByType();
+    /*
+     * Four faces of §4.4's one fact -- the engine cannot tell an evicted value from one that was
+     * never there -- and they are kept apart because what each one does to a rule differs, and a
+     * merged sentence said something false about the last. An earlier version was gated on the
+     * first two alone, so exactly half of the hazard went unwarned; a later one covered all four
+     * and told an author their match "may be a false conclusion" when what had actually happened
+     * was that a perfectly good conclusion had been dropped and could not come back.
+     */
+    final Set<String> quantified = new LinkedHashSet<>();
+    rule.negations().forEach(pattern -> quantified.add(pattern.factType()));
+    rule.universals().forEach(pattern -> quantified.add(pattern.factType()));
+    final Set<String> folded = new LinkedHashSet<>();
+    rule.accumulates().forEach(accumulate -> folded.add(accumulate.scope().factType()));
+    final Set<String> concluded = new LinkedHashSet<>();
+    for (final ActionDefinition action : rule.actions()) {
+      if (action instanceof InsertFact insert && insert.logical()) {
+        concluded.add(insert.factType());
+      }
+    }
     final StringBuilder text = new StringBuilder();
-    final Set<String> named = new LinkedHashSet<>();
-    final List<CompiledPattern> quantified = new ArrayList<>(rule.negations());
-    quantified.addAll(rule.universals());
-    for (final CompiledPattern pattern : quantified) {
-      final long count = evicted.getOrDefault(pattern.factType(), 0L);
-      if (count == 0L || !named.add(pattern.factType())) {
+    clause(text, evicted, quantified,
+        "this rule quantifies over them, so an absence it asserts may be an artefact of the cap"
+            + " and this match may be a false conclusion");
+    clause(text, evicted, folded,
+        "this rule folds them, so its answer is short by whatever aged out -- which can cost"
+            + " this rule a match as readily as it can hand one over, depending on the 'having'");
+    clause(text, evicted, concluded,
+        "this rule concludes them, so a conclusion it drew may have been evicted and will not be"
+            + " redrawn: its justification still holds and the rule is still refracted");
+    return text.isEmpty() ? "" : text.append(" (§4.4)").toString();
+  }
+
+  /**
+   * Appends one category's clause, when that category has lost anything.
+   *
+   * @param text the warning being built
+   * @param evicted this session's per-type counts
+   * @param factTypes the types this rule reads in one of §4.4's hazardous ways
+   * @param because what that way costs, phrased for the end of the clause
+   */
+  private static void clause(final StringBuilder text, final Map<String, Long> evicted,
+      final Set<String> factTypes, final String because) {
+    final StringBuilder named = new StringBuilder();
+    for (final String factType : factTypes) {
+      final long count = evicted.getOrDefault(factType, 0L);
+      if (count == 0L) {
         continue;
       }
-      text.append(text.isEmpty() ? " — WARNING: " : ", ")
-          .append(count).append(' ').append(pattern.factType()).append(" fact(s) evicted");
+      named.append(named.isEmpty() ? "" : ", ")
+          .append(count).append(' ').append(factType).append(" fact(s) evicted");
     }
-    return text.isEmpty() ? "" : text.append(" this session, and this rule quantifies over them:"
-        + " an evicted fact is indistinguishable from one that was never there, so this match may"
-        + " be a false conclusion (§4.4)").toString();
+    if (named.isEmpty()) {
+      return;
+    }
+    text.append(text.isEmpty() ? " — WARNING: " : "; ").append(named).append(" this session, and ")
+        .append(because);
   }
 
   /**
@@ -1167,7 +1242,7 @@ public final class MatchExplainer {
        * most.
        *
        * A QUANTIFIED type is the exact inverse and the four branches below DO carry a warning for
-       * it; see quantifiedEvictionWarning, which argues why. The two are not in conflict: eviction
+       * it; see evictionHazardWarning, which argues why. The two are not in conflict: eviction
        * of a type the rule needs can only cost it a match, so the note belongs where it found none,
        * while eviction of a type the rule quantifies over can only manufacture one, so the warning
        * belongs where it found some.
@@ -1206,16 +1281,16 @@ public final class MatchExplainer {
     final String total = (matches.complete() ? "" : "at least ") + matches.found().size();
     if (firedCount == 0) {
       return Optional.of(total + " match(es); all eligible, none has fired yet"
-          + quantifiedEvictionWarning(rule));
+          + evictionHazardWarning(rule));
     }
     final String examples = String.join(", ", fired)
         + (firedCount > fired.size() ? ", and " + (firedCount - fired.size()) + " more" : "");
     if (eligible == 0) {
       return Optional.of("matched, but refracted — " + total
-          + " match(es), all already fired: " + examples + quantifiedEvictionWarning(rule));
+          + " match(es), all already fired: " + examples + evictionHazardWarning(rule));
     }
     return Optional.of(total + " match(es): " + firedCount + " already fired (" + examples
-        + "), " + eligible + " still eligible" + quantifiedEvictionWarning(rule));
+        + "), " + eligible + " still eligible" + evictionHazardWarning(rule));
   }
 
   /**

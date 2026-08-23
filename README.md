@@ -7,7 +7,7 @@ high-concurrency evaluation the default rather than an afterthought.
 The design is specified in full in [`docs/rule-engine-spec.md`](docs/rule-engine-spec.md). This
 README covers what is built and how to run it.
 
-## Status: Phase 2 is v1; Phases 4 and 5 have landed on top
+## Status: Phase 2 is v1; Phases 3, 4, 5 and most of 6 have landed on top
 
 Phases 0, 1 and 2 of the spec's roadmap (§9) are complete. §9 marks the end of Phase 2 as v1: the
 complete engine for one-shot and batch sessions. Phase 5's rule-file front end is built on top of
@@ -57,7 +57,7 @@ audited and checked, `RuleSetHolder` swaps a rule set under load, `SessionDrain`
 session onto new rules, and `RuleBatches` runs a batch per session across virtual threads. The
 scaling curve is measured rather than asserted — see `docs/benchmarks.md`.
 
-**Phase 3 has started.** `SessionOptions.matching(RETE)` selects a third matcher that materialises
+**Phase 3 is complete.** `SessionOptions.matching(RETE)` selects a third matcher that materialises
 joins as facts arrive instead of recomputing them per fire cycle, for long-lived streaming sessions.
 It is held to the same oracle as the other two — every differential scenario in the suite runs under
 all three. Both halves of a streaming session's cost are now amortised: the join as facts arrive,
@@ -185,11 +185,23 @@ shape — `within` is the first extension actually implemented — and they are 
 because reversing the relation to probe from the far end would leave the bound behind and silently
 widen the rule.
 
-**What does not exist:** sliding windows and "nothing has happened for 24 hours", both of which need
-something to notice that time passed with *no fact arriving* — the one input an engine that acts on
-fact movement never receives; `collect`, which answers with a collection and so has no meaningful
-`having`; and distributed evaluation, which §5's immutability split makes feasible without making it
-built.
+**What does not exist**, and on what terms — §9.1 has the full accounting:
+
+| not built | why not |
+|---|---|
+| `collect` | answers with a collection, so it has no meaningful `having`, and binding a list needs a way to take one apart that §2.5 does not have |
+| sliding windows, "nothing for 24h" | both need something to notice time passing with *no fact arriving* — the one input an engine that acts on fact movement never receives. Needs either a clock, which would end §7.3, or a caller-driven session time, which would not but is a contract of its own |
+| backward chaining | untouched; §1's forward-only decision stands |
+| distributed evaluation | §5's immutability split makes it *feasible* and no more. The partitioning, the wire protocol and cross-node routing are an architecture, not a slice |
+
+**One warning, in four shapes.** Each of Phase 6's features collides with §4.4's fact eviction, in
+a different way each time: evicting a negated type manufactures a false conclusion, evicting a
+quantified type deletes a requirement, evicting an accumulated type quietly changes a *number*, and
+evicting a concluded type loses a belief nothing can redraw. Each amendment calls its own the
+sharpest, which is a fair sign that ranking them is not useful — they are four faces of one fact,
+that the engine cannot tell an evicted value from one that was never there. It cannot *detect* any
+of them; `MatchExplainer` *warns* for all four, naming the count and what that hazard costs.
+**Never cap a type your rules negate, quantify over, fold, or conclude.**
 
 ## Modules
 
