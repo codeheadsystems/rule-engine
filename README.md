@@ -1,5 +1,6 @@
 # rule-engine
 
+[![build](https://github.com/codeheadsystems/rule-engine/actions/workflows/gradle.yml/badge.svg)](https://github.com/codeheadsystems/rule-engine/actions/workflows/gradle.yml)
 [![Maven Central](https://img.shields.io/maven-central/v/com.codeheadsystems/rule-engine-dsl?label=Maven%20Central)](https://central.sonatype.com/namespace/com.codeheadsystems)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
@@ -499,24 +500,26 @@ A listener must not throw and must not call back into the session; neither is en
 
 ## Modules
 
-| Module | Contents |
-|---|---|
-| `rule-engine-core` | Fact model, working memory, all three matchers, agenda, refraction, RHS execution, sessions, the concurrency helpers |
-| `rule-engine-compiler` | `RuleDefinition` → `CompiledRuleSet`: validation, accessor and pattern compilation, tested paths, network build, version hash, `CompilerReport` |
-| `rule-engine-dsl` | JSON *and* YAML rule files → `RuleDefinition`, plus the `rules.v1` rule-file schema and located diagnostics |
-| `rule-engine-cel` | Optional. The §6.4 expression escape hatch, backed by dev.cel |
-| `rule-engine-schema` | Optional. The `FactSchemas` of §2.3, backed by JSON Schema |
-| `rule-engine-observability` | `TracingListener`, `JfrListener`, `MatchExplainer` |
-| `rule-engine-testkit` | Fixtures, the firing-sequence oracle, the shuffle-determinism and matcher-equivalence harnesses, JMH benchmarks. **Not optional** — a consumer testing their own rules wants exactly these |
-| `rule-engine-example` | The worked application. Not a library |
+| Artifact | Version | Contents |
+|---|---|---|
+| `rule-engine-core` | [![Maven Central: rule-engine-core](https://img.shields.io/maven-central/v/com.codeheadsystems/rule-engine-core?label=rule-engine-core)](https://central.sonatype.com/artifact/com.codeheadsystems/rule-engine-core) | Fact model, working memory, all three matchers, agenda, refraction, RHS execution, sessions, the concurrency helpers |
+| `rule-engine-compiler` | [![Maven Central: rule-engine-compiler](https://img.shields.io/maven-central/v/com.codeheadsystems/rule-engine-compiler?label=rule-engine-compiler)](https://central.sonatype.com/artifact/com.codeheadsystems/rule-engine-compiler) | `RuleDefinition` → `CompiledRuleSet`: validation, accessor and pattern compilation, tested paths, network build, version hash, `CompilerReport` |
+| `rule-engine-dsl` | [![Maven Central: rule-engine-dsl](https://img.shields.io/maven-central/v/com.codeheadsystems/rule-engine-dsl?label=rule-engine-dsl)](https://central.sonatype.com/artifact/com.codeheadsystems/rule-engine-dsl) | JSON *and* YAML rule files → `RuleDefinition`, plus the `rules.v1` rule-file schema and located diagnostics. **Start here** — it brings `-compiler` and `-core` with it |
+| `rule-engine-cel` | [![Maven Central: rule-engine-cel](https://img.shields.io/maven-central/v/com.codeheadsystems/rule-engine-cel?label=rule-engine-cel)](https://central.sonatype.com/artifact/com.codeheadsystems/rule-engine-cel) | Optional. The §6.4 expression escape hatch, backed by dev.cel |
+| `rule-engine-schema` | [![Maven Central: rule-engine-schema](https://img.shields.io/maven-central/v/com.codeheadsystems/rule-engine-schema?label=rule-engine-schema)](https://central.sonatype.com/artifact/com.codeheadsystems/rule-engine-schema) | Optional. The `FactSchemas` of §2.3, backed by JSON Schema |
+| `rule-engine-observability` | [![Maven Central: rule-engine-observability](https://img.shields.io/maven-central/v/com.codeheadsystems/rule-engine-observability?label=rule-engine-observability)](https://central.sonatype.com/artifact/com.codeheadsystems/rule-engine-observability) | `TracingListener`, `JfrListener`, `MatchExplainer` |
+| `rule-engine-testkit` | [![Maven Central: rule-engine-testkit](https://img.shields.io/maven-central/v/com.codeheadsystems/rule-engine-testkit?label=rule-engine-testkit)](https://central.sonatype.com/artifact/com.codeheadsystems/rule-engine-testkit) | Fixtures, the firing-sequence oracle, the shuffle-determinism and matcher-equivalence harnesses, JMH benchmarks. **Not optional** — a consumer testing their own rules wants exactly these |
+| `rule-engine-example` | *not published* | The worked application. An artifact is a promise to keep something compiling for whoever depends on it, and nobody should depend on the example |
 
 Depend on `rule-engine-dsl` if you write your rules in YAML: it brings `-compiler` and `-core` with
 it, so that is the whole dependency. The two optional modules exist so that nobody pays for JSON
 Schema or for CEL's protobuf/guava/antlr footprint without asking.
 
-All seven are published to Maven Central at the same version. `rule-engine-example` is not, and that
-is deliberate — an artifact is a promise to keep something compiling for whoever depends on it, and
-the example exists to be read and run here. [`RELEASING.md`](RELEASING.md) is how a version ships.
+**Every badge above reads the live version from Maven Central**, so they are the answer to "what is
+current" rather than a number somebody remembered to edit. All seven move together — a release tags
+one version and publishes all of them in a single deployment, so a badge showing a different number
+from its neighbours means a deployment went wrong rather than that the modules drifted.
+[`RELEASING.md`](RELEASING.md) is how a version ships.
 
 ## Documentation
 
