@@ -88,6 +88,19 @@ Adding any module means adding it to `ApiSurfaceTest.INTERNAL_ACCESS`; that tabl
 every `include(...)` in `settings.gradle.kts`, because a module missing from it went unchecked while
 the suite stayed green.
 
+**The build publishes to Maven Central, and that changes what a mistake costs.** Seven modules ship
+under `com.codeheadsystems`; `rule-engine-example` does not, because an artifact is a promise to keep
+something compiling and nobody should depend on the example. A module publishes iff it applies
+`buildlogic.publish-conventions`, and `PublishedModulesTest` asserts that set against the build files
+— the same shape as `ApiSurfaceTest`'s module table, for the same reason: a module missing from a
+list nobody checks goes unnoticed while the suite stays green. Every POM declares Apache-2.0, so
+`LICENSE` is load-bearing rather than decorative. The version comes from a Git tag — `settings.gradle.kts` reads
+`git describe --exact-match` and substitutes it, and `gradle.properties` holds the next `-SNAPSHOT`
+— so nothing in the tree ever states a released version. `RELEASING.md` is the whole procedure.
+Two consequences worth holding in mind while editing `-core`: anything public in an exported package
+is a compatibility surface until the next major, and a Jackson major upgrade is a major version here
+because `JsonNode` is in ~60 public signatures.
+
 `-dsl` adds jackson-dataformat-yaml and networknt json-schema-validator; `-schema` adds networknt
 too. Both are `implementation` and neither reaches `-core`, which is the point of the SPI split
 below.
@@ -296,7 +309,7 @@ concurrently" an extra artifact to discover.
 - **`RuleSetHolder`** — §5.6's hot reload. One volatile field, no locks. Two contracts worth knowing
   before changing it: `publish` takes a *compiled* rule set so a bad rule file cannot take the engine
   out of service, and a swap affects new sessions only.
-- **`SessionEvictor`** (in `session/`, with the policy SPI in `evict/`) — §4.4's fact eviction, which
+- **`SessionEvictor`** (in `runtime/`, with the policy SPI in `evict/`) — §4.4's fact eviction, which
   bounds every structure a long-lived session grows because they are all keyed on handles. Two things
   to know before touching it: an eviction is an ordinary `retract` and must stay one — reaching into
   the memories by hand makes it a fifth place they are removed from — and **it may only run at
@@ -374,10 +387,23 @@ mixes contract with sharing has to be split.** `match` was: `Activation` and `Ac
 named by `RuleEngineListener`, while the six quantifier predicates beside them were public only so a
 sibling could ask them — those moved to `eval`. `agenda` was the same shape in reverse: exporting it
 to reach `ConflictResolutionStrategy` would publish `Agenda.reactivate` and `RefractionMemory.forget`,
-so the strategy moved to `match` and `agenda` is internal. The check that catches this is
-`noExportedSignatureNamesAnInternalType`, which reflects over `-core`'s own declared signatures —
-without it the table is only consistent, not true, and the first draft was wrong about three
-packages.
+so the strategy moved to `match` and `agenda` is internal. `session` was the third and it was fixed at
+1.0.0: it held `CompiledRuleSet` and `RuleSession`, which are the contract, beside the two classes
+implementing them — and `CompiledRuleSet.network()` therefore put the whole compiled node graph on an
+interface a consumer reads. `DefaultCompiledRuleSet` and `DefaultRuleSession` moved to `runtime`
+(granted to `-compiler`, which constructs a rule set), taking the already-package-private
+`RuleSetFingerprint` and `SessionEvictor` with them, and the interface no longer declares `network()`.
+`SessionIds` went too and is the one that was genuinely demoted — public in an exported package only
+so a sibling could call it, and carrying a scheduled deletion for JDK 26, which after 1.0.0 would
+have made a fifteen-line stopgap dictate a major version. `DefaultRuleSession` is package-private now
+as well; only `DefaultCompiledRuleSet` needs to be public, because `-compiler` constructs it.
+**That was pre-publish work and the deadline was real**: a method cannot be taken off a published
+interface inside a major version. `ApiSurfaceTest.ALLOWED_LEAKS` is now empty and its two assertions
+are kept, because the mechanism should outlive the debt.
+
+The check that catches this class of error is `noExportedSignatureNamesAnInternalType`, which reflects
+over `-core`'s own declared signatures — without it the table is only consistent, not true, and the
+first draft was wrong about three packages.
 
 **JPMS would be better and is deferred.** Not because re2j "cannot be required" — the JDK derives an
 automatic name from the filename and it compiles fine; Gradle just does not put such a jar on the

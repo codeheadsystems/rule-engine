@@ -1,0 +1,292 @@
+# Publishes a release to Maven Central, and creates the GitHub release for it.
+#
+# Two ways in, one path through:
+#
+#   * push a tag  vX.Y.Z            -- the normal release, decided by a person choosing a number
+#   * run it from the Actions tab   -- same thing, with the tag created here; give it a version or
+#                                      let it take the next patch
+#
+# ONE workflow rather than two, deliberately. The obvious alternative is a second file that computes
+# a version, pushes a tag, and lets this one fire -- except a tag pushed with GITHUB_TOKEN does not
+# trigger another workflow, so that shape forces the whole signing-and-publishing sequence to be
+# copied into both files. Two copies of a job that holds a GPG private key is not a maintenance
+# annoyance, it is two places to get a credential-handling change only half right.
+#
+# The version comes from the tag either way: settings.gradle.kts reads `git describe --exact-match`
+# and substitutes it into every module, so a number in a file and a number in a tag cannot disagree.
+# The job checks the two against each other regardless -- Maven Central does not accept a re-publish,
+# so publishing the wrong coordinates is permanent.
+#
+# Every action is pinned by commit digest, not by tag. This job holds a GPG private key and a Central
+# Portal token; a tag is a mutable pointer, and pinning is what bounds which code can reach them.
+name: Release to Maven Central
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (X.Y.Z, no leading v). Blank takes the next patch.'
+        required: false
+        type: string
+
+# Two dispatches, or a dispatch racing a tag push, would be two publishes of overlapping coordinates
+# against a registry that accepts each version once. Queued rather than cancelled: cancelling a job
+# midway through an upload is the one outcome worse than waiting.
+concurrency:
+  group: release-to-maven-central
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0  # `git describe` needs the tags, and a shallow clone has none
+
+      # Publishing puts this code under the project's coordinates forever, so it must only ever be
+      # reviewed code. workflow_dispatch accepts any ref and a tag can be pushed pointing anywhere;
+      # nothing else in this job checks.
+      - name: Refuse to publish from a commit that is not on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "ERROR: $GITHUB_SHA is not an ancestor of origin/main."
+            echo "Releases must be published from reviewed code that has landed on main."
+            exit 1
+          fi
+
+      # The `on.tags` filter is a glob and accepts things semantic versioning does not -- v1.2.3.4,
+      # v01.2.3. The version reaches Maven Central permanently, so it is matched against a real
+      # pattern here rather than trusted from the trigger.
+      # INPUT_VERSION arrives through the environment, never through `${{ }}` interpolation into the
+      # script. A workflow_dispatch input is attacker-controllable text, and interpolation splices it
+      # into the shell BEFORE any check here runs -- so the semver regex below would be guarding a
+      # command that had already executed. This job goes on to import a GPG private key and a Central
+      # Portal token; pinning actions by digest bounds what code reaches them, and this is the other
+      # half of that.
+      - name: Decide the version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            TAG=${GITHUB_REF#refs/tags/}
+          elif [ -n "$INPUT_VERSION" ]; then
+            TAG="v$INPUT_VERSION"
+          else
+            # versionsort.suffix, or git ranks v1.2.3-rc.1 above v1.2.3 and "next patch" comes out
+            # one too low.
+            LATEST=$(git -c versionsort.suffix=- tag -l "v[0-9]*.[0-9]*.[0-9]*" \
+              --sort=-v:refname | head -n 1)
+            if [ -z "$LATEST" ]; then
+              TAG="v1.0.0"
+            else
+              IFS='.' read -r MAJOR MINOR PATCH <<< "${LATEST#v}"
+              TAG="v$MAJOR.$MINOR.$((${PATCH%%-*} + 1))"  # a pre-release suffix does not carry over
+            fi
+          fi
+
+          if ! [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "ERROR: version must be vX.Y.Z or vX.Y.Z-suffix, got '$TAG'"
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" != "push" ] && git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "ERROR: tag $TAG already exists. Maven Central will not accept a re-publish."
+            exit 1
+          fi
+
+          echo "TAG=$TAG" >> $GITHUB_ENV
+          echo "VERSION=${TAG#v}" >> $GITHUB_ENV
+          echo "Releasing $TAG from $GITHUB_SHA"
+
+      # Locally only, and before the build, because settings.gradle.kts resolves the version by
+      # asking `git describe` about HEAD. It is pushed at the very end, after the artifacts are
+      # actually on Central -- see the note on that step for why "after the tests pass" is not the
+      # same thing and is not good enough.
+      - name: Create the tag locally
+        if: github.event_name != 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $VERSION"
+
+      # JDK 25, matching the build workflow. The build declares a 25 toolchain (spec §5) and Gradle
+      # resolves it from the JDK it runs on; starting on an older one would make every release depend
+      # on a toolchain download that the ordinary build never needs.
+      - name: Set up JDK 25
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+
+      - name: Verify the build agrees with the tag
+        run: |
+          GRADLE_VERSION=$(./gradlew properties -q | grep "^version:" | awk '{print $2}')
+          if [ "$GRADLE_VERSION" != "$VERSION" ]; then
+            echo "ERROR: Gradle resolved version '$GRADLE_VERSION', the tag says '$VERSION'."
+            echo "Either the tag is not on HEAD, or settings.gradle.kts stopped reading it."
+            exit 1
+          fi
+
+      # The same command CI runs on every push. `build` covers `test` AND `strictTest` (§7.5), and
+      # Javadoc warnings fail the build -- which matters more here than anywhere else, because the
+      # javadoc jar is a published artifact and several of this engine's contracts live only in it.
+      - name: Build, test, and check contracts under strict mode
+        run: ./gradlew clean build javadoc --no-daemon
+
+      - name: Import GPG key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
+          # Test-sign here so a wrong passphrase or a mismatched key id fails on its own step, with
+          # a message that says so, rather than surfacing as a signing error inside the publish task.
+          # It cannot fail *fast* -- the key must not be on disk while the test suite runs, so this
+          # sits after the build on purpose.
+          echo "test" | gpg --clearsign --batch --yes --pinentry-mode loopback \
+            --passphrase "$GPG_PASSPHRASE" > /dev/null
+          echo "GPG key imported and tested."
+
+      - name: Configure GPG for non-interactive signing
+        run: |
+          echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
+          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+          gpg-connect-agent reloadagent /bye
+
+      # The last check before anything leaves the machine, and it asserts rather than prints. It has
+      # to run HERE: `signed` is decided by whether GPG_KEY_ID is visible to the build, so asking
+      # earlier -- as an earlier version of this workflow did -- reports `signed=false` and proves
+      # nothing. Seven lines, every one a release and every one signed, or the upload does not start.
+      - name: Verify every module is about to publish, signed, at this version
+        env:
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+        run: |
+          CONFIG=$(./gradlew verifyPublishConfig -q | grep ':rule-engine-')
+          echo "$CONFIG"
+          EXPECTED=7
+          SIGNED=$(echo "$CONFIG" | grep -c "snapshot=false signed=true")
+          if [ "$SIGNED" -ne "$EXPECTED" ]; then
+            echo "ERROR: expected $EXPECTED signed release modules, found $SIGNED."
+            exit 1
+          fi
+          # -F: a version's dots are literal here, not regex wildcards. The step's whole job is to
+          # be the last gate, so it should not be the one matching loosely.
+          if ! echo "$CONFIG" | grep -qF ":$VERSION "; then
+            echo "ERROR: the modules are not at version $VERSION."
+            exit 1
+          fi
+
+      # ONE aggregated deployment for all seven library modules, not seven separate ones. A partial
+      # success would leave the namespace holding some modules at this version and not others, and
+      # the missing ones can never be added later under the same version.
+      - name: Publish to Maven Central
+        env:
+          CENTRAL_PORTAL_USERNAME: ${{ secrets.CENTRAL_PORTAL_USERNAME }}
+          CENTRAL_PORTAL_PASSWORD: ${{ secrets.CENTRAL_PORTAL_PASSWORD }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+        run: |
+          export GPG_TTY=$(tty)
+          mkdir -p ~/.gradle
+          # umask BEFORE the write, not chmod after it: a chmod leaves a window in which the
+          # passphrase is on disk at the default mode. And the passphrase is escaped, because a Java
+          # .properties file treats a backslash in a value as an escape character and would silently
+          # hand gpg a different passphrase than the one in the secret.
+          umask 077
+          {
+            printf 'signing.gnupg.keyName=%s\n' "$GPG_KEY_ID"
+            printf 'signing.gnupg.passphrase=%s\n' "${GPG_PASSPHRASE//\\/\\\\}"
+          } > ~/.gradle/gradle.properties
+
+          ./gradlew publishAggregationToCentralPortal --no-daemon --stacktrace
+
+      # AFTER the publish, and the distinction is the point. An earlier version pushed it once the
+      # tests passed, on the reasoning that a tag should not point at a commit that never shipped --
+      # but tests passing is not shipping, and a failed upload would have left the tag on the remote
+      # with nothing behind it. A missing tag costs `git tag && git push`; a tag that claims a release
+      # that does not exist costs somebody an investigation.
+      - name: Push the tag
+        if: github.event_name != 'push'
+        run: git push origin "$TAG"
+
+      # Scrub the signing material as soon as publishing is done. It was written to disk by the step
+      # above and would otherwise stay readable for the rest of the job -- including by the
+      # third-party release action that runs next. Pinning that action by digest bounds which code
+      # runs; removing the credentials bounds what any later step can reach at all.
+      - name: Scrub signing credentials
+        if: always()
+        run: |
+          shred -u ~/.gradle/gradle.properties 2>/dev/null || rm -f ~/.gradle/gradle.properties
+          gpg --batch --yes --delete-secret-and-public-keys \
+            "$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')" \
+            2>/dev/null || true
+          rm -rf ~/.gnupg
+          echo "Signing credentials removed."
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: Release ${{ env.VERSION }}
+          body: |
+            ## rule-engine ${{ env.VERSION }}
+
+            An in-process, forward-chaining production rule engine for the JVM.
+
+            ### Depending on it
+
+            Most services need one line — `rule-engine-dsl` brings the compiler and the core with it:
+
+            ```gradle
+            implementation("com.codeheadsystems:rule-engine-dsl:${{ env.VERSION }}")
+            testImplementation("com.codeheadsystems:rule-engine-testkit:${{ env.VERSION }}")
+            ```
+
+            ```xml
+            <dependency>
+              <groupId>com.codeheadsystems</groupId>
+              <artifactId>rule-engine-dsl</artifactId>
+              <version>${{ env.VERSION }}</version>
+            </dependency>
+            ```
+
+            ### Modules published
+
+            | Artifact | What it is |
+            |---|---|
+            | `rule-engine-core` | fact model, working memory, all three matchers, agenda, sessions |
+            | `rule-engine-compiler` | rule definitions to an immutable compiled rule set |
+            | `rule-engine-dsl` | YAML and JSON rule files — **start here** |
+            | `rule-engine-schema` | optional: fact schemas (§2.3) |
+            | `rule-engine-cel` | optional: the expression escape hatch (§6.4) |
+            | `rule-engine-observability` | tracing, Flight Recorder, and the match explainer |
+            | `rule-engine-testkit` | the naive oracle and the equivalence and shuffle harnesses, for testing your own rules |
+
+            `rule-engine-example` is a worked application, not a library, and is deliberately not
+            published — read it in the repository.
+
+            **Artifacts take 15 minutes to 2 hours to appear on Maven Central** after the deployment
+            validates.
+          draft: false
+          prerelease: ${{ contains(env.VERSION, '-') }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          # Deliberately one physical line: only the first line of a ::error:: becomes an annotation.
+          echo "::error::Release of ${VERSION:-unknown} failed. If the publish step ran, that version is taken on Central permanently and the next attempt needs a new number."

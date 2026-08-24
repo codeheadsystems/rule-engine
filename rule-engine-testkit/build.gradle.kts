@@ -1,5 +1,6 @@
 plugins {
     id("buildlogic.java-library-conventions")
+    id("buildlogic.publish-conventions")
     id("buildlogic.jmh-conventions")
 }
 
@@ -55,8 +56,23 @@ tasks.withType<Test>().configureEach {
                 .withPathSensitivity(PathSensitivity.RELATIVE)
         }
     }
-    // settings.gradle.kts is where that test reads the module list from, so it is an input too.
+    // settings.gradle.kts is where those tests read the module list from, so it is an input too.
     inputs.file(rootProject.layout.projectDirectory.file("settings.gradle.kts"))
         .withPropertyName("moduleList")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+
+    /*
+     * And every module's build file, for PublishedModulesTest -- which decides whether a module is
+     * published by looking for the convention plugin in it. Same hole as the source trees above:
+     * undeclared, adding `buildlogic.publish-conventions` to a module would not re-run the guard
+     * that exists to notice it.
+     */
+    rootProject.subprojects.forEach { module ->
+        val buildFile = module.layout.projectDirectory.file("build.gradle.kts")
+        if (buildFile.asFile.isFile) {
+            inputs.file(buildFile)
+                .withPropertyName("buildFileOf-${module.name}")
+                .withPathSensitivity(PathSensitivity.RELATIVE)
+        }
+    }
 }

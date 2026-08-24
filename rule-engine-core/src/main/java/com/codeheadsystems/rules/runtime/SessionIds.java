@@ -1,4 +1,4 @@
-package com.codeheadsystems.rules.session;
+package com.codeheadsystems.rules.runtime;
 
 import java.security.SecureRandom;
 import java.util.UUID;
@@ -17,8 +17,15 @@ import java.util.UUID;
  *
  * <p>Non-monotonic v7: two sessions created in the same millisecond may sort arbitrarily relative
  * to each other. Nothing in the engine depends on inter-session ordering.
+ *
+ * <p><strong>Package-private, and in {@code runtime} rather than {@code session}, because of that
+ * expiry.</strong> It was public in an exported package purely so a sibling could call it, which is
+ * the thing §8.1 is about -- and a stopgap with a scheduled deletion is the worst possible candidate
+ * for a published surface: removing it after 1.0.0 would be a binary-incompatible change, so a
+ * fifteen-line helper would have dictated a major version. {@code DefaultRuleSession} is its only
+ * caller and now shares its package.
  */
-public final class SessionIds {
+final class SessionIds {
 
   private static final SecureRandom RANDOM = new SecureRandom();
   private static final int VERSION_7 = 0x7000;

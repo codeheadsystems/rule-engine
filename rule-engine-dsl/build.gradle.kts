@@ -1,5 +1,6 @@
 plugins {
     id("buildlogic.java-library-conventions")
+    id("buildlogic.publish-conventions")
 }
 
 description = "Rule engine DSL: JSON and YAML rule files -> RuleDefinition, plus the rule-file schema"

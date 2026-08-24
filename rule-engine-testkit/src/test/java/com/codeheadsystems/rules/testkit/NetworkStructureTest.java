@@ -9,6 +9,7 @@ import com.codeheadsystems.rules.network.PatternNode;
 import com.codeheadsystems.rules.network.SessionMemories;
 import com.codeheadsystems.rules.rule.Operator;
 import com.codeheadsystems.rules.rule.RuleDefinition;
+import com.codeheadsystems.rules.runtime.DefaultCompiledRuleSet;
 import com.codeheadsystems.rules.session.CompiledRuleSet;
 import java.util.List;
 import java.util.stream.IntStream;
@@ -24,10 +25,23 @@ import tools.jackson.databind.node.ObjectNode;
  * structural properties, so both are checked structurally. A timing test would prove neither and
  * would be flaky besides.
  *
- * <p>The network and its memories are public API, so this exercises them without reaching past a
- * session's deliberate refusal to expose its agenda (section 5.1).
+ * <p><strong>This is a white-box test and reaches into an internal package to be one.</strong> The
+ * node graph is not API -- §8.1 -- so {@code CompiledRuleSet} does not expose it and
+ * {@link #networkOf} casts to the implementation to get at it. That is a thing a test may do and
+ * main source may not: {@code ApiSurfaceTest} checks each module's {@code src/main} precisely
+ * because an end-to-end test of this engine has to drive internals a consumer never sees.
  */
 class NetworkStructureTest {
+
+  /**
+   * The compiled node graph behind a rule set.
+   *
+   * @param ruleSet what the compiler returned
+   * @return its network
+   */
+  private static Network networkOf(final CompiledRuleSet ruleSet) {
+    return ((DefaultCompiledRuleSet) ruleSet).network();
+  }
 
   /** Ten rules, all testing the same two constraints, plus one that differs. */
   private static List<RuleDefinition> sharedConstraints() {
@@ -47,10 +61,10 @@ class NetworkStructureTest {
     // without any of its benefit.
     final CompiledRuleSet ruleSet = RuleCompiler.compile(sharedConstraints());
 
-    assertThat(ruleSet.network().alphaNodeCount())
+    assertThat(networkOf(ruleSet).alphaNodeCount())
         .describedAs("ten rules x two constraints, deduplicated")
         .isEqualTo(2);
-    assertThat(ruleSet.network().patternNodes())
+    assertThat(networkOf(ruleSet).patternNodes())
         .describedAs("pattern nodes are per pattern, not per distinct constraint set")
         .hasSize(10);
   }
@@ -66,7 +80,7 @@ class NetworkStructureTest {
         Rules.rule("c").when("o", "Order", p -> p.eq("status", "PENDING"))
             .then(t -> t.emit("c")).build()));
 
-    assertThat(ruleSet.network().alphaNodeCount()).isEqualTo(2);
+    assertThat(networkOf(ruleSet).alphaNodeCount()).isEqualTo(2);
   }
 
   @Test
@@ -77,7 +91,7 @@ class NetworkStructureTest {
             .when("o", "Order", pattern -> pattern.eq("status", "PENDING"))
             .then(actions -> actions.emit("hit", "id", Rules.ref("o.id")))
             .build()));
-    final Network network = ruleSet.network();
+    final Network network = networkOf(ruleSet);
     final SessionMemories memories = new SessionMemories(network);
     final PatternNode pattern = network.patternNodes().getFirst();
 
@@ -102,7 +116,7 @@ class NetworkStructureTest {
             .when("c", "Customer", pattern -> pattern.ref("id", "o.customerId"))
             .then(actions -> actions.emit("hit"))
             .build()));
-    final Network network = ruleSet.network();
+    final Network network = networkOf(ruleSet);
     final SessionMemories memories = new SessionMemories(network);
     final PatternNode customers = network.patternNodes().get(1);
 
@@ -130,7 +144,7 @@ class NetworkStructureTest {
             .when("c", "Customer", pattern -> pattern.ref("id", "o.customerId"))
             .then(actions -> actions.emit("hit"))
             .build()));
-    final Network network = ruleSet.network();
+    final Network network = networkOf(ruleSet);
 
     // The constraint is written on the Customer pattern, so /id obviously needs an index.
     assertThat(network.patternNodes().get(1).indexPlan().hashed())
@@ -153,7 +167,7 @@ class NetworkStructureTest {
             .then(actions -> actions.emit("hit"))
             .build()));
 
-    assertThat(ruleSet.network().patternNodes().getFirst().indexPlan().isEmpty()).isTrue();
+    assertThat(networkOf(ruleSet).patternNodes().getFirst().indexPlan().isEmpty()).isTrue();
   }
 
   @Test
@@ -168,7 +182,7 @@ class NetworkStructureTest {
             .then(actions -> actions.emit("hit"))
             .build()));
 
-    assertThat(ruleSet.network().patternNodes())
+    assertThat(networkOf(ruleSet).patternNodes())
         .allSatisfy(node -> assertThat(node.indexPlan().isEmpty()).isTrue());
   }
 
@@ -177,7 +191,7 @@ class NetworkStructureTest {
   void unpatternedTypesAreNotStored() {
     final CompiledRuleSet ruleSet = RuleCompiler.compile(List.of(
         Rules.rule("orders-only").when("o", "Order").then(t -> t.emit("hit")).build()));
-    final Network network = ruleSet.network();
+    final Network network = networkOf(ruleSet);
     final SessionMemories memories = new SessionMemories(network);
 
     network.insert("Telemetry", 1L, Facts.obj("noise", true), memories);

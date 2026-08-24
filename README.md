@@ -1,5 +1,8 @@
 # rule-engine
 
+[![Maven Central](https://img.shields.io/maven-central/v/com.codeheadsystems/rule-engine-dsl?label=Maven%20Central)](https://central.sonatype.com/namespace/com.codeheadsystems)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
 An in-process, forward-chaining production rule engine for the JVM: JSON-native facts, an immutable
 compiled rule set shared across everything, and cheap single-writer sessions that make
 high-concurrency evaluation the default rather than an afterthought.
@@ -31,6 +34,23 @@ README is the guide to what is here and how to use it.
 - [Building](#building)
 
 ## Start here
+
+On Maven Central under `com.codeheadsystems`. One line is usually the whole dependency —
+`rule-engine-dsl` brings the compiler and the core with it. The badge above is the version that is
+actually there; the snippets below are bumped by hand, so trust the badge if they disagree:
+
+```gradle
+implementation("com.codeheadsystems:rule-engine-dsl:1.0.0")
+testImplementation("com.codeheadsystems:rule-engine-testkit:1.0.0")
+```
+
+```xml
+<dependency>
+  <groupId>com.codeheadsystems</groupId>
+  <artifactId>rule-engine-dsl</artifactId>
+  <version>1.0.0</version>
+</dependency>
+```
 
 A rule file:
 
@@ -494,6 +514,10 @@ Depend on `rule-engine-dsl` if you write your rules in YAML: it brings `-compile
 it, so that is the whole dependency. The two optional modules exist so that nobody pays for JSON
 Schema or for CEL's protobuf/guava/antlr footprint without asking.
 
+All seven are published to Maven Central at the same version. `rule-engine-example` is not, and that
+is deliberate — an artifact is a promise to keep something compiling for whoever depends on it, and
+the example exists to be read and run here. [`RELEASING.md`](RELEASING.md) is how a version ships.
+
 ## Documentation
 
 | | |
@@ -526,6 +550,8 @@ Coverage is aggregated deliberately: most of `-core` is exercised by the end-to-
 `-testkit`, and a per-module report attributes none of that back. It reported `-core` at 26% while
 the aggregate figure was 91%.
 
+Releasing is [`RELEASING.md`](RELEASING.md): tag `vX.Y.Z` and the workflow does the rest.
+
 **Strict mode** turns on every check that is too expensive for production but catches a contract
 violation deterministically in test: engine-owned payloads are handed out as copies, an `update` that
 aliases the stored payload is rejected, the conflict-resolution strategy is asserted to be a total
@@ -539,5 +565,19 @@ through Phase 6 except for the items in [what it deliberately does not
 do](#what-it-deliberately-does-not-do), each of which §9.1 records with the reason it was not built —
 including one, §11.2's differential propagation, that was profiled, found to matter on its own
 benchmark, and left unbuilt because the correctness obligation it imposes is worse than the cost it
-removes. Nothing is published to a repository yet; §0 makes "no mandatory build/packaging layer" a
-design goal, and publishing is a decision for whenever there is a consumer to publish for.
+removes.
+
+**1.0.0 is the first published version.** §0's "no mandatory build/packaging layer" is unchanged by
+that — a `CompiledRuleSet` is still an object you get back from a compile call, not a deployment
+artifact — but there are now coordinates to depend on rather than a repository to clone. What the
+version number promises is the surface `ApiSurfaceTest` calls exported; see
+[`RELEASING.md`](RELEASING.md) for what moves a major.
+
+## License
+
+Copyright 2026 Ned Wolpert.
+
+Licensed under the Apache License, Version 2.0 — see [`LICENSE`](LICENSE). Every published POM
+declares the same, which is why that file has to exist rather than be implied: an artifact on Maven
+Central asserting a licence the source does not grant is permanent and not fixable by a patch
+release.

@@ -1,5 +1,6 @@
 plugins {
     id("buildlogic.java-library-conventions")
+    id("buildlogic.publish-conventions")
 }
 
 description = "Rule engine observability: tracing and Flight Recorder listeners"

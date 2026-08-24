@@ -1,4 +1,4 @@
-package com.codeheadsystems.rules.session;
+package com.codeheadsystems.rules.runtime;
 
 import com.codeheadsystems.rules.agenda.Agenda;
 import com.codeheadsystems.rules.agenda.RefractionMemory;
@@ -21,6 +21,17 @@ import com.codeheadsystems.rules.rhs.RhsResult;
 import com.codeheadsystems.rules.rhs.StagedEffect;
 import com.codeheadsystems.rules.rule.ActionDefinition;
 import com.codeheadsystems.rules.rule.CompiledRule;
+import com.codeheadsystems.rules.session.CompiledRuleSet;
+import com.codeheadsystems.rules.session.EmittedEvent;
+import com.codeheadsystems.rules.session.EventSink;
+import com.codeheadsystems.rules.session.FireOptions;
+import com.codeheadsystems.rules.session.FireRecord;
+import com.codeheadsystems.rules.session.FireResult;
+import com.codeheadsystems.rules.session.RuleEngineLimitExceeded;
+import com.codeheadsystems.rules.session.RuleSession;
+import com.codeheadsystems.rules.session.SessionOptions;
+import com.codeheadsystems.rules.session.SessionStats;
+import com.codeheadsystems.rules.session.TerminationReason;
 import com.codeheadsystems.rules.truth.Justifications;
 import com.codeheadsystems.rules.truth.TruthMaintenance;
 import java.time.Duration;
@@ -41,9 +52,9 @@ import tools.jackson.databind.JsonNode;
  * packaging to parse and no per-session network rebuild, which is the direct fix for "the engine
  * feels heavy" when that complaint comes from session-creation cost.
  */
-public final class DefaultRuleSession implements RuleSession {
+final class DefaultRuleSession implements RuleSession {
 
-  private final CompiledRuleSet ruleSet;
+  private final DefaultCompiledRuleSet ruleSet;
   private final SessionOptions options;
   private final UUID sessionId = SessionIds.newSessionId();
   private final RefractionMemory refraction = new RefractionMemory();
@@ -97,7 +108,7 @@ public final class DefaultRuleSession implements RuleSession {
    * @param ruleSet the shared, immutable rule set
    * @param options the session configuration
    */
-  public DefaultRuleSession(final CompiledRuleSet ruleSet, final SessionOptions options) {
+  DefaultRuleSession(final DefaultCompiledRuleSet ruleSet, final SessionOptions options) {
     this.ruleSet = ruleSet;
     this.options = options;
     this.workingMemory =

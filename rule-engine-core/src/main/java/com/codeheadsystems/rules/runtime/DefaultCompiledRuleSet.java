@@ -1,10 +1,13 @@
-package com.codeheadsystems.rules.session;
+package com.codeheadsystems.rules.runtime;
 
 import com.codeheadsystems.rules.network.Network;
 import com.codeheadsystems.rules.report.CompilerReport;
 import com.codeheadsystems.rules.rule.CompiledRule;
 import com.codeheadsystems.rules.rule.TestedPaths;
 import com.codeheadsystems.rules.schema.FactSchemas;
+import com.codeheadsystems.rules.session.CompiledRuleSet;
+import com.codeheadsystems.rules.session.RuleSession;
+import com.codeheadsystems.rules.session.SessionOptions;
 import java.util.List;
 import java.util.Objects;
 
@@ -98,7 +101,23 @@ public final class DefaultCompiledRuleSet implements CompiledRuleSet {
     return rules;
   }
 
-  @Override
+  /**
+   * The compiled matching network.
+   *
+   * <p>Shared and immutable, like everything else here. A session allocates its own memories for it
+   * (spec §3.2.3); the graph itself holds structure and plans, never data.
+   *
+   * <p><strong>Not on {@link com.codeheadsystems.rules.session.CompiledRuleSet}, and that is the
+   * point of this package.</strong> It used to be, which put the whole node graph on a contract
+   * interface a consumer reads -- §8.1 recorded it as the one over-exposure in {@code -core} and as
+   * work to do before a first publish, because after one it is a compatibility surface for the life
+   * of the artifact. §7.4's {@code CompilerReport} is the supported introspection. This stays public
+   * rather than package-private only so the testkit's white-box structural tests can reach it; it is
+   * public in an <em>internal</em> package, which is exactly the distinction Java cannot express and
+   * {@code ApiSurfaceTest} exists to keep anyway.
+   *
+   * @return the network
+   */
   public Network network() {
     return network;
   }

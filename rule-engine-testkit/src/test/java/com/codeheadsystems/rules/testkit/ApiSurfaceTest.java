@@ -71,8 +71,10 @@ class ApiSurfaceTest {
    * Any reference to {@code com.codeheadsystems.rules.<package>.<Type>}, imported or written out.
    *
    * <p>Not anchored to {@code import}, because a fully-qualified reference reaches a package just as
-   * effectively and {@code CompiledRuleSet.network()} shows the style is already in use here. An
-   * import-only check would have been a boundary anyone could step over by accident. It follows that
+   * effectively, and an import-only check would have been a boundary anyone could step over by
+   * accident -- deliberately or not. {@code CompiledRuleSet.network()} used to be the standing
+   * example of the style; it was deleted at 1.0.0, which removes the illustration and not the
+   * reason. It follows that
    * a {@code {@link com.codeheadsystems.rules.truth.Justifications}} in a sibling's Javadoc counts as
    * reaching {@code truth}, and that is intended: a doc link is a reference a consumer can read and
    * a rename can break, and the answer to one is the same as the answer to an import -- say so in
@@ -119,7 +121,14 @@ class ApiSurfaceTest {
    * test is that it cannot happen by accident.
    */
   private static final Map<String, Set<String>> INTERNAL_ACCESS = Map.of(
-      "rule-engine-compiler", Set.of("network", "value"),
+      /*
+       * `runtime` holds the implementations of the two `session` interfaces, and -compiler is what
+       * constructs a rule set -- so it names DefaultCompiledRuleSet, and through that constructor it
+       * hands over the `network` graph it just built. That is the whole of this grant and it is the
+       * shape the boundary is supposed to have: an internal type reaching another internal type,
+       * where a consumer's compiler would refuse and where nothing on the contract says either name.
+       */
+      "rule-engine-compiler", Set.of("network", "runtime", "value"),
       "rule-engine-dsl", Set.of(),
       "rule-engine-observability", Set.of("eval", "value"),
       // The testkit reaches for nothing internal, which is worth noticing rather than assuming:
@@ -156,31 +165,25 @@ class ApiSurfaceTest {
   private static final Set<String> INTERNAL_ONLY = Set.of("agenda", "naive", "rete", "truth");
 
   /**
-   * Signatures allowed to name an internal package: a debt rather than a decision.
+   * Signatures allowed to name an internal package. <strong>Empty, and that is the point.</strong>
    *
-   * <p>Three entries, one debt -- §8.1 records it in prose: {@code Network} reaches the contract
-   * through {@code CompiledRuleSet}, so it appears on the interface method, on the implementation's
-   * override, and on the constructor {@code -compiler} calls to hand the graph over. Nothing outside
-   * this repository needs any of them; §7.4's {@code CompilerReport} is the supported introspection,
-   * and the only callers are {@code -core} and the testkit's white-box structural tests.
+   * <p>It held three entries until the first publish: {@code CompiledRuleSet.network()} put the
+   * whole compiled node graph on a contract interface, so the type appeared on the interface method,
+   * on the implementation's override, and on the constructor {@code -compiler} calls to hand the
+   * graph over. §8.1 recorded that as the one over-exposure in {@code -core} and as work to do
+   * <em>before</em> a first publish, because after one each is a compatibility surface for the life
+   * of the artifact -- and the note beside these entries said they were expected to go stale
+   * together, at a known future moment. Releasing 1.0.0 was that moment. {@code DefaultCompiledRuleSet}
+   * and {@code DefaultRuleSession} moved to the internal {@code runtime} package, and the interface
+   * simply does not declare {@code network()} any more; §7.4's {@code CompilerReport} is the
+   * supported introspection and always was.
    *
-   * <p><strong>The allowance names the offending type, not merely the member, and the first version
-   * did not.</strong> Keyed as {@code fully.qualified.Owner.member} alone, it waved through
-   * <em>anything</em> that member went on to name: a review demonstrated it by adding a
-   * {@code truth.Justifications} parameter to a method called {@code network} and watching the suite
-   * stay green. The six-parameter constructor was the sharp case -- a blanket suppression of an
-   * entire public signature. An allowance whose scope is wider than the debt it records is the
-   * shape this whole pass exists to correct, so it is a pair: this member may name these types, and
-   * nothing else. A set rather than a single name because a member could need two, and finding that
-   * out later would mean changing the shape rather than adding a line.
+   * <p>Kept as an empty map rather than deleted along with the two tests that read it. An allowance
+   * is a debt, and the pair of assertions -- nothing leaks that is not listed, nothing is listed that
+   * does not leak -- is what stops the next one being added quietly. The mechanism should outlive the
+   * particular debt it was built for.
    */
-  private static final Map<String, Set<String>> ALLOWED_LEAKS = Map.of(
-      "com.codeheadsystems.rules.session.CompiledRuleSet.network",
-      Set.of("com.codeheadsystems.rules.network.Network"),
-      "com.codeheadsystems.rules.session.DefaultCompiledRuleSet.network",
-      Set.of("com.codeheadsystems.rules.network.Network"),
-      "com.codeheadsystems.rules.session.DefaultCompiledRuleSet.<init>",
-      Set.of("com.codeheadsystems.rules.network.Network"));
+  private static final Map<String, Set<String>> ALLOWED_LEAKS = Map.of();
 
   /**
    * Every sibling module, read off {@code settings.gradle.kts}.
@@ -488,8 +491,10 @@ class ApiSurfaceTest {
      * the second for a reason given at the point it would have gone -- and
      * it scans exported packages only -- a granted internal package whose public signature names an
      * ungranted one would push a module somewhere the table does not send it, with no import for
-     * {@code coreImportsUnder} to see. Narrow today, {@code network} and {@code value} being the
-     * only grants, and the same argument would apply one tier down.
+     * {@code coreImportsUnder} to see. That gap is no longer hypothetical: {@code runtime} is a
+     * grant whose own public signatures name {@code network}, which is another internal package. It
+     * happens to be granted to the same module, so nothing is currently mis-sent -- but the check
+     * would not notice if it were not, and the same argument applies one tier further down.
      *
      * @param type the exported type
      * @param into the map of fully-qualified {@code Owner.member} to the internal types it names

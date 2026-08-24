@@ -1,5 +1,6 @@
 plugins {
     id("buildlogic.java-library-conventions")
+    id("buildlogic.publish-conventions")
 }
 
 description = "Rule engine schema: the optional FactSchemas of §2.3, backed by JSON Schema"

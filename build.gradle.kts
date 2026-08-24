@@ -1,9 +1,15 @@
 /*
  * Root build for the rule engine (docs/rule-engine-spec.md).
  *
- * There is deliberately no publishing configuration yet: §0 makes "no mandatory build/packaging
- * layer" a design goal, and a CompiledRuleSet is just an object you get back from a compile call.
- * Publishing is a decision for whenever v1 (§9 Phase 2) is actually ready to ship.
+ * Publishing is configured in settings.gradle.kts -- the nmcp settings plugin applies the
+ * aggregation plugin here, so the whole build uploads as ONE Central Portal deployment. Per-module
+ * publication metadata lives in buildlogic.publish-conventions, applied by each library module.
+ *
+ *   ./gradlew publishAggregationToCentralPortal
+ *
+ * §0 makes "no mandatory build/packaging layer" a design goal and that is unchanged: a
+ * CompiledRuleSet is still just an object you get back from a compile call. What changed is that
+ * there are now coordinates to depend on rather than a repository to clone.
  */
 plugins {
     /*
@@ -51,7 +57,8 @@ reporting {
     }
 }
 
-allprojects {
-    group = "com.codeheadsystems"
-    version = "0.1.0-SNAPSHOT"
-}
+/*
+ * `group` and `version` are NOT set here. They come from gradle.properties, which settings.gradle.kts
+ * overrides from a Git tag in `beforeProject` -- and an `allprojects` block runs after that and would
+ * silently win, putting the SNAPSHOT coordinates on a tagged release build.
+ */

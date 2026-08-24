@@ -47,16 +47,6 @@ public interface CompiledRuleSet {
   List<CompiledRule> rules();
 
   /**
-   * The compiled matching network.
-   *
-   * <p>Shared and immutable, like everything else here. A session allocates its own memories for it
-   * (spec §3.2.3); the graph itself holds structure and plans, never data.
-   *
-   * @return the network
-   */
-  com.codeheadsystems.rules.network.Network network();
-
-  /**
    * Which payload paths the rule set reads.
    *
    * @return the compile-time tested-path artifact
