@@ -86,14 +86,15 @@ right.
 
 ### Afterwards
 
-Two files carry a version number and both need bumping:
+Two files carry a version number, and they move in opposite directions:
 
-- `gradle.properties` — to the next `-SNAPSHOT`, e.g. `version=1.0.1-SNAPSHOT`
-- `README.md` — the dependency snippets near the top
+- `gradle.properties` — forward, to the next `-SNAPSHOT`: after releasing 1.0.0, `1.0.1-SNAPSHOT`
+- `README.md` — the dependency snippets should name the version you *just released*, not the next one
 
 Nothing enforces either. The first buys that a build from `main` is never mistakable for a build of
 the version that just shipped. The second is what a reader copies, and the Maven Central badge above
-the snippet is there so a stale number is visibly stale rather than quietly wrong.
+the snippet reads the real latest version, so a stale number is visibly stale rather than quietly
+wrong.
 
 ## One-time setup
 
