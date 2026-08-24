@@ -18,6 +18,12 @@ keep it that way. §9 of the spec holds the roadmap and each phase's exit criter
 phase talk belongs; §11.2's differential propagation is the one deliverable that is measured and
 deliberately not built.
 
+`docs/embedding.md` is the host-side manual — sessions, `SessionOptions`, limits, concurrency,
+operations, diagnosing production, getting out. It exists because the DSL had two documents and the
+Java embedding API had none, so README was substituting for it. Host-API facts belong there, not in
+README. `CHANGELOG.md` gets an entry per release (`RELEASING.md` has the step) and `SECURITY.md`
+carries the reporting address and the honest note that there is no automated advisory gate.
+
 `rule-engine-example/README.md` is the worked application, and README points at it first. Its rule
 file, its feed and its four demos are compiled and executed by CI.
 
@@ -50,7 +56,7 @@ needs a complete Javadoc with `@param`/`@return`, including on records and build
 
 Most tests live in `rule-engine-testkit/src/test` even when they exercise `-core`, because they are
 end-to-end. That is why coverage is aggregated at the root — a per-module report attributed 26% to
-`-core` when the real figure was 91%.
+`-core` when the real figure was three times that (currently 93.5% line, 94.6% instruction).
 
 Before running `git commit`, always delegate to the senior-reviewer subagent
 to review the staged diff. Do not commit if it flags any Blockers until

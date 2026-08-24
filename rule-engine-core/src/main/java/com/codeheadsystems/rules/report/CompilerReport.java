@@ -23,7 +23,11 @@ import java.util.Objects;
  * @param warnings what compiled but is worth a second look
  * @param unindexed every constraint no index can serve, with the reason. Read
  *     {@link UnindexedConstraint}'s note on the two very different costs this covers
- * @param celCosts empty in v1; the escape hatch arrives with the {@code -cel} module (§6.4)
+ * @param celCosts the compile-time cost estimate for each §6.4 expression, against the budget it
+ *     was checked with. Populated whenever an {@code ExpressionCompiler} is registered; empty
+ *     when one is not, which is the common case rather than a not-yet-built one. This said
+ *     "empty in v1; the escape hatch arrives with the -cel module" for a release after that
+ *     module shipped, which documented a working CI signal as dead
  * @param sharing how much node sharing happened, for checking §6.5's sublinearity claim against a
  *     real rule set
  * @param unreachableRules rules no fact can ever activate. Empty unless the caller declared the

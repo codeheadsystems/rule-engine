@@ -13,6 +13,10 @@ projects share the `com.codeheadsystems` namespace and its credentials.
 - [Versioning](#versioning)
 - [When it goes wrong](#when-it-goes-wrong)
 
+Two documents are part of releasing and are easy to forget because nothing fails without them:
+[`CHANGELOG.md`](CHANGELOG.md), which is the only thing telling a consumer whether to upgrade, and
+[`SECURITY.md`](SECURITY.md), which is where a vulnerability report goes.
+
 ## What gets published
 
 Seven artifacts, all under `com.codeheadsystems`, all at the same version:
@@ -46,6 +50,10 @@ release version" and no window where a file and a tag disagree.
 ```bash
 git checkout main && git pull
 ./gradlew clean build javadoc          # what CI runs; strictTest included
+
+# Write the entry BEFORE tagging: the tag is what publishes, and a version that ships without a
+# changelog entry is one nobody can decide whether to upgrade to.
+$EDITOR CHANGELOG.md
 
 git tag -a v1.0.0 -m "Release version 1.0.0"
 git push origin v1.0.0

@@ -16,23 +16,52 @@ reproducible months after it was made.
 The design is specified in full in [`docs/rule-engine-spec.md`](docs/rule-engine-spec.md). This
 README is the guide to what is here and how to use it.
 
+## Before you adopt
+
+Five facts that decide whether to read further. They are here rather than buried because two of them
+are flat disqualifiers for some shops, and finding that out at `NoClassDefFoundError` is worse than
+finding it out now.
+
+- **Java 25 at runtime**, not just to build. The published jars are class-file major version 69 with
+  no multi-release fallback, so they will not load on 17 or 21. Spec §5 has the reasoning.
+- **You are taking a Jackson 3 dependency** (`tools.jackson`), declared `api` because `JsonNode` is
+  in about sixty public signatures. It coexists with Jackson 2 — different group, different package —
+  but it is a second Jackson on your tree, and a Jackson major is a major version here.
+- **First release August 2026. One maintainer. No known production deployments.** The test suite and
+  the specification are unusually thorough for a project this young; that is not the same as having
+  been run by anyone else. [Project status](#project-status) is candid about what that means.
+- **Work is bounded; wall time is not.** `maxCycles` (10,000) and `maxFacts` (1,000,000) bound a fire
+  call, and neither is a proxy for latency. If you have a per-decision budget, run your own watchdog
+  against `halt()` — see [`docs/embedding.md`](docs/embedding.md#limits-and-the-one-the-engine-does-not-enforce).
+- **Getting out is a real option, and worth checking before you get in.** Rules are text against a
+  published schema, facts are your own JSON and `exportFacts()` hands them back; what does not unwind
+  for free is the flattened fact model. [The exit
+  section](docs/embedding.md#getting-out) is honest about both halves.
+
 ## Contents
+
+**Evaluating this?** → [what it deliberately does not
+do](#what-it-deliberately-does-not-do) · [what the compiler
+knows](#what-the-compiler-knows) · [running it in production](#running-it-in-production) · [why
+didn't my rule fire?](#why-didnt-my-rule-fire) · [project status](#project-status)
+
+**Writing your first rule?** → [start here](#start-here), then
+[`docs/dsl-guide.md`](docs/dsl-guide.md), then [the worked example](rule-engine-example/README.md).
 
 - [Start here](#start-here)
 - [The worked example](#the-worked-example)
 - [How it fits together](#how-it-fits-together)
-- [What a rule can say](#what-a-rule-can-say)
-- [What a rule can do](#what-a-rule-can-do)
+- [What a rule looks like](#what-a-rule-looks-like)
 - [Things that surprise people](#things-that-surprise-people)
 - [What it deliberately does not do](#what-it-deliberately-does-not-do)
-- [Choosing a matcher](#choosing-a-matcher)
-- [Concurrency and long-lived sessions](#concurrency-and-long-lived-sessions)
+- [Running it in production](#running-it-in-production)
 - [Why didn't my rule fire?](#why-didnt-my-rule-fire)
 - [What the compiler knows](#what-the-compiler-knows)
-- [If a rule action throws](#if-a-rule-action-throws)
 - [Modules](#modules)
 - [Documentation](#documentation)
 - [Building](#building)
+- [Project status](#project-status)
+- [License](#license)
 
 ## Start here
 
@@ -187,69 +216,31 @@ half-applied world.
 **Derived facts feed back in.** A rule's `insertFact` is an ordinary fact that other rules match, so
 a rule set is a small program rather than a flat list of filters.
 
-## What a rule can say
+## What a rule looks like
 
-**Constraints and joins.** The full comparison surface of §2.6.1 — `eq`, `ne`, `gt`, `gte`, `lt`,
-`lte`, `between`, `in`, `notIn`, `matches`, `hasField`, `isNull` — and any of them can compare two
-facts by naming the other's field with `{ $ref: alias.field }`. Both ends of every join edge are
-indexed, and the binding order is chosen fresh on each fire cycle: smallest memory first, connected
-before disconnected. **The order you write patterns in is for readability, not for speed.**
+A rule is `when` (patterns) and `then` (actions). Patterns are AND-ed, and so is everything inside
+one; there is no `or` — write two rules, or use `in`. Any constraint can compare two facts by naming
+the other's field with `{ $ref: alias.field }`, and both ends of every join edge are indexed.
 
-**`notExists`** asserts an absence. The pattern binds nothing and joins nothing into the tuple, so it
-is a question asked of a complete match.
+Four kinds of pattern: an ordinary one binds a fact; **`notExists`** asserts an absence;
+**`forAll`** asserts that everything the join selects meets a requirement; **`accumulate`** folds a
+scope into a number. The last three bind no fact, and the last one binds a *value*, so nothing may
+join to it.
 
-**`forAll`** asserts that everything in scope meets a requirement — and *the join picks the scope*.
-`forAll li: LineItem (orderId = o.id, inStock)` is "every line item **of this order** is in stock".
-It earns its place on multi-constraint requirements: one constraint is already writable as a negation
-of its complement, but the complement of "in stock **and** qty above zero" is a disjunction, and no
-pattern here expresses one.
+**`after` and `before` relate two facts in time**, within a required bound — and the engine reads no
+clock, so every time it uses comes off a fact you inserted. That is what makes a replay reproduce the
+original decision. (Sliding windows and "nothing happened for 24h" are a different problem and are
+[not built](#what-it-deliberately-does-not-do): both need to notice time passing with no fact
+arriving.)
 
-**`accumulate`** folds a scope into one value — `sum`, `count`, `min`, `max`, `average`, with an
-optional `having` on the answer. The alias binds a **number, not a fact**, so nothing may join to it,
-and the fold is computed from working memory at every read rather than stored. That is what keeps it
-correct: a stored aggregate goes stale the instant any fact in its scope moves.
+Five actions and no more — `setField`, `insertFact`, `retractFact`, `emit`, `callFunction` — because
+a closed vocabulary stays diffable and reviewable by someone who is not a programmer. `insertFact`
+with `logical: true` makes a **conclusion**, withdrawn when the match that made it stops holding.
 
-**`after` / `before`** relate two facts by a time field within a required bound —
-`paidAt: { after: { $ref: o.placedAt, within: 86400000 } }`. **The engine reads no clock.** Every
-time it uses comes off a fact you inserted, which is what makes a replay reproduce the original
-decision. The bound is in the time field's own units, because only you know what they are, and it is
-required: an unbounded ordering is `gt` against the same `$ref` and always was.
+**[`docs/dsl-reference.md`](docs/dsl-reference.md) is the complete surface** — every operator, every
+action, every diagnostic code — and [`docs/dsl-guide.md`](docs/dsl-guide.md) walks you there from a
+blank file. This section is deliberately only enough to know what is expressible.
 
-**`condition:`** is §6.4's escape hatch, for the two things an operator map genuinely cannot say:
-nested `OR`/`NOT`, and arithmetic across fields. It is a CEL expression evaluated after the indexed
-constraints, once per surviving candidate, and it needs the `rule-engine-cel` module and an explicit
-registration. Keep your indexable constraints in `where` — what the index removes is work the
-expression never does.
-
-## What a rule can do
-
-Five actions, and no more (§4.6). A closed vocabulary is diffable, reviewable, and has bounded cost;
-config that is really code is much of what makes rule engines feel heavy.
-
-| Action | What it does |
-|---|---|
-| `setField` | change a field on a matched fact; routes through `update`, so it is gated on the tested-path diff |
-| `insertFact` | derive a new fact. `logical: true` makes it a *conclusion* — see below |
-| `retractFact` | remove a matched fact |
-| `emit` | produce an event, delivered to the session's sink and returned on `FireResult` |
-| `callFunction` | the escape hatch: dispatch by name to a registered Java function |
-
-**`logical: true` is truth maintenance.** A logical insert is a conclusion held up by the match that
-made it, withdrawn when that match stops holding — the `Payment` arrives, a `forAll` counterexample
-turns up, a bound fact is retracted or updated out of matching. Withdrawal cascades and is
-reversible. Three things to know: it happens at a cycle boundary rather than instantly, because
-right-hand sides commit as a unit; there is exactly one justification per conclusion, so two matches
-concluding the same thing make two facts; and concluding the very fact your own `notExists` is about
-is a livelock.
-
-**An expression can also stand in for a value.** `value: { $expr: "o.total > 500 ? 'HIGH' : 'LOW'" }`
-resolves once per firing, wherever an action takes a value — a deliberate extension of §11.3's closed
-verb set, argued in the DSL reference. It is the better answer to "I need to compute something" than
-`callFunction`, and it needs the same `rule-engine-cel` registration a `condition:` does.
-
-**`callFunction` is the wrong default.** It runs at commit, outside the staging that makes everything
-else atomic, and it cannot be withdrawn. Prefer `emit` and act on the result after the fire call
-returns.
 
 ## Things that surprise people
 
@@ -293,7 +284,9 @@ memory and is fooled identically.
 **Never cap a type your rules negate, quantify over, fold, or conclude.** Cap the types you bind — or
 let the application retract what it knows is finished, which is what
 [`StreamingDemo`](rule-engine-example/src/main/java/com/codeheadsystems/rules/example/StreamingDemo.java)
-does and why.
+does and why. [`docs/embedding.md`](docs/embedding.md#long-lived-sessions-and-eviction) has the full
+analysis, and the example's README works it through a real rule set and names the one type of six
+that can safely be capped.
 
 ## What it deliberately does not do
 
@@ -307,92 +300,27 @@ does and why.
 | backward chaining | §1's forward-only decision stands |
 | distributed evaluation | §5's immutability split makes it *feasible* and no more. The partitioning, the wire protocol and cross-node routing are an architecture, not a slice |
 
-## Choosing a matcher
+## Running it in production
 
-Three matchers, held to producing **identical firing sequences**. Everything that decides *which*
-activation fires lives in one shared base — dirty tracking, refraction, negation, the §6.4
-post-filter, conflict resolution — so the three can only differ in how matches are *found*.
+Compile once and share the `CompiledRuleSet`; create a cheap single-writer `RuleSession` per unit of
+work, one virtual thread each.
 
-| `SessionOptions.matching(...)` | Use it when |
-|---|---|
-| `NETWORK` (default) | a session is created, filled, fired and closed. Joins are recomputed per fire cycle from indexed pattern memories |
-| `RETE` | a session is long-lived and fires thousands of times. Joins are materialised as facts arrive, and the conflict set is pushed and pulled rather than rebuilt |
-| `NAIVE` | never in production. No network, no indexes, `O(rules × facts^arity)` — the **correctness oracle** every other matcher is differentially tested against, and shipped so that you can test your own rules against it |
+**[`docs/embedding.md`](docs/embedding.md) is the host-side manual** and covers what is not on this
+page: every `SessionOptions` setting, the work limits and the wall-clock bound the engine does *not*
+enforce, registering a `HostFunction`, choosing between the three matchers, `RuleBatches` and
+`SessionActor`, hot reload, what happens when a rule action throws, the operational surface
+(`session.stats()`, the tracing and Flight Recorder listeners, `EmitContext` for audit), and how to
+reconstruct a decision after the fact.
 
-`MatcherEquivalence` and `ShuffleHarness` in `rule-engine-testkit` are how you point that oracle at
-your own rule set; see
-[`MatcherAgreementTest`](rule-engine-example/src/test/java/com/codeheadsystems/rules/example/MatcherAgreementTest.java).
-
-The streaming matcher is measured, not asserted — see [`docs/benchmarks.md`](docs/benchmarks.md) for
-the curves, including the fire cycle that stopped growing with the working set.
-
-## Concurrency and long-lived sessions
-
-A `CompiledRuleSet` is immutable and freely shareable; a `RuleSession` holds all the mutable state
-and is never shared. So the natural unit of concurrency is one virtual thread per session (§5.2):
-
-```java
-try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-    List<Future<FireResult>> futures = batches.stream()
-        .map(batch -> executor.submit(() -> {
-            try (RuleSession session = rules.newSession()) {
-                batch.forEach(f -> session.insert(f.type(), f.payload()));
-                return session.fireAllRules();
-            }
-        }))
-        .toList();
-}
-```
-
-`RuleBatches` is that loop with the failure question answered. §5.2 insists you decide what a partial
-batch result means before shipping, so every batch's outcome comes back — successes and failures
-both — instead of the first exception throwing away its siblings' work:
-
-```java
-List<BatchOutcome<FireResult>> outcomes = RuleBatches.run(rules, batches, (session, batch) -> {
-    batch.forEach(f -> session.insert(f.type(), f.payload()));
-    return session.fireAllRules();
-});
-```
-
-Measured on an 8-core machine, 256 such batches scale 3.30x on 4 threads and 5.79x on 8 — against a
-shared-nothing control that manages 3.76x and 7.16x on the same box, so the engine reaches 81% of
-what that machine can do at 8 threads. Sharing one `CompiledRuleSet` across every thread costs
-nothing measurable at any thread count, which is the claim §5.5 stakes the design on.
-
-**For a stream rather than a batch, `SessionActor`.** A session is single-writer and "fire until told
-to stop" is a blocking loop, so inserting from a producer thread while that loop runs is a data race.
-One worker owns the session, many producers feed a bounded inbox, and a burst of inserts costs one
-fire cycle rather than one each.
-
-**A long-lived session has to be bounded**, because every structure it grows — working memory, the
-node memories and their indexes, the refraction memory, the beta memory — is keyed on handles.
-`SessionOptions.eviction(...)` takes a policy (a total cap, or a cap per fact type so a bounded
-stream can flow past unbounded reference data) and evicting a fact runs the **full retract path**, so
-one mechanism bounds all of them. Read the four-shaped warning above before configuring one.
-
-### Swapping rules while running
-
-`RuleSetHolder` is §5.6's hot reload: a volatile reference, and two contracts. Compile before you
-publish, so a broken rule file leaves the previous version serving; and a swap affects new sessions
-only — anything already running finishes against the rules it started with.
-
-```java
-RuleSetHolder rules = new RuleSetHolder(RuleFiles.compile(source));
-...
-rules.publish(RuleFiles.compile(newSource));   // compile first: a failure here changes nothing
-```
-
-There is no safe in-place swap for a session that is *already* running — its memories, refraction
-state and agenda are all shaped by the old network's node ids. For long-lived sessions the answer is
-`SessionDrain.restart`, which exports the session's facts, closes it, and replays them into a session
-on the new rules. Facts a rule derived are deliberately not replayed: the new session re-derives them
-when it fires, and exporting them would double-count every one.
+Measured on an 8-core machine, 256 concurrent batches scale 5.79x against a shared-nothing control's
+7.16x — 81% of what that box can do. Sharing one rule set across every thread costs nothing
+measurable; see [`docs/benchmarks.md`](docs/benchmarks.md).
 
 ## Why didn't my rule fire?
 
-A firing leaves a record; a *non*-firing leaves nothing to look up. `MatchExplainer` is the
-diagnostic that goes and looks (§7.2):
+A firing leaves a record; a *non*-firing leaves nothing to look up, because the fast path is
+optimised precisely not to record what it eliminated. `MatchExplainer` re-evaluates the constraints
+one at a time against working memory and names the one that emptied the set:
 
 ```java
 Explanation why = new MatchExplainer(rules, session).explain("high-value-order-review");
@@ -403,45 +331,29 @@ System.out.println(why.describe());
 //   c: Customer — 1 considered, 1 matched
 ```
 
-It deliberately does not use the matching network. The network is optimised to *not* compute what you
-want here: an index skips non-candidates without recording why, and a pattern memory holds the
-survivors and has forgotten the casualties. So it re-evaluates constraints one at a time against
-working memory — slower by every measure, and the only way to know which constraint did the
-eliminating.
+Four answers cover nearly every real case, and the last two are the ones nobody guesses:
 
-**It sees quantifiers, and names the fact that is in the way** — the `Payment` that defeats a
-`notExists`, or the `LineItem` that fails a `forAll`:
+1. **No fact of some type exists** — usually a fact type spelled differently from how the host
+   inserts it. `declaredFactTypes` does not reject that at compile time; it surfaces it as
+   `report().unreachableRules()`, which you assert is empty in CI. See below.
+2. **N considered, all failed a named constraint** — reported with the value that failed it.
+3. **The session could not see the facts.** A rule spanning two orders cannot fire in a session
+   holding one, however it is written. Check scope before you check the rule.
+4. **The rule already fired on those exact facts.** That is refraction, and it is what stops rules
+   firing forever.
 
-```java
-// rule unpaid-shipped-order: 1 combination(s) matched every pattern and join, but the rule asserts that no Payment matches 'p' and fact #2 does (§1's NOT_EXISTS)
-//   o: Order — 1 considered, 1 matched
-//   not p: Payment — 1 present, suppressed 1 match(es) — e.g. fact #2
-```
-
-`Explanation.negations()` carries one entry per negated pattern whether or not it suppressed
-anything, and the numbers run the other way from a pattern's: how many facts of the type are
-*present*, and how many matches their presence removed.
-
-It cannot *detect* the eviction hazard, for the reason given above — but it puts the count in front
-of you, which is the part that changes what you do next:
-
-```
-// rule unpaid-shipped-order: 1 match(es); all eligible, none has fired yet — WARNING: 2 Payment fact(s) evicted this session, and this rule asserts their absence: an evicted fact and an absent one are indistinguishable to a negation, so this match may be a false conclusion (§4.4)
-```
-
-Pin the facts you are actually asking about when you have them, which is the sharper question:
-
-```java
-why = explainer.explain("high-value-order-review", Map.of("o", orderHandle, "c", customerHandle));
-```
-
-Three verdicts cover most real cases: no fact of some type exists — usually a fact type spelled
-differently from how the host inserts it; N considered and all failed a named constraint, *with the
-value that failed it*; and the one nobody guesses — **the rule already fired on those exact facts**.
+It sees quantifiers too, and names the fact in the way — the `Payment` defeating a `notExists`, the
+`LineItem` failing a `forAll`. It cannot see the eviction hazard above: it re-asks the same question
+of the same working memory and is fooled identically, so it warns rather than detects.
 
 Before any of that, check the three modelling traps above. A rule that "matches nothing" is very
 often an `eq: null` that meant `hasField: false`, and a rule that "matches everything" is very often
-a bare `ne`. And check the session's scope: a rule can only see the facts the session holds.
+a bare `ne`.
+
+**At 3am the session is closed and the facts are gone**, so the postmortem path — capture with a
+listener or `exportFacts()`, replay, then explain — is worth building before you need it.
+[`docs/embedding.md`](docs/embedding.md#diagnosing-production) has it, along with the pinned-handle
+form of `explain` and the `EmitContext` audit trail.
 
 ## What the compiler knows
 
@@ -456,12 +368,13 @@ CompilerReport report = rules.report();
 ```
 
 **A rule set is source code; treat it like source code.** Two options turn a runtime surprise into a
-compile error, and both are worth setting from the first day:
+build-time one, and both are worth setting from the first day — though only the first is literally a
+compile error:
 
 ```java
 CompilerOptions.builder()
     .declaredFunctions(Set.of("notifySlack"))       // a typo becomes a compile error
-    .declaredFactTypes(Set.of("Order", "Customer")) // finds rules nothing can activate
+    .declaredFactTypes(Set.of("Order", "Customer")) // fills report().unreachableRules() -- assert it
     .build();
 ```
 
@@ -478,25 +391,6 @@ schemas at all.
 
 [`ExampleRulesTest`](rule-engine-example/src/test/java/com/codeheadsystems/rules/example/ExampleRulesTest.java)
 is a copyable version of the whole gate.
-
-## If a rule action throws
-
-The atomicity guarantee is **per-phase**, and the halves differ (§4.6). A staging-phase failure
-applies nothing. A commit-phase failure — a `callFunction` handler, an `EventSink`, or a `setField`
-whose path runs through a scalar — leaves the working-memory effects that already landed in place.
-There is no compensating undo and there cannot be one: a sent message cannot be un-sent.
-
-`FireRecord` is how that partial state is discoverable. It carries what actually committed, which
-action threw, and which actions never ran.
-
-**Under the default `RETHROW` policy, register a listener or you will not get that record.** The spec
-requires the original exception to propagate to the caller, so — unlike a limit breach — it cannot
-carry a partial result. Listeners are the trace mechanism (§7.1), and `onAfterFire` is published for
-the failed firing *before* the rethrow. With no listener registered, the record of the firing, and of
-every firing before it in that call, is gone with the stack unwind. Use `ABORT_SESSION` instead if
-you want the partial `FireResult` returned rather than thrown.
-
-A listener must not throw and must not call back into the session; neither is enforced.
 
 ## Modules
 
@@ -528,6 +422,7 @@ from its neighbours means a deployment went wrong rather than that the modules d
 | [`rule-engine-example/README.md`](rule-engine-example/README.md) | **start here** — a complete application you can run |
 | [`docs/dsl-guide.md`](docs/dsl-guide.md) | writing a rule, from a blank file. Opens with the three things that surprise everybody |
 | [`docs/dsl-reference.md`](docs/dsl-reference.md) | every operator, every action, every diagnostic code |
+| [`docs/embedding.md`](docs/embedding.md) | the host side: sessions, options, limits, concurrency, operations, and diagnosing production |
 | [`docs/rule-engine-spec.md`](docs/rule-engine-spec.md) | the specification. The source of truth, including §9's roadmap and what is deliberately not built |
 | [`docs/benchmarks.md`](docs/benchmarks.md) | what is measured, on what, and what the numbers do not show |
 
@@ -550,8 +445,9 @@ Requires a JDK 25 toolchain; Gradle resolves one via the foojay plugin if it is 
 ```
 
 Coverage is aggregated deliberately: most of `-core` is exercised by the end-to-end tests in
-`-testkit`, and a per-module report attributes none of that back. It reported `-core` at 26% while
-the aggregate figure was 91%.
+`-testkit`, and a per-module report attributes none of that back — it once reported `-core` at 26%
+against an aggregate three times that. The aggregate is currently 93.5% line, 94.6% instruction,
+88.3% branch, over a suite that runs twice in full: once normally and once under strict mode.
 
 Releasing is [`RELEASING.md`](RELEASING.md): tag `vX.Y.Z` and the workflow does the rest.
 
@@ -561,20 +457,36 @@ aliases the stored payload is rejected, the conflict-resolution strategy is asse
 order consistent with equality, and an eviction policy is consulted twice and compared. §7.5 asks for
 the full suite to run under it in CI and forbids it in production; `strictTest` is that run.
 
-### Status
+## Project status
 
-Everything described on this page is built and tested. The specification's §9 roadmap is complete
-through Phase 6 except for the items in [what it deliberately does not
-do](#what-it-deliberately-does-not-do), each of which §9.1 records with the reason it was not built —
-including one, §11.2's differential propagation, that was profiled, found to matter on its own
-benchmark, and left unbuilt because the correctness obligation it imposes is worse than the cost it
-removes.
+**First release: August 2026. One maintainer. No known production deployments.**
 
-**1.0.0 is the first published version.** §0's "no mandatory build/packaging layer" is unchanged by
-that — a `CompiledRuleSet` is still an object you get back from a compile call, not a deployment
-artifact — but there are now coordinates to depend on rather than a repository to clone. What the
-version number promises is the surface `ApiSurfaceTest` calls exported; see
-[`RELEASING.md`](RELEASING.md) for what moves a major.
+That is stated plainly because the rest of this page reads like a mature project and the test suite
+encourages the impression. Nine hundred-odd tests, 93.5% coverage, a 2,000-line specification that amends itself
+when reality disagrees, and a benchmark document that retracts its own claims are all real — and none
+of them is the same thing as having been run by somebody who is not the author. The risk is not that
+the code is bad; it is that no workload has hit it that the author did not think of.
+
+What that means concretely, and what would change it:
+
+- **Support** is best-effort. Issues and pull requests are welcome; there is no SLA, and there is
+  currently no second committer.
+- **Security reports** go to the address in [`SECURITY.md`](SECURITY.md). This parses rule files and
+  JSON payloads and ships a CEL evaluator, so please report privately rather than in an issue.
+- **What changed between releases** is in [`CHANGELOG.md`](CHANGELOG.md).
+- **If it stalls**, forking is a genuine option rather than a formality: Apache 2.0, sources and
+  javadoc jars published, the whole design and its rejected alternatives written down, and a naive
+  correctness oracle shipped in the testkit so a fork can check itself.
+
+Everything on this page is built and tested. §9's roadmap is complete through Phase 6 except for the
+items in [what it deliberately does not do](#what-it-deliberately-does-not-do) — including one,
+§11.2's differential propagation, that was profiled, found to matter on its own benchmark, and left
+unbuilt because the correctness obligation it imposes is worse than the cost it removes.
+
+What the version number promises is the surface `ApiSurfaceTest` calls exported; see
+[`RELEASING.md`](RELEASING.md) for what moves a major. Note that the boundary is enforced by a test
+in this repository rather than by a `module-info` in the jar (§8.1 explains why), so nothing stops
+you importing an internal package — and nothing promises it will still be there.
 
 ## License
 

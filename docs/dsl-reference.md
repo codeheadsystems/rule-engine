@@ -196,7 +196,7 @@ retract it from a second rule.
 indistinguishable to a negation, so a cap on `Payment` makes the rule above announce that a paid
 order is unpaid. Everywhere else eviction can only cost you a firing; here it manufactures a false
 conclusion. Cap the types you bind, not the ones whose absence you assert — see
-[`SessionOptions.eviction`](../README.md#concurrency).
+[`SessionOptions.eviction`](embedding.md#long-lived-sessions-and-eviction).
 
 
 ### Universals: `quantifier: forAll`
@@ -309,7 +309,7 @@ field name if there is any doubt: `placedAtMillis`.
 
 **This engine reads no clock**, which is the point. Every time it uses comes from a fact, so
 replaying the same facts gives the same firings on any machine, in any year. That is [§7.3's
-determinism contract](#determinism), and a wall clock would end it.
+determinism contract](rule-engine-spec.md#73-the-determinism-contract), and a wall clock would end it.
 
 **The bound is required and must be positive**, because an unbounded ordering is already `gt` or
 `lt` against the same `$ref`, and a bound of `0` is empty by construction — the near edge is strict,
@@ -358,6 +358,36 @@ rules:
 **The alias binds a value, not a fact.** Reference it with a bare `$ref: units` — there is no field,
 because there is no fact. What may read it: an action, a `condition:`, and the `accumulate` block's
 own `having`. What may **not**: a join from another pattern, because a join compares two facts.
+
+**`having` takes a literal, and only a literal.** A `$ref` inside it is a compile error, for the same
+reason: a join needs a fact on both sides and an accumulate has none. To compare the answer against a
+field on another fact — an account's spend against that account's own limit, which is the archetypal
+aggregate rule — put the comparison in a [`condition:`](#the-expression-escape-hatch) on a pattern
+that **binds** a fact:
+
+```yaml
+apiVersion: rules.v1
+rules:
+  - id: over-daily-limit
+    when:
+      - fact: Account
+        as: acct
+        condition: "total > acct.dailyLimitCents"   # reads `total`, declared below
+      - fact: Transaction
+        as: total
+        quantifier: accumulate
+        accumulate: { sum: "amountCents" }
+        where: { accountId: { eq: { $ref: acct.id } } }
+    then:
+      - action: emit
+        event: account.overLimit
+        payload: { accountId: { $ref: acct.id }, totalCents: { $ref: total } }
+```
+
+Two things there are easy to get wrong. The condition goes on the **other** pattern — one on the
+accumulate itself is refused, as it is on `notExists` and `forAll`. And it names an alias declared
+*below* it, which a `$ref` may not do: a condition is a post-filter over a complete match rather than
+part of the join, so the earlier-alias rule does not apply to it.
 
 **The value is recomputed every time it is read**, never stored, so it cannot go stale. The cost is
 that reading it twice folds it twice.
@@ -795,7 +825,7 @@ System.out.println(report.describe());
 | `errors` | Always empty — compilation throws if a rule set has errors |
 | `warnings` | Things that compiled but are worth a look — see the table below |
 | `unindexed` | Every constraint no index can serve, with a reason |
-| `celCosts` | Empty until the CEL module lands |
+| `celCosts` | One entry per §6.4 expression: its compile-time cost estimate, the budget, and whether it is over. Populated whenever an `ExpressionCompiler` is registered — worth asserting on in CI, since an expression that grows past its budget is a rule that will be refused later |
 | `sharing` | Rule, alpha-node and pattern counts, and the sharing ratio |
 | `unreachableRules` | Rules no fact can activate — empty unless you declare your fact types |
 
@@ -932,7 +962,11 @@ rules:
         event: interesting
 ```
 
-A condition may read any alias the rule binds, so it spans facts as freely as a `$ref` does. It sits
+A condition may read every alias the rule declares — including an `accumulate`'s, which binds a
+value rather than a fact, and including one declared **later** in the `when` block, since a
+condition is not part of the join. It may not be written *on* a quantified pattern
+(`notExists`, `forAll`, `accumulate`); see [aggregates](#aggregates-quantifier-accumulate) for
+the shape that works. It spans facts as freely as a `$ref` does. It sits
 beside operator maps rather than replacing them — and it should, because the operator maps are what
 still narrow the search.
 
@@ -1008,9 +1042,14 @@ time, insert it as a fact.
 
 ## Not implemented yet
 
-Deferred, each with an interim answer in §1 of the spec: `collect`, backward chaining, and temporal
-operators. The short version of all of them is the same: compute it at
-ingestion and insert the answer as a fact.
+Deferred, each with an interim answer in §1 of the spec: `collect` and backward chaining. The short
+version of both is the same: compute it at ingestion and insert the answer as a fact.
+
+**Temporal operators are no longer on this list.** `after` and `before` are implemented — see
+[Time](#time-after-and-before) — and this line said otherwise for a release. It is called out rather
+than quietly corrected because of what the stale version cost: a reader who greps this page for
+"temporal" before scrolling to the section that documents them concludes the feature does not exist
+and goes off to compute it at ingestion. That is exactly what happened to somebody.
 
 The quantifiers are *not* on that list any more — [`notExists`](#negation-quantifier-notexists) and
 [`forAll`](#universals-quantifier-forall) are both implemented, with the boundaries those sections

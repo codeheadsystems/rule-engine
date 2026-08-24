@@ -132,12 +132,24 @@ final class Accumulates {
      * it is exactly what an accumulate cannot do, because a join needs a fact on both sides. Taken
      * as a literal it would compile into a rule that never matches, silently, which is the failure
      * §6.2.3 exists to prevent. Named rather than swallowed, with the route that does work.
+     *
+     * THE MESSAGE MUST SAY WHERE THE CONDITION GOES, and an earlier version did not. It said only
+     * "use a 'condition' expression", and a condition written on THIS pattern is rejected by
+     * RuleCompiler -- "a condition on a ACCUMULATE pattern is not supported. Express it with the
+     * pattern's own constraints" -- which is the `having` this branch just refused. Two diagnostics
+     * pointing at each other is worse than one that merely says no: a reader who follows them
+     * literally ends up back where they started and concludes the rule cannot be written. Found by
+     * somebody integrating from the documentation alone, who lost roughly half their time to it and
+     * escaped by guessing the answer below.
      */
     if (References.isRef(operand)) {
       diagnostics.error(DslError.MALFORMED_ACCUMULATE, at,
           "'having' takes a literal; a $ref would compare the answer against a fact, and there is"
-              + " no fact on the accumulate's side. Use a 'condition' expression, which can read"
-              + " the alias and any bound fact");
+              + " no fact on the accumulate's side. Put the comparison in a 'condition' on a"
+              + " pattern that BINDS a fact -- typically the one holding the limit -- where it can"
+              + " read that fact and this accumulate's alias together, as in"
+              + " `condition: \"total > acct.dailyLimitCents\"` on the pattern bound as 'acct'."
+              + " It cannot go on this pattern: a condition on an accumulate is itself rejected");
       return Optional.empty();
     }
     /*

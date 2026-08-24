@@ -6,6 +6,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.codeheadsystems.rules.compiler.RuleCompilationException;
 import com.codeheadsystems.rules.compiler.RuleCompiler;
+import com.codeheadsystems.rules.dsl.RuleFileException;
+import com.codeheadsystems.rules.dsl.RuleFiles;
+import com.codeheadsystems.rules.dsl.RuleSource;
 import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.listener.RuleEngineListener;
 import com.codeheadsystems.rules.listener.SuppressReason;
@@ -1049,5 +1052,74 @@ class ReviewRegressionTest {
           .satisfies(thrown -> assertThat(
               ((RuleCompilationException) thrown).diagnostics()).hasSize(2));
     }
+  }
+
+  @Nested
+  @DisplayName("a diagnostic that sent the reader in a circle")
+  class AccumulateHavingRef {
+
+    /**
+     * The rule an author writes when an aggregate has to clear a limit stored on the joined fact.
+     *
+     * <p>"Total this account's transactions and compare against that account's own limit" is the
+     * archetypal aggregate rule -- spend against a cap, usage against a quota, exposure against a
+     * ceiling -- and a {@code $ref} inside {@code having} is the obvious way to write it.
+     */
+    private static final String HAVING_A_REF = """
+        apiVersion: rules.v1
+        rules:
+          - id: over-daily-limit
+            when:
+              - fact: Account
+                as: acct
+              - fact: Transaction
+                as: total
+                quantifier: accumulate
+                accumulate:
+                  sum: "amountCents"
+                  having: { gt: { $ref: acct.dailyLimitCents } }
+                where:
+                  accountId: { eq: { $ref: acct.id } }
+            then: [{ action: emit, event: over }]
+        """;
+
+    @Test
+    @DisplayName("names where the condition goes, because the old message pointed into a wall")
+    void theMessageNamesADestinationThatActuallyWorks() {
+      /*
+       * Found by somebody integrating from the documentation alone. `having` refuses a $ref and
+       * said "Use a 'condition' expression" -- and a condition written on that same accumulate
+       * pattern is refused by RuleCompiler with "express it with the pattern's own constraints",
+       * which is the `having` the first message had just rejected. Two diagnostics pointing at each
+       * other read as "this rule cannot be written"; the reader lost half their time and escaped by
+       * guessing.
+       *
+       * The fix is only a message, so this asserts the message. What makes it a real guard rather
+       * than a spelling check is the second half below: the route this message now recommends is
+       * compiled, so the advice cannot rot into a lie again without failing here.
+       */
+      assertThatThrownBy(() -> RuleFiles.compile(RuleSource.yaml("over-limit.yaml", HAVING_A_REF)))
+          .isInstanceOf(RuleFileException.class)
+          .hasMessageContaining("takes a literal")
+          .describedAs("the message must send the reader somewhere that works")
+          .hasMessageContaining("BINDS a fact")
+          .hasMessageContaining("cannot go on this pattern")
+          /*
+           * The exact expression CelConditionPlacementTest compiles. Without this the two halves are
+           * independent string literals: somebody could reword the message to recommend a different
+           * route and both tests would stay green while the advice went back to being wrong. This is
+           * what welds them together across a module boundary -cel's dependencies stop us crossing
+           * in the other direction.
+           */
+          .hasMessageContaining("total > acct.dailyLimitCents");
+    }
+
+    /*
+     * The other half of this pair -- that the route the message recommends actually compiles -- is
+     * CelConditionPlacementTest in -cel. It needs a registered ExpressionCompiler, and -testkit
+     * deliberately does not depend on that module: it would put protobuf, guava and antlr on the
+     * test classpath of every consumer of this harness. Split rather than dropped, because a
+     * diagnostic that recommends a route nobody compiles is how this defect happened.
+     */
   }
 }
