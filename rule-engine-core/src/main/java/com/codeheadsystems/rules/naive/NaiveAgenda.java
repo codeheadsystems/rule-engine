@@ -1,6 +1,5 @@
 package com.codeheadsystems.rules.naive;
 
-import com.codeheadsystems.rules.agenda.ConflictResolutionStrategy;
 import com.codeheadsystems.rules.agenda.RecomputingAgenda;
 import com.codeheadsystems.rules.agenda.RefractionMemory;
 import com.codeheadsystems.rules.fact.Fact;
@@ -8,6 +7,7 @@ import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.fact.WorkingMemory;
 import com.codeheadsystems.rules.listener.RuleEngineListener;
 import com.codeheadsystems.rules.match.Activation;
+import com.codeheadsystems.rules.match.ConflictResolutionStrategy;
 import com.codeheadsystems.rules.rule.AlphaTest;
 import com.codeheadsystems.rules.rule.CompiledPattern;
 import com.codeheadsystems.rules.rule.CompiledRule;

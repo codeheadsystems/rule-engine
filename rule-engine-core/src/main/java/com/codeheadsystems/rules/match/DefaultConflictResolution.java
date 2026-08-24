@@ -1,6 +1,4 @@
-package com.codeheadsystems.rules.agenda;
-
-import com.codeheadsystems.rules.match.Activation;
+package com.codeheadsystems.rules.match;
 
 /**
  * Salience, then recency, then a state-derived tie-break (spec §4.2).
@@ -51,7 +49,6 @@ public final class DefaultConflictResolution implements ConflictResolutionStrate
     }
     // A total order on the match itself, so two distinct activations never compare zero and the
     // result does not depend on the order the rebuild loop happened to construct them.
-    return com.codeheadsystems.rules.match.ActivationKey.LEXICOGRAPHIC
-        .compare(left.key(), right.key());
+    return ActivationKey.LEXICOGRAPHIC.compare(left.key(), right.key());
   }
 }

@@ -3,7 +3,7 @@ package com.codeheadsystems.rules.testkit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.codeheadsystems.rules.agenda.ConflictResolutionStrategy;
+import com.codeheadsystems.rules.match.ConflictResolutionStrategy;
 import com.codeheadsystems.rules.rule.RuleDefinition;
 import com.codeheadsystems.rules.session.RuleSession;
 import com.codeheadsystems.rules.session.SessionOptions;

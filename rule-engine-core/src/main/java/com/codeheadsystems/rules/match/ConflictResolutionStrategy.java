@@ -1,6 +1,5 @@
-package com.codeheadsystems.rules.agenda;
+package com.codeheadsystems.rules.match;
 
-import com.codeheadsystems.rules.match.Activation;
 import java.util.Comparator;
 
 /**

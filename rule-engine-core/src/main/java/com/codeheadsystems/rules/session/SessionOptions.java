@@ -1,9 +1,9 @@
 package com.codeheadsystems.rules.session;
 
-import com.codeheadsystems.rules.agenda.ConflictResolutionStrategy;
-import com.codeheadsystems.rules.agenda.DefaultConflictResolution;
 import com.codeheadsystems.rules.evict.EvictionPolicy;
 import com.codeheadsystems.rules.listener.RuleEngineListener;
+import com.codeheadsystems.rules.match.ConflictResolutionStrategy;
+import com.codeheadsystems.rules.match.DefaultConflictResolution;
 import com.codeheadsystems.rules.rhs.HostFunction;
 import com.codeheadsystems.rules.rhs.RhsErrorHandler;
 import java.util.ArrayList;

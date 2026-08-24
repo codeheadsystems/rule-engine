@@ -2,10 +2,10 @@ package com.codeheadsystems.rules.truth;
 
 import com.codeheadsystems.rules.agenda.Agenda;
 import com.codeheadsystems.rules.agenda.RefractionMemory;
+import com.codeheadsystems.rules.eval.TupleMatch;
 import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.fact.WorkingMemory;
 import com.codeheadsystems.rules.match.ActivationKey;
-import com.codeheadsystems.rules.match.TupleMatch;
 import com.codeheadsystems.rules.rule.CompiledRule;
 import java.util.LinkedHashSet;
 import java.util.List;

@@ -1,6 +1,5 @@
 package com.codeheadsystems.rules.rete;
 
-import com.codeheadsystems.rules.agenda.ConflictResolutionStrategy;
 import com.codeheadsystems.rules.agenda.RecomputingAgenda;
 import com.codeheadsystems.rules.agenda.RefractionMemory;
 import com.codeheadsystems.rules.fact.Fact;
@@ -8,6 +7,7 @@ import com.codeheadsystems.rules.fact.WorkingMemory;
 import com.codeheadsystems.rules.listener.RuleEngineListener;
 import com.codeheadsystems.rules.match.Activation;
 import com.codeheadsystems.rules.match.ActivationKey;
+import com.codeheadsystems.rules.match.ConflictResolutionStrategy;
 import com.codeheadsystems.rules.match.Tuple;
 import com.codeheadsystems.rules.network.JoinEnumerator;
 import com.codeheadsystems.rules.network.Network;

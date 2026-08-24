@@ -49,6 +49,34 @@ tasks.named("check") {
 }
 
 /*
+ * Some suites read files rather than classes: DocExamplesTest and CelDocExamplesTest compile every
+ * rule file printed in the docs. Gradle cannot see those through the classpath, so without
+ * declaring them the task goes UP-TO-DATE and the guard silently runs against the previous build's
+ * answer -- an edited doc validated against a state that no longer exists.
+ *
+ * Applied to every module rather than to the two that need it today, because the hole reopens the
+ * next time somebody writes a third doc-reading test and does not think of this, and because these
+ * three files are cheap: they change in a commit that is usually editing them on purpose. CI never
+ * sees the bug: CI always starts clean, which is precisely why it survived until a mutation went
+ * unnoticed locally.
+ *
+ * The three documents are named individually rather than declaring `docs/` wholesale -- the spec is
+ * edited in most commits and would invalidate every module's test task and build-cache entry for a
+ * file no test reads. For the same reason the OTHER file-reading suite, ApiSurfaceTest, declares
+ * its inputs in the testkit's own build file: it reads seven source trees, and making those a
+ * global input would rebuild and re-run six modules' tests twice over for a comment edit in -cel.
+ */
+listOf("test", "strictTest").forEach { name ->
+    tasks.named<Test>(name) {
+        listOf("README.md", "docs/dsl-guide.md", "docs/dsl-reference.md").forEach { document ->
+            inputs.file(rootProject.layout.projectDirectory.file(document))
+                .withPropertyName("fixture-$document")
+                .withPathSensitivity(PathSensitivity.RELATIVE)
+        }
+    }
+}
+
+/*
  * Javadoc warnings fail the build. The spec places load-bearing contracts in Javadoc rather than
  * in enforceable code -- payload ownership (§2.2), factsOfType snapshot semantics (§2.4), halt()
  * being the one legal cross-thread call (§4.7), the consuming behaviour of Agenda.nextToFire()

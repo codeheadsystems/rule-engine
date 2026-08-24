@@ -1,4 +1,4 @@
-package com.codeheadsystems.rules.match;
+package com.codeheadsystems.rules.eval;
 
 import com.codeheadsystems.rules.fact.Fact;
 import java.util.Objects;

@@ -13,7 +13,7 @@
  * justification still holds and retracts what nothing supports any more.
  *
  * <p>Neither decides what a match <em>is</em>. That question is
- * {@link com.codeheadsystems.rules.match.TupleMatch}'s, in the matching package, shared with the
- * agenda so a revalidation and a match cannot disagree about the same tuple.
+ * {@link com.codeheadsystems.rules.eval.TupleMatch}'s, in the shared evaluation package, asked by
+ * the agenda too so a revalidation and a match cannot disagree about the same tuple.
  */
 package com.codeheadsystems.rules.truth;

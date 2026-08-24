@@ -1,18 +1,19 @@
 package com.codeheadsystems.rules.agenda;
 
+import com.codeheadsystems.rules.eval.Accumulators;
+import com.codeheadsystems.rules.eval.Conditions;
+import com.codeheadsystems.rules.eval.Negations;
+import com.codeheadsystems.rules.eval.Universals;
 import com.codeheadsystems.rules.expr.ExpressionBindings;
 import com.codeheadsystems.rules.fact.Fact;
 import com.codeheadsystems.rules.fact.FactHandle;
 import com.codeheadsystems.rules.fact.WorkingMemory;
 import com.codeheadsystems.rules.listener.RuleEngineListener;
 import com.codeheadsystems.rules.listener.SuppressReason;
-import com.codeheadsystems.rules.match.Accumulators;
 import com.codeheadsystems.rules.match.Activation;
+import com.codeheadsystems.rules.match.ConflictResolutionStrategy;
 import com.codeheadsystems.rules.match.ActivationKey;
-import com.codeheadsystems.rules.match.Conditions;
-import com.codeheadsystems.rules.match.Negations;
 import com.codeheadsystems.rules.match.Tuple;
-import com.codeheadsystems.rules.match.Universals;
 import com.codeheadsystems.rules.rule.AggregateTest;
 import com.codeheadsystems.rules.rule.CompiledAccumulate;
 import com.codeheadsystems.rules.rule.CompiledPattern;
@@ -535,7 +536,7 @@ public abstract class RecomputingAgenda implements Agenda {
   /**
    * Whether any in-scope fact fails a universal pattern against one binding.
    *
-   * <p>Delegated to {@link com.codeheadsystems.rules.match.Universals} for the reason
+   * <p>Delegated to {@link com.codeheadsystems.rules.eval.Universals} for the reason
    * {@link #exists} delegates: §7.2's explainer has to answer the same question, and two copies
    * could disagree.
    *
@@ -551,7 +552,7 @@ public abstract class RecomputingAgenda implements Agenda {
   /**
    * Whether any fact satisfies a negated pattern against one binding.
    *
-   * <p>Delegated to {@link com.codeheadsystems.rules.match.Negations} rather than written here,
+   * <p>Delegated to {@link com.codeheadsystems.rules.eval.Negations} rather than written here,
    * because §7.2's {@code MatchExplainer} has to answer the same question to explain a rule that
    * did not fire. Two copies of this predicate could disagree, and the disagreement would surface
    * as a diagnostic contradicting the engine it is diagnosing.
@@ -586,7 +587,7 @@ public abstract class RecomputingAgenda implements Agenda {
   /**
    * Whether every condition on a rule holds for one match.
    *
-   * <p>Delegated to {@link com.codeheadsystems.rules.match.Conditions} rather than written here,
+   * <p>Delegated to {@link com.codeheadsystems.rules.eval.Conditions} rather than written here,
    * because §4.4's truth maintenance re-asks the same question of a justifying tuple. Two copies
    * could disagree, and a disagreement there means either a conclusion left standing after its
    * justification died or a fact retracted while the engine still believes it.

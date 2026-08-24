@@ -343,6 +343,39 @@ concurrently" an extra artifact to discover.
   matched while a type it negates was being evicted, which is the one case the eviction clause
   belongs on a *successful* match rather than a silent rule.
 
+## The API boundary
+
+`-core` has ~120 public types and Java has no `internal`, so "public" means two things: the contract,
+and reachable-by-a-sibling-package. **`ApiSurfaceTest` (in `-testkit`) is where that line is drawn** —
+it names the exported packages and the internal ones each module may reach into. Widening it is an
+edit to that list, not a side effect of typing `public`.
+
+**The boundary is drawn at package granularity, which is what JPMS gives you, so a package that
+mixes contract with sharing has to be split.** `match` was: `Activation` and `ActivationKey` are
+named by `RuleEngineListener`, while the six quantifier predicates beside them were public only so a
+sibling could ask them — those moved to `eval`. `agenda` was the same shape in reverse: exporting it
+to reach `ConflictResolutionStrategy` would publish `Agenda.reactivate` and `RefractionMemory.forget`,
+so the strategy moved to `match` and `agenda` is internal. The check that catches this is
+`noExportedSignatureNamesAnInternalType`, which reflects over `-core`'s own declared signatures —
+without it the table is only consistent, not true, and the first draft was wrong about three
+packages.
+
+**JPMS would be better and is deferred.** Not because re2j "cannot be required" — the JDK derives an
+automatic name from the filename and it compiles fine; Gradle just does not put such a jar on the
+module path. The real reason is that a *published* descriptor must not `requires` a filename-derived
+automatic module, and `-cel`'s dev.cel splits packages across jars, which no naming fixes. §8.1 has
+the detail. The test pins re2j's **packaging** by reading the jar — asking the runtime
+(`getModule().isNamed()`) reports only where a jar was placed and answers "unnamed" for everything on
+the classpath, jackson included, which made the first version of that pin unable to fail.
+
+**A test that reads files needs its files declared as task inputs.** `DocExamplesTest`,
+`CelDocExamplesTest` and `ApiSurfaceTest` all read outside the classpath; undeclared, Gradle marks
+the task UP-TO-DATE and the guard silently stops guarding. The three doc fixtures are declared in
+`buildlogic.java-common-conventions.gradle.kts` so the next doc-reading test gets them for free;
+`ApiSurfaceTest`'s seven source trees and the `settings.gradle.kts` it reads the module list from
+are declared in `rule-engine-testkit/build.gradle.kts`, because global they would re-run six other
+modules' `test` and `strictTest` for a comment edit in `-cel`. CI hides this, because CI always starts clean.
+
 ## Conventions
 
 - Java 25, `final` on parameters and fields, records for the rule/constraint AST, package-info.java
