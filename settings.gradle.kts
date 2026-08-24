@@ -28,3 +28,10 @@ include("rule-engine-schema")
 include("rule-engine-cel")
 include("rule-engine-observability")
 include("rule-engine-testkit")
+/*
+ * Not a library. §8's table is the engine; this is the worked example of using it -- one
+ * application, one rule file, one feed of events, and the three deployment shapes §5 describes.
+ * It is in the build rather than in a gist because a teaching artifact that is not compiled and
+ * fired by CI is a teaching artifact that is wrong within two releases.
+ */
+include("rule-engine-example")

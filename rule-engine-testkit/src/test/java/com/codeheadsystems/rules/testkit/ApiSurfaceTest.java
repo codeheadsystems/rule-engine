@@ -127,7 +127,15 @@ class ApiSurfaceTest {
       // proxy for what the contract has to cover.
       "rule-engine-testkit", Set.of(),
       "rule-engine-cel", Set.of(),
-      "rule-engine-schema", Set.of());
+      "rule-engine-schema", Set.of(),
+      /*
+       * The example reaches for nothing internal, and that is the point of having it in this table
+       * rather than exempting it. It is written as a consumer would write it -- against the rule
+       * file, the session, the listeners and the concurrency helpers -- so what it needs is the
+       * closest thing this repository has to evidence that the exported surface is sufficient. The
+       * day it needs an internal package, the contract is missing something.
+       */
+      "rule-engine-example", Set.of());
 
   /**
    * Internal packages no other module reaches at all: {@code -core} talking to itself.

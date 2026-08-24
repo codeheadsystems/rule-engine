@@ -31,6 +31,12 @@ dependencies {
     jacocoAggregation(project(":rule-engine-schema"))
     jacocoAggregation(project(":rule-engine-observability"))
     jacocoAggregation(project(":rule-engine-testkit"))
+    /*
+     * rule-engine-example is deliberately NOT here. It is a worked example rather than a library:
+     * its coverage number measures how much of a demo the demo runs, and mixing that into the
+     * engine's figure moves the number somebody acts on without telling them anything about the
+     * engine. Its own tests still run under `check` like every other module's.
+     */
 }
 
 /*

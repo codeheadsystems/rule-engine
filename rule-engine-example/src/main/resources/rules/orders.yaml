@@ -1,0 +1,245 @@
+# The rule set for the worked example (rule-engine-example/README.md).
+#
+# Seven rules over one small domain -- Customer, Order, LineItem, Payment -- chosen so that each one
+# is the shortest honest use of a feature a reader will reach for, and so that they interact: rule 2
+# concludes a fact that rule 6 counts, and rule 1 changes a field rule 3 does not test.
+#
+# Field names carry their units. `totalCents`, `placedAtEpochMs` -- docs/dsl-guide.md asks for this
+# on time fields because `within` is in the field's own units and nothing checks it, and money has
+# exactly the same problem one step earlier.
+apiVersion: rules.v1
+rules:
+
+  # 1. A join, and the ordinary shape of a business rule: two facts, a decision, a side effect.
+  #
+  # Salience puts risk ahead of everything else in the same cycle (§4.2). It is NOT a workaround for
+  # rules that interfere -- if two rules only work in one order, that is usually one rule.
+  #
+  # No `noLoop`, deliberately. The RHS writes `riskState`, which this rule's own pattern tests, so
+  # the match is un-refracted and re-evaluated -- and then fails, because `riskState` is now present.
+  # A rule whose own write falsifies its own guard terminates on its own; `noLoop` is for the rule
+  # whose write leaves it still matching. Rule 7 is that rule.
+  #
+  # `riskState` rather than `status`, and that is not cosmetic. Rule 2 tests `status`, so writing it
+  # here would clear rule 2's refraction, re-fire it, and make it draw its conclusion a second time
+  # -- correct in the end, because a re-firing replaces its conclusion, and confusing every time
+  # somebody reads the trace. A field written by one rule and tested by another is a coupling; give
+  # the write its own field.
+  - id: high-value-order-review
+    salience: 20
+    tags: [risk]
+    when:
+      - fact: Order
+        as: o
+        where:
+          totalCents: { gt: 500000 }
+          # Absent, not false. `hasField: false` is the only way to say "we have not looked at this
+          # one yet" -- `eq: null` would match an explicit JSON null and nothing else.
+          riskState: { hasField: false }
+      - fact: Customer
+        as: c
+        where:
+          id: { eq: { $ref: o.customerId } }
+          riskTier: { in: ["HIGH", "MEDIUM"] }
+    then:
+      - action: setField
+        target: o
+        field: riskState
+        value: "REVIEW"
+      - action: emit
+        event: order.flagged
+        payload:
+          orderId: { $ref: o.id }
+          customerId: { $ref: c.id }
+          riskTier: { $ref: c.riskTier }
+
+  # 2. Negation, plus truth maintenance: a conclusion held up by the absence of a payment.
+  #
+  # `hasField: true` beside the `ne` is not decoration. `ne` is defined as `!eq`, so an Order with no
+  # `status` at all satisfies `ne: "CANCELLED"` -- see docs/dsl-guide.md. Written as an exclusion
+  # rather than as `eq: "PENDING"` because the question this rule asks is "has anybody paid for an
+  # order we still owe them", and that stays true through every status but one. A whitelist would
+  # have to be edited every time the workflow grows a state.
+  #
+  # `logical: true` is what makes OrderUnpaid a belief rather than a record: it is withdrawn at the
+  # next cycle boundary when the Payment arrives, and drawn again if that payment is retracted.
+  - id: unpaid-order
+    salience: 10
+    tags: [collections]
+    when:
+      - fact: Order
+        as: o
+        where:
+          status: { hasField: true, ne: "CANCELLED" }
+      - fact: Payment
+        as: p
+        quantifier: notExists
+        where:
+          orderId: { eq: { $ref: o.id } }
+    then:
+      - action: insertFact
+        fact: OrderUnpaid
+        logical: true
+        payload:
+          orderId: { $ref: o.id }
+          customerId: { $ref: o.customerId }
+
+  # 3. A universal, with the companion that closes its one trap.
+  #
+  # `all` says every line item OF THIS ORDER is in stock -- the join picks the scope, the rest is the
+  # requirement. On its own that is vacuously true for an order with no line items at all, which is
+  # how "for all" works everywhere and is still the thing that pages you.
+  #
+  # `some` is the fix, and it is an ACCUMULATE rather than the plain positive pattern the DSL guide
+  # suggests. Both say "there is at least one", and they differ in cardinality: a plain pattern BINDS
+  # a line item, so a three-item order produces three matches and fires this rule three times, once
+  # per item, emitting the same event each time. An accumulate binds a number, so there is one match
+  # per order however many items it has. Written the other way, this was the first defect the example
+  # found in itself.
+  - id: ready-to-ship
+    tags: [fulfilment]
+    when:
+      - fact: Order
+        as: o
+        where:
+          status: { hasField: true, ne: "CANCELLED" }
+      - fact: Payment
+        as: pay
+        where:
+          orderId: { eq: { $ref: o.id } }
+      - fact: LineItem
+        as: some
+        quantifier: accumulate
+        accumulate:
+          count: true
+          having: { gte: 1 }
+        where:
+          orderId: { eq: { $ref: o.id } }
+      - fact: LineItem
+        as: all
+        quantifier: forAll
+        where:
+          orderId: { eq: { $ref: o.id } }
+          inStock: { eq: true }
+    then:
+      - action: emit
+        event: order.readyToShip
+        payload:
+          orderId: { $ref: o.id }
+
+  # 4. An aggregate. `units` binds a NUMBER, not a fact -- so it is written as a bare `$ref: units`,
+  # and nothing may join to it.
+  #
+  # The fold is computed from working memory every time it is read, never stored, which is why a
+  # retracted line item needs no correction anywhere.
+  - id: bulk-order-discount
+    tags: [pricing]
+    when:
+      - fact: Order
+        as: o
+        where:
+          status: { hasField: true, ne: "CANCELLED" }
+      - fact: LineItem
+        as: units
+        quantifier: accumulate
+        accumulate:
+          sum: "qty"
+          having: { gte: 100 }
+        where:
+          orderId: { eq: { $ref: o.id } }
+    then:
+      - action: insertFact
+        fact: Discount
+        payload:
+          orderId: { $ref: o.id }
+          kind: "BULK"
+      - action: emit
+        event: order.bulkDiscount
+        payload:
+          orderId: { $ref: o.id }
+          units: { $ref: units }
+
+  # 5. Two facts in order, within a bound. The engine reads no clock: `paidAtEpochMs` and
+  # `placedAtEpochMs` both come off facts this application inserted, which is what lets the same feed
+  # replay to the same firings next year on somebody else's laptop.
+  #
+  # `within` is required. "Later than" alone is `gt: { $ref: o.placedAtEpochMs }` and always was;
+  # `after` exists for the bounded case, which no pair of comparisons can state.
+  - id: paid-within-the-hour
+    tags: [fulfilment]
+    when:
+      - fact: Order
+        as: o
+      - fact: Payment
+        as: p
+        where:
+          orderId: { eq: { $ref: o.id } }
+          paidAtEpochMs: { after: { $ref: o.placedAtEpochMs, within: 3600000 } }
+    then:
+      - action: emit
+        event: order.paidWithinTheHour
+        payload:
+          orderId: { $ref: o.id }
+
+  # 6. Forward chaining: this counts the conclusions rule 2 drew. A derived fact is an ordinary fact,
+  # so a rule set is a small program and not a flat list of filters.
+  #
+  # `callFunction` is the escape hatch and it is the wrong default. It runs at commit, outside the
+  # staging that makes everything else atomic, and it cannot be withdrawn the way OrderUnpaid can --
+  # so this rule pages somebody, and paging somebody twice is worse than the emit beside it.
+  - id: repeat-unpaid-customer
+    tags: [collections, risk]
+    when:
+      - fact: Customer
+        as: c
+      - fact: OrderUnpaid
+        as: unpaid
+        quantifier: accumulate
+        accumulate:
+          count: true
+          having: { gte: 2 }
+        where:
+          customerId: { eq: { $ref: c.id } }
+    then:
+      - action: callFunction
+        name: alertOps
+        args:
+          customerId: { $ref: c.id }
+          unpaidOrders: { $ref: unpaid }
+      - action: emit
+        event: customer.atRisk
+        payload:
+          customerId: { $ref: c.id }
+          unpaidOrders: { $ref: unpaid }
+
+  # 7. §6.4's escape hatch, for the two things an operator map genuinely cannot say: a nested OR, and
+  # arithmetic across fields. It needs the -cel module on the classpath and an explicit registration
+  # (see OrderRules), which is deliberate friction -- a condition runs once per surviving candidate,
+  # after the indexed constraints, and is never itself indexed.
+  #
+  # `channel` stays in `where` for exactly that reason: what the index removes is work the expression
+  # never does.
+  #
+  # `noLoop` is REQUIRED here and the reason is subtle. A `condition:` makes the whole payload of
+  # every alias it reads a tested path (§3.4.1), because working out which paths an arbitrary
+  # expression reads would make the compiler responsible for being a superset of CEL. So the RHS
+  # writing `shippingBand` -- a field no rule tests -- still counts as a change this rule cares
+  # about, un-refracts the match, and fires it again until maxCycles.
+  - id: expedite-eligible
+    noLoop: true
+    tags: [fulfilment]
+    when:
+      - fact: Order
+        as: o
+        where:
+          channel: { in: ["WEB", "MOBILE"] }
+        condition: "o.totalCents > 50000 && (o.channel == 'WEB' || o.priority)"
+    then:
+      - action: setField
+        target: o
+        field: shippingBand
+        value: { $expr: "o.totalCents > 200000 ? 'OVERNIGHT' : 'TWO_DAY'" }
+      - action: emit
+        event: order.expedited
+        payload:
+          orderId: { $ref: o.id }

@@ -11,11 +11,15 @@ governs it — the answer to "why is it written this way" is almost always there
 alternatives that were rejected. If the code and the spec disagree, one of them is a defect; decide
 which and say so, do not silently pick.
 
-`README.md` documents what is built — Phases 0–2 (= v1), Phase 3's streaming matcher, Phase 4's
-concurrency layer, Phase 5's DSL front end including its two optional halves (the CEL escape hatch
-§6.4 and `FactSchemas` §2.3), and the first slice of Phase 6, `NOT_EXISTS`. §9 holds the roadmap and
-each phase's exit criteria; §11.2's differential propagation is Phase 3's one deliverable that is
-measured and deliberately not built.
+`README.md` is the **guide to the project**, not a build diary: what the engine is, how to use it,
+what it deliberately does not do, and where the other documents are. It was deliberately rewritten
+out of phase-by-phase status narration, which told a first-time reader nothing they could act on —
+keep it that way. §9 of the spec holds the roadmap and each phase's exit criteria, and that is where
+phase talk belongs; §11.2's differential propagation is the one deliverable that is measured and
+deliberately not built.
+
+`rule-engine-example/README.md` is the worked application, and README points at it first. Its rule
+file, its feed and its four demos are compiled and executed by CI.
 
 `docs/dsl-reference.md` and `docs/dsl-guide.md` document the rule-file DSL. Every rule file printed
 in either — and in README — is a fixture in `DocExamplesTest`; if a doc and the engine disagree, the
@@ -63,11 +67,26 @@ they're addressed.
 | `rule-engine-cel` | The optional §6.4 expression escape hatch, backed by dev.cel |
 | `rule-engine-observability` | `TracingListener`, `JfrListener`, `MatchExplainer` |
 | `rule-engine-testkit` | `Rules` builder, `Engine`/`FiringSequence`, `MatcherEquivalence`, `ShuffleHarness`, JMH benchmarks — **main** source set, not test: consumers use these |
+| `rule-engine-example` | The worked application: `rules/orders.yaml`, a ten-event feed, and four demos (`PerOrderDemo`, `BatchDemo`, `StreamingDemo`, `DiagnosticsDemo`). Not a library — see below |
 
 Dependencies are declared in `gradle/libs.versions.toml`. `-core`'s runtime deps are exactly
 jackson (the fact model is JSON-native) and re2j (rule-authored `matches` must not backtrack
 catastrophically); both are `api` because they appear in public signatures. Adding a `-core`
 dependency is a design decision, not a convenience.
+
+**`rule-engine-example` is teaching material held to the same bar as the engine.** It applies the
+library conventions (so `-Xlint:all -Werror`, doclint and `strictTest` all apply) plus the
+`application` plugin, because an example nobody can start is a listing. Three things it must keep
+doing: use only the *exported* API — `ApiSurfaceTest` grants it no internal package, and the day it
+needs one the contract is missing something; keep `-testkit` at test scope, because `Facts.json` is a
+fixture and main source should show a real ingestion path; and stay out of `jacocoAggregation` in the
+root build, because how much of a demo the demo runs is not a number anyone should act on. Its
+`README.md` is declared as a task input in its own build file — `ReadmeExamplesTest` reads it, and an
+undeclared input means the guard silently stops guarding.
+
+Adding any module means adding it to `ApiSurfaceTest.INTERNAL_ACCESS`; that table is asserted to name
+every `include(...)` in `settings.gradle.kts`, because a module missing from it went unchecked while
+the suite stayed green.
 
 `-dsl` adds jackson-dataformat-yaml and networknt json-schema-validator; `-schema` adds networknt
 too. Both are `implementation` and neither reaches `-core`, which is the point of the SPI split

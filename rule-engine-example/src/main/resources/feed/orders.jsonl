@@ -1,0 +1,10 @@
+{"type":"customer.upserted","payload":{"id":"C-1","name":"Ridgeline Supply","riskTier":"LOW","creditLimitCents":5000000}}
+{"type":"customer.upserted","payload":{"id":"C-2","name":"Halcyon Freight","riskTier":"HIGH","creditLimitCents":900000}}
+{"type":"order.placed","payload":{"id":"O-1","customerId":"C-1","placedAtEpochMs":1700000000000,"totalCents":25000,"channel":"WEB","priority":false,"items":[{"sku":"BOLT-M6","qty":2,"unitPriceCents":9000,"inStock":true},{"sku":"NUT-M6","qty":1,"unitPriceCents":7000,"inStock":true}]}}
+{"type":"payment.received","payload":{"orderId":"O-1","paidAtEpochMs":1700000600000,"amountCents":25000}}
+{"type":"order.placed","payload":{"id":"O-2","customerId":"C-2","placedAtEpochMs":1700001000000,"totalCents":750000,"channel":"WEB","priority":false,"items":[{"sku":"PALLET-A","qty":3,"unitPriceCents":200000,"inStock":true},{"sku":"STRAP-XL","qty":1,"unitPriceCents":150000,"inStock":false}]}}
+{"type":"order.placed","payload":{"id":"O-3","customerId":"C-2","placedAtEpochMs":1700002000000,"totalCents":120000,"channel":"MOBILE","priority":true,"items":[{"sku":"WINCH-2T","qty":1,"unitPriceCents":120000,"inStock":true}]}}
+{"type":"order.placed","payload":{"id":"O-4","customerId":"C-1","placedAtEpochMs":1700003000000,"totalCents":60000,"channel":"WEB","priority":false,"items":[{"sku":"WASHER-M6","qty":60,"unitPriceCents":500,"inStock":true},{"sku":"SCREW-M4","qty":50,"unitPriceCents":600,"inStock":true}]}}
+{"type":"payment.received","payload":{"orderId":"O-4","paidAtEpochMs":1700010200000,"amountCents":60000}}
+{"type":"item.restocked","payload":{"orderId":"O-2","sku":"STRAP-XL"}}
+{"type":"payment.received","payload":{"orderId":"O-2","paidAtEpochMs":1700020000000,"amountCents":750000}}

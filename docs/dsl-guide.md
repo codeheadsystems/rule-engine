@@ -270,23 +270,35 @@ scope, split the fact type at ingestion.
 
 **The trap: an empty scope is `true`.** The rule above fires for an order with no line items at all,
 because there is nothing to fail the requirement. That is how "for all" works everywhere, and it is
-still going to surprise you at 3am. If you mean "there are some, and all of them", add a plain
-pattern of the same type:
+still going to surprise you at 3am. If you mean "there are some, and all of them", say that there is
+at least one:
 
 ```yaml
       - fact: LineItem
         as: some
+        quantifier: accumulate
+        accumulate:
+          count: true
+          having: { gte: 1 }
         where:
           orderId: { eq: { $ref: o.id } }
 ```
 
-Everything the negation section says otherwise applies here as well — the pattern binds nothing, no
-`then` action may name its alias, a firing is not undone when a counterexample arrives unless it
-concluded logically (see [Withdrawing a conclusion](#withdrawing-a-conclusion)), and you must not
-quantify over a
-type your session evicts. That last one bites harder here: eviction only ever removes
-counterexamples, so a cap makes the requirement *easier* to satisfy, and a cap that empties the
-scope deletes it.
+**Count them; do not bind one.** A plain positive pattern says the same thing and costs you
+cardinality: it *binds* a line item, so a three-item order produces three matches and fires the rule
+three times, once per item. An `accumulate` binds a number, so there is one match per order however
+many items it has. Write the plain pattern only when you want the per-item firing.
+
+Everything below is about the `forAll` pattern, not about the `accumulate` companion — a fold *does*
+bind a name you can read from `then`, from a `condition:` and from its own `having`, which is the
+one thing the three quantifiers do not share.
+
+Everything the negation section says otherwise applies to a `forAll` as well — the pattern binds
+nothing, no `then` action may name its alias, a firing is not undone when a counterexample arrives
+unless it concluded logically (see [Withdrawing a conclusion](#withdrawing-a-conclusion)), and you
+must not quantify over a type your session evicts. That last one bites harder here: eviction only
+ever removes counterexamples, so a cap makes the requirement *easier* to satisfy, and a cap that
+empties the scope deletes it.
 
 ## Putting two facts in order
 
