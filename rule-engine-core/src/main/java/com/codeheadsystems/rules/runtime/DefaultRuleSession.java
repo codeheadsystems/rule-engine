@@ -155,10 +155,17 @@ final class DefaultRuleSession implements RuleSession {
    * {@inheritDoc}
    *
    * <p>An insert is one of §4.4's two quiescence points, so a configured eviction policy is
-   * consulted here, after the fact has landed. The handle returned is still the caller's -- a
-   * policy that immediately evicts what was just inserted is a policy with a cap of nothing, not a
-   * case to defend against -- and every other fact the eviction removed is gone by the time this
-   * returns, listeners notified.
+   * consulted here, after the fact has landed, and every fact the eviction removed is gone by the
+   * time this returns, listeners notified.
+   *
+   * <p><strong>The fact just inserted may be one of them</strong>, and the handle is handed back
+   * either way. Under the two count-based policies that only happens with a cap of nothing, which
+   * is not a case worth defending against; under
+   * {@link com.codeheadsystems.rules.evict.EvictionPolicy#window(String, String, long)} it is the
+   * ordinary out-of-order arrival -- a fact stamped before the window's far edge is one no windowed
+   * rule can match, and the policy is right to take it. A caller holding the handle afterwards gets
+   * an empty {@link #get} rather than a stale payload, which is the same answer it gets for any
+   * fact eviction removed.
    */
   @Override
   public FactHandle insert(final String type, final JsonNode payload) {

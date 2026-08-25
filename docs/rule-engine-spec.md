@@ -1006,6 +1006,18 @@ For the one-shot/batch sessions v1 targets (§11.1 option A) this is a non-issue
 >
 > Two consequences worth stating plainly. Facts of any origin are evictable, `DERIVED` included, and that does not re-derive: evicting a derived fact clears refraction for matches *binding* it, while the match that *created* it binds its source facts and stays refracted. And the consultation is gated on an insert having happened since the last one, because a cap can only be exceeded by an insert — a retract cannot put a type over its bound, and neither can an update, which is a retract and an insert of the same handle.
 
+> **Second amendment (as built, alongside the fact-document reader).** **A third policy ships: a retention window over one fact type, measured by a time field on the facts themselves** — `EvictionPolicy.window(factType, timeField, span)`. The amendment above says the shipped policies key on `recency`; one of them now keys on the data, and the distinction that makes it legal is the one §2.5's third amendment already drew for temporal joins.
+>
+> **It is not the TTL the paragraph above refuses, and the difference is where the far edge comes from.** A TTL's edge is the current instant, which is not an input §7.3 admits. This policy's edge is the newest value of that field the type currently *holds*, minus the span — a watermark taken from the input, exactly as `recency` is. Two runs over the same stream evict the same facts, on every host and in every year, and strict mode's double call keeps it honest. The engine still owns no clock: time advances when a fact carrying a later time arrives, and in a session where nothing arrives, nothing ages. That is the same boundary the third amendment of §2.5 draws, and it is why this is retention rather than a sliding-window operator.
+>
+> **The reason it earns its place beside `perType` is that a cap is a bound on arrivals and a rule's window is a bound on time.** They agree only when traffic is flat, which is exactly the assumption a velocity rule is written to violate: the burst the rule exists to catch is the moment a count-cap starts evicting facts still inside the window. So a count-capped session silently loses matches precisely when it matters, and the fix cannot be a bigger cap, because the right size depends on the traffic.
+>
+> **Retention and matching are two decisions that have to agree, and nothing checks that they do.** A rule's `within` selects what it matches; this selects what the session keeps. Retention must be at least as wide as the widest window written against the type — retain less and the rule loses matches its author wrote, silently, which is §3.3's "too narrow is a lost firing" in a different structure. It is per type and per session, so two rules wanting different windows over one type are served by retaining the wider and letting the narrower keep its own `within`.
+>
+> **It sharpens §4.4's existing hazard rather than escaping it, and in one direction it is the point.** An `accumulate` over a windowed type is the count the author asked for. A `notExists` over one stops meaning "never" and starts meaning "not lately" — useful when intended and a false conclusion otherwise, and `MatchExplainer` is fooled identically either way. A fact whose time field is absent, non-numeric or non-finite is never evicted, because a policy that cannot prove a fact is old must not guess; the cost is that this policy cannot bound a type whose facts do not all carry the field.
+>
+> **What it is not is a new operator.** The pattern language gains nothing: a window in a rule is still a bounded temporal join between two facts, and "as of now" is still a `Clock` fact the caller advances. §9.1's "sliding windows are not built" stands as written — what changed is that the *retention* half §1 called "a separate concern from temporal operators" now ships, and the two halves compose into the velocity rule people were asking for.
+
 **Refraction and `noLoop` are different things**, and blurring them confuses everybody:
 
 | | Refraction | `noLoop` |
@@ -1774,7 +1786,7 @@ rule-engine-core/          Fact, FactHandle, WorkingMemory, RuleDefinition, netw
 rule-engine-compiler/      RuleDefinition → CompiledRuleSet (node sharing, node ids, index plan,
                            TestedPaths, accessor/regex compilation, CompilerReport)
 rule-engine-dsl/           JSON *and* YAML rule files → intermediate POJO → RuleDefinition,
-                           plus the rule-file JSON Schema
+                           plus the rule-file JSON Schema, plus fact documents → facts
 rule-engine-schema/        optional SchemaRegistry (§2.3) — shares JSON Schema tooling with the dsl module
 rule-engine-cel/           optional: `condition:` escape hatch backed by dev.cel
 rule-engine-observability/ TracingListener, JfrListener, MatchExplainer, the explain CLI (§7)
@@ -1783,6 +1795,8 @@ rule-engine-testkit/       naive-matcher oracle, differential/property-based har
 ```
 
 **Two notes on the boundaries.**
+
+> **Amendment (as built).** *Fact documents live here too.* §6.1's argument is about a serialization pair rather than about rule files specifically — one object model, two serializations, one factory choice — and facts had been JSON-only for no better reason than that the rule files were built first. `FactFiles`/`FactSource` read a list of typed facts in either serialization and insert them into a session, for the facts that are not a stream: a fixture, a seed, a captured session. They sit in this module rather than a new one for exactly the reason below that two DSL modules make no sense — the factory choice, the mapper configuration and the deferred YAML classload are all in `RuleFormat`, and a second module would have been a second copy of each plus a second published artifact. An application whose facts arrive as *events* still writes its own ingestion: fact identity, §2.4's flattening and absent-field normalisation are modelling decisions no generic reader can make for it.
 
 *One DSL module, not one per serialization.* §6.1 argues for one object model and one parser, which is precisely why two modules make no sense: the entire difference is `ObjectMapper` vs `YAMLMapper`, one factory choice against an identical target type. Two modules means two build files and two versions to keep in step, to encapsulate one line. If YAML's transitive parser is unwanted in some deployment, make it an `optional` dependency. (Under Jackson 3 that transitive is `org.snakeyaml:snakeyaml-engine`, not Jackson 2's `org.yaml:snakeyaml` — an exclusion written against the old coordinates silently excludes nothing.)
 

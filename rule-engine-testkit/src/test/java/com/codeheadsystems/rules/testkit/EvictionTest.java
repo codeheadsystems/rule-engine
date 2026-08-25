@@ -849,6 +849,133 @@ class EvictionTest {
     }
   }
 
+  @Nested
+  @DisplayName("a window in the data, rather than in the arrival count")
+  class WindowedRetention {
+
+    /** Ten minutes of failures, in the units the facts themselves are stamped in. */
+    private static final long WINDOW = 600_000L;
+
+    private static final long ORIGIN = 1_000_000L;
+
+    /**
+     * "Five failures for one user inside ten minutes", which is what velocity means.
+     *
+     * <p>Four, not five, and the arithmetic is worth stating: {@code before} is strict on the near
+     * edge and an accumulate over a type the rule already binds excludes the bound fact (§1's
+     * implicit inequality), so the count is of the failures <em>preceding</em> the trigger. The
+     * trigger is the fifth.
+     *
+     * @return the rule
+     */
+    private static List<RuleDefinition> velocityRules() {
+      return List.of(Rules.rule("login-velocity")
+          .when("trigger", "LoginFailure")
+          .accumulate("recent", "LoginFailure",
+              Rules.count(com.codeheadsystems.rules.rule.Operator.GTE, 4),
+              pattern -> pattern.ref("user", "trigger.user").before("at", "trigger.at", WINDOW))
+          .then(actions -> actions.emit("account.locked", "user", Rules.ref("trigger.user")))
+          .build());
+    }
+
+    private static SessionOptions windowed() {
+      return streaming(EvictionPolicy.window("LoginFailure", "at", WINDOW)).build();
+    }
+
+    @Test
+    @DisplayName("working memory holds the window, however long the stream runs")
+    void steadyState() {
+      final CompiledRuleSet rules = RuleCompiler.compile(singleFactRules());
+      try (RuleSession session = rules.newSession(
+          streaming(EvictionPolicy.window("Order", "at", 1_000L)).build())) {
+        for (int i = 0; i < 200; i++) {
+          session.insert("Order", Facts.obj("id", i, "total", 1, "at", ORIGIN + i * 100L));
+          session.fireAllRules();
+        }
+        assertThat(session.workingMemory().size())
+            .describedAs("a thousand of the facts' own units, at one every hundred, is eleven")
+            .isEqualTo(11);
+      }
+    }
+
+    @Test
+    @DisplayName("time advances only when a fact carrying a later time arrives")
+    void nothingArrivingAgesNothing() {
+      // The engine still owns no clock, and this policy does not give it one. A session that goes
+      // quiet holds what it held: "no fact moved" is the input an engine acting on fact movement
+      // never receives, which is exactly what §2.5's third amendment says cannot be worked around.
+      final CompiledRuleSet rules = RuleCompiler.compile(singleFactRules());
+      try (RuleSession session = rules.newSession(
+          streaming(EvictionPolicy.window("Order", "at", 1_000L)).build())) {
+        session.insert("Order", Facts.obj("id", 1, "total", 1, "at", ORIGIN));
+        for (int i = 0; i < 50; i++) {
+          session.fireAllRules();
+        }
+        assertThat(session.workingMemory().size()).isEqualTo(1);
+      }
+    }
+
+    @Test
+    @DisplayName("velocity: the rule fires on the burst, and not on the same facts spread out")
+    void velocityFiresInsideTheWindowOnly() {
+      final CompiledRuleSet rules = RuleCompiler.compile(velocityRules());
+      try (RuleSession session = rules.newSession(windowed())) {
+        for (int i = 0; i < 5; i++) {
+          session.insert("LoginFailure", Facts.obj("user", "ana", "at", ORIGIN + i * 60_000L));
+        }
+        assertThat(session.fireAllRules().emitted())
+            .describedAs("five inside ten minutes: the fifth is the trigger, four precede it")
+            .hasSize(1);
+      }
+      try (RuleSession session = rules.newSession(windowed())) {
+        for (int i = 0; i < 5; i++) {
+          // The same five failures, an hour apart. Each one ages the ones before it out of both
+          // the rule's window and the session's memory.
+          session.insert("LoginFailure", Facts.obj("user", "ana", "at", ORIGIN + i * 3_600_000L));
+          session.fireAllRules();
+        }
+        assertThat(session.workingMemory().factsOfType("LoginFailure").count()).isEqualTo(1);
+      }
+    }
+
+    @Test
+    @DisplayName("a conclusion held up by a windowed match is withdrawn when its facts age out")
+    void aWindowedConclusionExpires() {
+      /*
+       * The one that makes windowing worth having: eviction is an ordinary retract, and §4.4's
+       * truth maintenance re-asks the tuple -- so a conclusion whose justification aged out of the
+       * window withdraws itself. Self-expiring state, in an engine with no clock, out of two
+       * mechanisms that already existed.
+       */
+      final CompiledRuleSet rules = RuleCompiler.compile(List.of(Rules.rule("lock-on-burst")
+          .when("trigger", "LoginFailure")
+          .accumulate("recent", "LoginFailure",
+              Rules.count(com.codeheadsystems.rules.rule.Operator.GTE, 2),
+              pattern -> pattern.ref("user", "trigger.user").before("at", "trigger.at", WINDOW))
+          .then(actions -> actions.insertLogical("Lock", "user", Rules.ref("trigger.user")))
+          .build()));
+      try (RuleSession session = rules.newSession(windowed())) {
+        for (int i = 0; i < 3; i++) {
+          session.insert("LoginFailure", Facts.obj("user", "ana", "at", ORIGIN + i * 60_000L));
+        }
+        session.fireAllRules();
+        assertThat(session.workingMemory().factsOfType("Lock").count())
+            .describedAs("three inside the window concludes a lock")
+            .isEqualTo(1);
+
+        session.insert("LoginFailure", Facts.obj("user", "bo", "at", ORIGIN + 5_000_000L));
+        session.fireAllRules();
+
+        assertThat(session.workingMemory().factsOfType("LoginFailure").count())
+            .describedAs("the burst is outside the window the newest fact opened")
+            .isEqualTo(1);
+        assertThat(session.workingMemory().factsOfType("Lock").count())
+            .describedAs("and the conclusion goes with the justification, unasked")
+            .isZero();
+      }
+    }
+  }
+
   /** Compile-time proof that the view is read-only: it exposes no mutator to call. */
   @Test
   @DisplayName("the view a policy sees cannot mutate working memory")

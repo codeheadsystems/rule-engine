@@ -343,6 +343,13 @@ concurrently" an extra artifact to discover.
   between §4.6's staging and commit, where it could retract a fact the firing activation binds. A
   policy must also be a pure function of what it is shown; strict mode calls it twice and compares,
   because a clock or a `HashMap` in there is a §7.3 violation that only shows on another host.
+  Three policies ship. `leastRecentlyUsed` and `perType` bound the arrival *count*; `window` bounds
+  *time*, reading it from a field on the facts and taking its far edge from the newest value that
+  type currently holds. That watermark is what keeps it out of §4.4's refused TTL — it is derived from
+  the input, so the same stream evicts the same facts — and it is the retention half of windowing,
+  whose matching half is a temporal join's `within`. **The two are separate decisions and nothing
+  checks that they agree**: retain less than the widest window written against a type and the rule
+  silently loses matches. See §4.4's second amendment.
 - **`SessionDrain`** — drain-and-restart for a session already running when the rules changed. Two
   things it must keep doing: replay in handle-id order (§7.3's guarantee is stated in terms of
   insertion order) and skip `Origin.DERIVED` facts (the new session re-derives them; replaying would
@@ -392,6 +399,13 @@ concurrently" an extra artifact to discover.
   every fired match as gone. Invalidating a justification also clears refraction for it, or the
   withdrawal is irreversible. Exactly one justification per conclusion: two matches concluding the
   same thing make two facts, because a logical insert allocates a fresh handle.
+- **A window is two decisions, not a feature.** There is no window keyword: what a rule *matches* is
+  bounded by a temporal join's `within`, what the session *keeps* is bounded by
+  `EvictionPolicy.window`, and "as of now" is a `Clock` fact the caller advances. Composed, they are
+  the velocity rule (`accumulate count … before $ref within …`, `having gte: N-1` — the trigger is
+  not in its own count) with no clock anywhere, and a `logical: true` conclusion drawn that way
+  withdraws itself when its facts age out, because eviction is an ordinary retract and truth
+  maintenance re-asks the tuple. `docs/dsl-guide.md#counting-things-in-a-window` is the recipe.
 - **Negation still has no truth maintenance unless the conclusion is logical, and must never be used
   over an evicted type** (§4.4). An
   evicted fact and an absent fact are indistinguishable to a negation, so a cap on the negated type

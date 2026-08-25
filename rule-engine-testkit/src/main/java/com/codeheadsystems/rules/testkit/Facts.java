@@ -1,7 +1,8 @@
 package com.codeheadsystems.rules.testkit;
 
-import tools.jackson.core.JacksonException;
-import tools.jackson.databind.ObjectMapper;
+import com.codeheadsystems.rules.dsl.FactFileException;
+import com.codeheadsystems.rules.dsl.FactFiles;
+import com.codeheadsystems.rules.dsl.FactSource;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
@@ -14,8 +15,6 @@ import tools.jackson.databind.node.ObjectNode;
  */
 public final class Facts {
 
-  private static final ObjectMapper MAPPER = new ObjectMapper();
-
   private Facts() {
     throw new UnsupportedOperationException("no instances");
   }
@@ -25,13 +24,52 @@ public final class Facts {
    *
    * @param json the payload, typically a text block
    * @return the parsed object node
-   * @throws IllegalArgumentException if the text is not a JSON object
+   * @throws IllegalArgumentException if the text is not a single JSON object
    */
   public static ObjectNode json(final String json) {
+    return payload(FactSource.json("payload.json", json));
+  }
+
+  /**
+   * Parses a payload from YAML text.
+   *
+   * <p>The same fact, in the serialization the rules beside it are written in. §6.1 settles that
+   * question once for the whole project -- one object model, two serializations -- and a fixture is
+   * where the difference is felt most: a nested payload written as YAML is the shape it describes,
+   * where the same thing in JSON is a wall of quotes and braces inside a Java text block.
+   *
+   * @param yaml the payload, typically a text block
+   * @return the parsed object node
+   * @throws IllegalArgumentException if the text is not a single YAML mapping
+   */
+  public static ObjectNode yaml(final String yaml) {
+    return payload(FactSource.yaml("payload.yaml", yaml));
+  }
+
+  /**
+   * Parses one payload document.
+   *
+   * <p>Through {@code -dsl} rather than a mapper of this class's own, which is what it used to
+   * hold. There is one place in this project where a Jackson mapper is configured, and a second one
+   * here meant a fixture and a rule file disagreeing about a repeated key: {@code { total: 1,
+   * total: 2 }} is rejected in a rule file and was silently the second one in a test fixture --
+   * where it reads correctly in review and makes the rule under test look wrong.
+   *
+   * @param source the document
+   * @return the payload
+   * @throws IllegalArgumentException if the text is not a single object
+   */
+  private static ObjectNode payload(final FactSource source) {
     try {
-      return (ObjectNode) MAPPER.readTree(json);
-    } catch (final JacksonException | ClassCastException invalid) {
-      throw new IllegalArgumentException("not a JSON object: " + json, invalid);
+      return FactFiles.payload(source);
+    } catch (final FactFileException invalid) {
+      /*
+       * Re-thrown as an IllegalArgumentException, which is what this method threw before it had a
+       * reader behind it and is what a fixture builder should throw: the caller is a test author
+       * who passed a bad literal, not an application handling a document somebody else wrote. The
+       * located message is kept, so nothing is lost but the type.
+       */
+      throw new IllegalArgumentException(invalid.getMessage(), invalid);
     }
   }
 

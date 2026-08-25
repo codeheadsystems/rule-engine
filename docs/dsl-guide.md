@@ -391,6 +391,115 @@ another pattern's `where`, because a join matches two facts and `units` is a num
 And the same eviction warning as the other quantifiers, for a worse reason: if you cap `LineItem`,
 your totals go quietly wrong rather than your rule going quiet.
 
+## Counting things in a window
+
+Everything in the last two sections composes, and the composition is the rule most people come here
+for: *how many of these, for one subject, inside a window*. Five failed logins for one user in ten
+minutes:
+
+```yaml
+apiVersion: rules.v1
+rules:
+  - id: login-velocity
+    when:
+      - fact: LoginFailure
+        as: trigger
+      - fact: LoginFailure
+        as: recent
+        quantifier: accumulate
+        accumulate:
+          count: true
+          having: { gte: 4 }
+        where:
+          user: { eq: { $ref: trigger.user } }
+          at:   { before: { $ref: trigger.at, within: 600000 } }
+    then:
+      - action: emit
+        event: account.locked
+        payload:
+          user:          { $ref: trigger.user }
+          priorFailures: { $ref: recent }
+```
+
+The `trigger` is the failure that just arrived, and it anchors the window: `before … within 600000`
+selects the failures in the ten minutes leading up to it. No clock is involved anywhere — the window
+is measured between two facts, exactly as [putting two facts in
+order](#putting-two-facts-in-order) does.
+
+**`gte: 4`, for five failures.** Two rules combine to make the count exclude the trigger: `before` is
+strict on the near side, and an `accumulate` over a type the rule already binds is about the *other*
+facts of that type. So the count is the failures *preceding* the trigger, and the trigger is the
+fifth. Write the number you mean and then subtract one, or you will ship a rule that fires one event
+late.
+
+**A window in the rule does not bound memory.** The rule above matches ten minutes; the session still
+holds every `LoginFailure` ever inserted, and the accumulate walks all of them on every candidate.
+For a long-lived session, the host pairs the rule with a retention window:
+
+```java
+SessionOptions.builder()
+    .eviction(EvictionPolicy.window("LoginFailure", "at", 600_000))
+    .build();
+```
+
+That drops facts older than the newest `at` this type currently holds, minus the span — a watermark
+taken from the data, never a clock, so replaying the same stream evicts the same facts. A failure
+that arrives *already* older than that is dropped on arrival, which is the honest cost of a window
+with no clock behind it. Two things to
+get right, both covered in [`embedding.md`](embedding.md#long-lived-sessions-and-eviction):
+**retention must be at least as wide as the widest window any rule writes against that type**, and
+**a `notExists` over a windowed type changes meaning** — it stops saying "never" and starts saying
+"not lately".
+
+There is a bonus in the combination. If the rule concludes with `logical: true`, the conclusion is
+withdrawn when its failures age out of the retention window, because eviction is an ordinary retract
+and [truth maintenance](#withdrawing-a-conclusion) re-asks the match. A lock that expires by itself,
+in an engine with no clock.
+
+### "As of now", and "nothing has happened"
+
+An anchored window needs a fact to anchor it. When you want the window to end at *now* rather than at
+an arriving fact — "this account has had no failure in the last ten minutes" — insert the clock as a
+fact and let your application advance it:
+
+```yaml
+apiVersion: rules.v1
+rules:
+  - id: quiet-account
+    when:
+      - fact: Clock
+        as: now
+      - fact: Account
+        as: a
+      - fact: LoginFailure
+        as: f
+        quantifier: notExists
+        where:
+          user: { eq: { $ref: a.user } }
+          at:   { before: { $ref: now.at, within: 600000 } }
+    then:
+      - action: emit
+        event: account.quiet
+        payload:
+          user: { $ref: a.user }
+```
+
+The host inserts one `Clock` fact and updates it — `session.update(clock, …)` — whenever it wants the
+rules re-evaluated against a later time. The update clears refraction for the rules that read it, so
+they get another look; nothing else in the session has to change.
+
+**Which means these rules fire again on every tick they still hold for.** A rule reading the `Clock`
+re-fires each time the clock moves, for as long as its condition is true — a one-second tick is a
+firing a second per matching account. That is what you want for "act while this is true" and not for
+"tell me once": pair it with a `logical: true` conclusion and pattern the *conclusion*, so the tick
+maintains a fact and your alerting rule fires on the fact appearing rather than on every tick.
+
+This is the honest shape of "nothing happened for an hour" in an engine that only ever acts when a
+fact moves. The engine cannot notice that an hour passed, because nothing arrived to tell it; your
+scheduler can, and a `Clock` fact is how it says so. Because the time came in as a fact, a replay of
+the same stream — clock ticks included — reproduces the same firings, which is what a wall clock
+inside the engine would have cost you.
+
 ## Withdrawing a conclusion
 
 A rule that concludes something because a fact was *absent* has a problem the moment that fact turns

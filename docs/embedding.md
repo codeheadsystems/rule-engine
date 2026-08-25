@@ -12,6 +12,7 @@ For a complete application that does all of this, read
 
 - [Platform requirements](#platform-requirements)
 - [The two tiers](#the-two-tiers)
+- [Getting facts in](#getting-facts-in)
 - [Building rules in Java](#building-rules-in-java)
 - [`SessionOptions`](#sessionoptions)
 - [Limits, and the one the engine does not enforce](#limits-and-the-one-the-engine-does-not-enforce)
@@ -55,6 +56,86 @@ try (RuleSession session = rules.newSession(options)) {
 Compile once. Create a session per unit of work — a request, a message, a batch. Sessions are cheap
 to allocate; the rule set is not. `halt()` is the **only** method legal to call on a session from
 another thread.
+
+## Getting facts in
+
+A fact is a type name and a JSON object, and the primary way in is the session:
+
+```java
+session.insert("Order", payload);        // payload copied on the way in (§2.2)
+session.insertOwned("Order", payload);   // you promise not to touch it again; no copy
+```
+
+**An application whose facts arrive as events should write that path itself.** Deciding fact
+identity, flattening collections (JSON Pointer has no wildcard, so a nested array can be stored and
+never matched inside) and normalising absent fields are modelling decisions the rules are then
+written against — `rule-engine-example`'s `Ingest` is forty lines and every one of them is a choice
+no generic reader can make for you.
+
+For the facts that are *not* a stream — a fixture, a seed, a captured session — there is a reader,
+in either serialization:
+
+```yaml
+# facts.yaml
+- type: Customer
+  payload: { id: "c1", riskTier: "HIGH" }
+- type: Order
+  payload:
+    id: "o1"
+    customerId: "c1"
+    total: 12000
+```
+
+```java
+try (RuleSession session = rules.newSession()) {
+    List<FactHandle> loaded = FactFiles.insertInto(session, FactSource.of(Path.of("facts.yaml")));
+    FireResult result = session.fireAllRules();
+}
+```
+
+`FactFiles.read` stops at `List<ExportedFact>` if you want the facts without a session — the same
+type `exportFacts()` hands back and `SessionDrain.replay` consumes, so a document and a drained
+session are interchangeable inputs. `FactFiles.payload` reads a document holding one bare payload,
+for a caller that already knows the type. JSON and YAML are one language here exactly as they are
+for rule files: the same document written both ways produces the same facts, and the test asserting
+that is `FactFilesTest.Equivalence`.
+
+Five things it does, each of which is a decision you may be relying on:
+
+- **Document order is insertion order.** §7.3 states the determinism contract over the same facts in
+  the same insertion order, so two documents holding the same facts in different orders are two
+  different inputs. Reordering a fact document is editing it.
+- **A document either loads or leaves nothing behind.** Every problem in the document is reported at
+  once, located to a line and column where the parser gives one — and an insert that throws part-way
+  (a §2.3 schema violation on the fourth fact of ten) is unwound by retracting what already landed.
+  Half a fixture is a different input, not a failed one. Three things the unwind does not claim: a
+  fact *eviction* removed while the load ran does not come back; listeners saw the inserts and will
+  see the retracts; and an insert that throws *after* the fact reached working memory — from a
+  listener, or from an eviction policy — leaves that one fact, because its handle was never handed
+  back.
+- **Every fact is `ASSERTED`.** A document states what is true; what a rule set concludes from it is
+  the session's to derive. That is why `exportFacts()` filters `DERIVED` facts out — replaying one
+  would double-count it against the rule that concluded it.
+- **A repeated key is an error**, not last-wins. `{ total: 1, total: 2 }` reads correctly in review
+  and makes the rule under test look wrong; both serializations accept it by default and this
+  reader does not, which is the same call the rule-file parser makes.
+- **One document per file.** A second YAML document after a `---` is refused by name rather than as
+  Jackson's "trailing token".
+
+Three YAML details worth knowing before you write fixtures in it, all pinned by
+`FactFilesTest.YamlScalars` so that a Jackson upgrade cannot change them quietly:
+
+- `v:` with nothing after it is an **explicit null**, not an absent field. §2.6.1 makes those
+  different: `eq: null` matches the first and never the second, and `hasField: false` is how you say
+  absent. Leaving the field out is what absent means.
+- Scalar resolution is Jackson's, not YAML 1.1's, which is the friendlier of the two: `no`, `yes`,
+  `on` and `NO` stay **strings**, so a country code does not become a boolean. Quote them anyway if
+  the fixture is shared with another YAML tool.
+- An anchor and its alias do not survive: `b: *x` arrives as the **string** `"x"`, not as the value
+  the anchor held. Jackson's YAML parser has flattened it before the token stream is readable, so
+  this cannot be rejected the way a repeated key is — it is the one thing in a fact document that is
+  silently a wrong *value* rather than a differently-typed one. Write fact documents without
+  anchors.
 
 ## Building rules in Java
 
@@ -204,8 +285,42 @@ producers feed a bounded inbox, and a burst of inserts costs one fire cycle rath
 
 Everything a long-lived session grows — working memory, node memories and their indexes, the
 refraction memory, the beta memory — is keyed on handles, so letting go of facts bounds all of them
-at once. `eviction(EvictionPolicy)` takes a total cap or a per-type cap, and evicting runs the full
-retract path.
+at once. `eviction(EvictionPolicy)` takes a total cap, a per-type cap or a **time window**, and
+evicting runs the full retract path.
+
+```java
+EvictionPolicy.leastRecentlyUsed(10_000);                        // a cap on the session
+EvictionPolicy.perType(Map.of("Order", 10_000));                 // a cap per type
+EvictionPolicy.window("LoginFailure", "at", 600_000);            // ten minutes of one type
+```
+
+The window is the one a streaming rule set usually wants: `perType` bounds the *arrival count*, and
+the two differ by exactly the traffic spike the rules exist to notice. Its far edge is the newest
+value of `at` that type currently holds, minus the span — **a watermark taken from the data, never a
+clock** — so two runs over the same stream evict the same facts and §7.3 survives. Which also means
+time advances only when a fact carrying a later time arrives: a session that goes quiet holds what it
+held, because "nothing arrived" remains the one input this engine never receives. The span is in the
+field's own units, exactly as a rule's `within` is.
+
+Four things to get right when you window a type:
+
+1. **Retention is per type and per session; a window in a rule is per rule.** Two rules wanting ten
+   minutes and twenty-four hours of one type are served by retaining twenty-four hours and letting
+   the ten-minute rule narrow its own match with `within`. Retain less than the widest rule window
+   and the rule silently loses matches its author wrote.
+2. **A negation or a universal over a windowed type changes meaning** — see the warning below. An
+   `accumulate` over one is the case where that interaction is the point ("how many in the window"),
+   and is still governed by (1).
+3. **A fact with no usable time is never evicted**, because a policy that cannot prove a fact is old
+   must not guess. A type whose facts do not all carry the field needs a `perType` cap as well.
+4. **A fact that arrives already outside the window is evicted on arrival**, inside the `insert` call
+   that added it — so `insert` can hand back a handle whose fact is already gone. That is correct (a
+   fact older than the window is one no windowed rule can match) and it is the ordinary out-of-order
+   case rather than an exotic one, so a stream with late arrivals drops them silently. A listener's
+   `onEvicted` is the only thing that says so.
+
+The rule-author half of this — velocity counts, and the `Clock` fact for "as of now" — is in
+[`dsl-guide.md`](dsl-guide.md#counting-things-in-a-window).
 
 > ### Never cap a type your rules negate, quantify over, fold, or conclude.
 >
@@ -216,6 +331,12 @@ retract path.
 >
 > `MatchExplainer` warns for all four and can **detect** none of them — it re-asks the same question
 > of the same working memory and is fooled identically.
+>
+> A **windowed** type is the one case where two of those are deliberate rather than a hazard: an
+> `accumulate` over a window is the count you asked for, and a `notExists` over one reads as "not
+> lately" rather than "never" — which is useful, and is a false conclusion for any rule on that type
+> that meant "never". The rule set has to agree with the retention, because nothing can tell you it
+> does not.
 >
 > For most rule sets the answer is not a policy but explicit retraction from the application, which
 > knows the thing the engine cannot: that this unit of work is finished. The example works the

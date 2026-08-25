@@ -24,7 +24,16 @@
  * <p><strong>Why no time-to-live policy ships here</strong>, though §4.4 names TTL first. Wall-clock
  * time is not an input the determinism contract admits: two runs over identical input would evict
  * different facts, and §7.3 is a contract rather than a preference. A caller who wants one writes
- * it against this interface with their own clock, and takes the trade knowingly. The policies
- * shipped here key on {@code recency}, which is derived from the input itself.
+ * it against this interface with their own clock, and takes the trade knowingly.
+ *
+ * <p><strong>What ships instead is a window measured in the facts' own time</strong>
+ * ({@link com.codeheadsystems.rules.evict.EvictionPolicy#window(String, String, long)}), and the
+ * difference from a TTL is the whole point: its far edge is the newest value that type
+ * <em>currently holds</em>, not the current instant. That is derived from the input like {@code recency} is,
+ * so the same stream evicts the same facts on every host and in every year -- and it inherits the
+ * property that makes this engine's temporal operators legal at all (§2.5's third amendment): time
+ * moves when a fact carrying a later time arrives, and in a session where nothing arrives, nothing
+ * ages. It is the retention half of the windowing a streaming rule set wants; the matching half is
+ * a temporal join's {@code within}, and the two are separate decisions that must agree.
  */
 package com.codeheadsystems.rules.evict;

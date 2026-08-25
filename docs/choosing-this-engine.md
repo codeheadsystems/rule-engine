@@ -82,11 +82,17 @@ Each of these names what to reach for instead. The first is the one that disqual
 and it is structural rather than a gap somebody will close.
 
 **Anything that must notice time passing with no fact arriving.** SLA timers, "no payment received in
-24 hours", sliding windows, session timeouts. The engine acts on fact movement, and "nothing arrived"
-is the one input it never receives. It owns no clock on purpose — a wall clock would make the firing
-sequence depend on when it ran, which is the determinism contract gone. Reach for a scheduler, a
-timer wheel, or a CEP engine, and insert the resulting timeout as a fact if you still want rules to
-see it.
+24 hours", session timeouts. The engine acts on fact movement, and "nothing arrived" is the one input
+it never receives. It owns no clock on purpose — a wall clock would make the firing sequence depend
+on when it ran, which is the determinism contract gone. Reach for a scheduler or a timer wheel, and
+insert what it produces as a fact: a `Clock` fact your application advances is enough to ask "no
+failure in the last ten minutes", and the rules then see time the same way they see everything else.
+What you do not get is the *scheduler*.
+
+Windows over facts that **do** arrive are a different question, and the answer is yes: a bounded
+temporal join windows what a rule matches, `EvictionPolicy.window` windows what the session keeps,
+and the two together are a velocity rule — "five failures for one user in ten minutes" — with no
+clock anywhere. [The guide](dsl-guide.md#counting-things-in-a-window) has it.
 
 **A hard per-decision latency ceiling with nothing supervising it.** `maxCycles` (10,000) and
 `maxFacts` (1,000,000) bound the *work* a fire call does, and neither is a proxy for wall time. If
@@ -127,7 +133,7 @@ The specification's §9.1 has the full accounting; these are the ones people ask
 | not built | why not |
 |---|---|
 | `collect` | answers with a collection, so it has no meaningful `having`, and binding a list needs a way to take one apart that the pattern language does not have |
-| sliding windows, "nothing for 24h" | both need something to notice time passing with *no fact arriving* — the one input an engine that acts on fact movement never receives. Needs either a clock, which would end the determinism contract, or a caller-driven session time, which would not but is a contract of its own |
+| a sliding-window *operator*, "nothing for 24h" | there is no window keyword and no engine-owned clock — nothing here notices time passing with *no fact arriving*, the one input an engine that acts on fact movement never receives. What you assemble instead is a bounded temporal join for what a rule matches plus an `EvictionPolicy.window` for what the session keeps, and a caller-advanced `Clock` fact where the window has to end at "now" — [the recipes](dsl-guide.md#counting-things-in-a-window). That is caller-driven session time, made of parts that already existed rather than a contract of its own |
 | `or` inside a `where` | write two rules, use `in`, or reach for a `condition:` expression |
 | backward chaining | the forward-only decision stands; it was made before any code was written |
 | distributed evaluation | the immutability split makes it *feasible* and no more. The partitioning, the wire protocol and cross-node routing are an architecture, not a slice |

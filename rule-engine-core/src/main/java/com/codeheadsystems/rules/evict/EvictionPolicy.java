@@ -85,4 +85,82 @@ public interface EvictionPolicy {
   static EvictionPolicy perType(final Map<String, Integer> capsByType) {
     return new PerTypeCaps(capsByType);
   }
+
+  /**
+   * Keeps a window of one fact type, measured by a time field on the facts themselves.
+   *
+   * <p>The bound a streaming rule set actually wants. "The last ten minutes of
+   * {@code LoginFailure}" is a window in the data, where {@link #perType(Map)}'s "the last ten
+   * thousand of them" is a window in the arrival count -- and the two differ by exactly the
+   * traffic spike the rule set exists to notice.
+   *
+   * <pre>{@code
+   * SessionOptions.builder()
+   *     .eviction(EvictionPolicy.window("LoginFailure", "at", 600_000))
+   *     .build();
+   * }</pre>
+   *
+   * <p><strong>The span is in the field's own units</strong>, exactly as a temporal join's
+   * {@code within} is, and for the same reason: only the author knows whether {@code at} holds
+   * epoch millis, epoch seconds or a sequence number, and guessing would be guessing wrong for a
+   * large share of rule sets, silently. Keep the unit in the field name if there is any doubt.
+   *
+   * <p><strong>The window's far edge is the newest value of that field the type currently
+   * holds</strong>, minus the span -- a watermark taken from the facts, never a clock. That is what
+   * makes this policy legal where §4.4's TTL is not: two runs over the same facts in the same order
+   * evict the same facts, on every host and in every year, so §7.3 survives. Time advances when a
+   * fact carrying a later time arrives, and in a session where nothing arrives, nothing ages: this
+   * engine still owns no clock, and "no fact moved" remains the one input it never receives.
+   * (Retracting the newest fact moves the watermark back and widens retention, which is harmless
+   * and is still a function of the view alone.)
+   *
+   * <p>Four things to know before configuring one, each of which is silent when it bites:
+   *
+   * <ol>
+   *   <li><strong>Retention is per type and per session; a window in a rule is per rule.</strong>
+   *       Two rules wanting ten minutes and twenty-four hours of one type are served by retaining
+   *       twenty-four hours, with the ten-minute rule keeping its own {@code within} to narrow what
+   *       it matches. Retention must be at least as wide as the widest window written against the
+   *       type, or the rule loses matches its author wrote and nothing says so.
+   *   <li><strong>A negation or a universal over a windowed type changes meaning.</strong>
+   *       {@code notExists LoginFailure} stops saying "there has never been one" and starts saying
+   *       "there has not been one lately" -- which is the useful reading and is a false conclusion
+   *       for any rule that meant the first. §4.4 calls this the sharpest hazard in the engine: an
+   *       evicted fact and an absent fact are indistinguishable, so the rule cannot tell you. An
+   *       {@code accumulate} over a windowed type is the case where the interaction is the
+   *       <em>point</em> -- "how many failures in the window" -- and is still governed by (1).
+   *   <li><strong>A fact with no usable time is never evicted.</strong> Absent, non-numeric and
+   *       non-finite all decline rather than guess, because eviction is the destructive act. The
+   *       consequence is that this policy cannot bound a type whose facts do not all carry the
+   *       field; compose it with {@link #perType(Map)} if that is a risk rather than an invariant.
+   *   <li><strong>A fact that arrives already outside the window is evicted on arrival</strong>,
+   *       inside the {@code insert} call that added it -- so {@code insert} can hand back a handle
+   *       whose fact is already gone. That is correct (a fact older than the window is a fact no
+   *       windowed rule can match) and it is the ordinary out-of-order case rather than an exotic
+   *       one: any watermark-based window over a real stream sees late arrivals. It is the one
+   *       eviction that costs a firing the author might have expected, so watch for it. A
+   *       listener's {@code onEvicted} is the only thing that says it happened; the alternative --
+   *       refusing the insert -- would make the policy decide what working memory accepts, which is
+   *       not what a selection function is for.
+   * </ol>
+   *
+   * <p>It costs one walk of the retained facts of that type per consultation. In steady state that
+   * population <em>is</em> the window, which is the point, but it is a walk rather than a
+   * comparison: {@link #perType(Map)} declines in one integer comparison where this cannot, and a
+   * session holding an enormous window should cap it as well as window it. Under strict mode (§7.5)
+   * the walk is dearer than it looks -- every fact it examines is a payload deep copy, and strict
+   * consults the policy twice -- so a large windowed type is felt in {@code strictTest} before it
+   * is felt in production.
+   *
+   * @param factType the fact type to bound; other types are untouched
+   * @param timeField the dotted path to the time field, e.g. {@code at} or {@code event.at}
+   * @param span how much of that field's own range to keep, ending at the newest value held
+   * @return the policy
+   * @throws IllegalArgumentException if {@code timeField} is empty or malformed, or {@code span} is
+   *     not positive
+   * @throws NullPointerException if either name is null
+   */
+  static EvictionPolicy window(final String factType, final String timeField, final long span) {
+    return new TimeWindow(factType, timeField, span);
+  }
 }

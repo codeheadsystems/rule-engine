@@ -3,6 +3,8 @@ package com.codeheadsystems.rules.testkit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
+import com.codeheadsystems.rules.dsl.FactFiles;
+import com.codeheadsystems.rules.dsl.FactSource;
 import com.codeheadsystems.rules.dsl.RuleFiles;
 import com.codeheadsystems.rules.dsl.RuleSource;
 import java.io.IOException;
@@ -160,6 +162,40 @@ class DocExamplesTest {
             session.insert("Customer", Facts.json("""
                 {"id": 7, "riskTier": "HIGH"}"""));
           });
+    }
+  }
+
+  @Nested
+  @DisplayName("docs/embedding.md")
+  class Embedding {
+
+    @Test
+    @DisplayName("every YAML block it prints is a fact document that reads, or a rule file")
+    void everyYamlBlockIsReal() throws IOException {
+      /*
+       * Every block, not the ones matching a shape. The host-side manual prints fact documents
+       * where the DSL documentation prints rule files, and holds them to the same bar -- a block
+       * somebody will copy out is worse than no block if it has drifted from the reader. Asking
+       * about all of them is what makes that true of a block written in flow style, or of the next
+       * one somebody adds in a form nobody predicted: there is no filter for it to fall out of.
+       */
+      final List<DocExamples.Example> blocks =
+          DocExamples.yamlBlocksIn(DOCS.resolve("embedding.md"));
+      assertThat(blocks)
+          .as("no YAML at all in embedding.md -- has the fence convention changed?")
+          .isNotEmpty();
+      for (final DocExamples.Example block : blocks) {
+        assertThatCode(() -> {
+          if (block.yaml().stripLeading().startsWith("apiVersion:")) {
+            RuleFiles.compile(RuleSource.yaml(block.describe(), block.yaml()));
+          } else {
+            FactFiles.read(FactSource.yaml(block.describe(), block.yaml()));
+          }
+        })
+            .as("the YAML printed at %s is neither a rule file nor a fact document:%n%s",
+                block.describe(), block.yaml())
+            .doesNotThrowAnyException();
+      }
     }
   }
 

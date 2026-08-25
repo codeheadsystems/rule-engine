@@ -7,6 +7,37 @@ Versions follow [semantic versioning](https://semver.org/). All seven published 
 together — a release tags one version and publishes them in a single deployment. What a major
 version protects is the API surface `ApiSurfaceTest` calls exported.
 
+## 1.1.0 — unreleased
+
+### Added
+
+- **Fact documents.** `FactFiles` and `FactSource` in `rule-engine-dsl` read a list of typed facts
+  from YAML *or* JSON and insert it into a session, for the facts that are not a stream: a fixture, a
+  seed, a captured session. §6.1's answer for rule files — one object model, two serializations, one
+  factory choice — now covers facts too, which had been JSON-only for no better reason than that the
+  rule files were built first. `docs/embedding.md` has the format, the guarantees (document order is
+  insertion order, all-or-nothing loading, every fact `ASSERTED`, a repeated key is an error) and the
+  two YAML details worth knowing before writing a fixture in it.
+- `Facts.yaml(...)` in `rule-engine-testkit`, beside `Facts.json(...)`.
+- **`EvictionPolicy.window(factType, timeField, span)`** — a retention window over one fact type,
+  measured by a time field on the facts themselves. The bound a streaming rule set usually wants:
+  `perType` caps the arrival *count*, and the two differ by exactly the traffic spike the rules exist
+  to notice. Not the TTL §4.4 refuses — its far edge is the newest value that type currently
+  *holds*, minus the span, so it is derived from the input and the determinism contract survives. The engine
+  still owns no clock: time advances when a fact carrying a later time arrives.
+- Documentation for the windowing this completes: velocity counts and the caller-advanced `Clock`
+  fact in [`dsl-guide.md`](docs/dsl-guide.md#counting-things-in-a-window), the retention half and the
+  two ways to get it wrong in [`embedding.md`](docs/embedding.md#long-lived-sessions-and-eviction).
+  A window in a rule and a window in the session are separate decisions that have to agree, and
+  nothing checks that they do.
+
+### Changed
+
+- `Facts.json(...)` now parses through the same reader as everything else, which means **a repeated
+  key in a fixture is rejected** rather than silently taking the last one. It still throws
+  `IllegalArgumentException`; the message now names a line and column. A fixture that this newly
+  rejects held two values for one field and was using the second.
+
 ## 1.0.0 — 2026-08-24
 
 First published release. Everything below is what shipped in it rather than what changed, since

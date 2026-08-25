@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Predicate;
 
 /**
  * Lifts the rule files printed in a Markdown document out of it, so they can be compiled.
@@ -67,6 +68,37 @@ public final class DocExamples {
    * @throws IOException if the document cannot be read
    */
   public static List<Example> in(final Path path) throws IOException {
+    return blocks(path,
+        body -> !body.isEmpty() && body.getFirst().strip().startsWith("apiVersion:"));
+  }
+
+  /**
+   * Every fenced YAML block a document prints, complete or not.
+   *
+   * <p>For the documents whose YAML is <em>all</em> meant to be real -- a host-side manual printing
+   * fact documents rather than fragments illustrating one key. Asserting over every block is a
+   * stronger guard than collecting the ones that match a shape: a block that stops matching the
+   * shape stops being checked and nothing says so, which is the hole {@link #in(Path)} closes with
+   * {@link #declaredIn(Path)} and this closes by not having a filter at all.
+   *
+   * @param path the document
+   * @return the blocks, in document order
+   * @throws IOException if the document cannot be read
+   */
+  public static List<Example> yamlBlocksIn(final Path path) throws IOException {
+    return blocks(path, body -> !body.isEmpty());
+  }
+
+  /**
+   * Every fenced YAML block a document prints, filtered.
+   *
+   * @param path the document
+   * @param keep decides whether a block's body is one the caller wants
+   * @return the blocks that were kept, in document order
+   * @throws IOException if the document cannot be read
+   */
+  private static List<Example> blocks(final Path path, final Predicate<List<String>> keep)
+      throws IOException {
     final String fileName = path.getFileName().toString();
     final List<String> lines = Files.readAllLines(path, StandardCharsets.UTF_8);
     final List<Example> found = new ArrayList<>();
@@ -82,7 +114,7 @@ public final class DocExamples {
         end++;
       }
       final List<String> body = lines.subList(start, Math.min(end, lines.size()));
-      if (!body.isEmpty() && body.getFirst().strip().startsWith("apiVersion:")) {
+      if (keep.test(body)) {
         found.add(new Example(fileName, start + 1, String.join("\n", body) + "\n"));
       }
       index = end + 1;

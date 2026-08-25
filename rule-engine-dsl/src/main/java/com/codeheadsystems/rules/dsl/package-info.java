@@ -1,8 +1,17 @@
 /**
- * The rule-file front end: JSON and YAML text into {@code RuleDefinition} (spec §6).
+ * The text front end: JSON and YAML into {@code RuleDefinition}, and into facts (spec §6).
  *
- * <p>{@link com.codeheadsystems.rules.dsl.RuleFiles} is the entry point and the only type most
- * callers need. Everything else here is the machinery behind it.
+ * <p>{@link com.codeheadsystems.rules.dsl.RuleFiles} is the entry point for rule files and the only
+ * type most callers need. Everything else here is the machinery behind it.
+ *
+ * <p>{@link com.codeheadsystems.rules.dsl.FactFiles} is the second, smaller front door: a list of
+ * typed facts, in the same two serializations, for seeding a session from a fixture or a captured
+ * one. It lives here rather than in a module of its own because §6.1's answer is the whole of what
+ * distinguishes the serializations -- one factory choice against an identical target type -- and
+ * that factory choice is configured once, in
+ * {@link com.codeheadsystems.rules.dsl.RuleFormat}. A separate module would have been a second
+ * copy of it, a second published artifact, and a second place to defer the YAML classload. What it
+ * is <em>not</em> is an ingestion path for a stream; see {@code FactFiles} for that boundary.
  *
  * <p><strong>This package parses and it validates syntax. It does not compile rules.</strong> The
  * boundary matters, because there are three gates and duplicating one in another is how they drift

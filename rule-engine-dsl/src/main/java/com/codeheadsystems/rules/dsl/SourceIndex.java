@@ -42,16 +42,43 @@ final class SourceIndex {
    * @return the index, empty if the walk could not complete
    */
   static SourceIndex of(final RuleSource source) {
+    return of(source.name(), source.text(), source.format());
+  }
+
+  /**
+   * Indexes a fact document.
+   *
+   * <p>The same walk, and it has to be the same one: a fact document is the identical two
+   * serializations bound to a different target type, so the pointer-to-line mapping is not
+   * fact-specific in any way. A second copy here would be a second place for the escaping rules to
+   * be wrong.
+   *
+   * @param source the fact document
+   * @return the index, empty if the walk could not complete
+   */
+  static SourceIndex of(final FactSource source) {
+    return of(source.name(), source.text(), source.format());
+  }
+
+  /**
+   * Indexes a document.
+   *
+   * @param name the file name to stamp on locations
+   * @param text the document text
+   * @param format which serialization the text is written in
+   * @return the index, empty if the walk could not complete
+   */
+  private static SourceIndex of(final String name, final String text, final RuleFormat format) {
     final Map<String, SourceLocation> found = new HashMap<>();
-    try (JsonParser parser = source.format().factory()
-        .createParser(ObjectReadContext.empty(), source.text())) {
+    try (JsonParser parser = format.factory()
+        .createParser(ObjectReadContext.empty(), text)) {
       if (parser.nextToken() != null) {
-        walk(parser, source.name(), "", found);
+        walk(parser, name, "", found);
       }
     } catch (final RuntimeException ignored) {
       // See the note above: the bind pass reports what is actually wrong with this document.
     }
-    return new SourceIndex(source.name(), Map.copyOf(found));
+    return new SourceIndex(name, Map.copyOf(found));
   }
 
   /**

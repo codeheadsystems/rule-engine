@@ -17,6 +17,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.ObjectNode;
 
 /** The built-in eviction policies of §4.4, over a hand-built view. */
 class EvictionPolicyTest {
@@ -60,6 +61,37 @@ class EvictionPolicyTest {
   private static Fact fact(final long id, final String type) {
     return new Fact(new FactHandle(id), type, JsonNodeFactory.instance.objectNode(), id,
         Origin.ASSERTED);
+  }
+
+  /**
+   * A fact carrying a time field, for the windowing policy.
+   *
+   * @param id the handle id, which is also its recency
+   * @param type the fact type
+   * @param at the value of the {@code at} field, or null to leave the field absent
+   * @return the fact
+   */
+  private static Fact timed(final long id, final String type, final Number at) {
+    final ObjectNode payload = JsonNodeFactory.instance.objectNode();
+    switch (at) {
+      case null -> { }
+      case Double value -> payload.put("at", value);
+      default -> payload.put("at", at.longValue());
+    }
+    return new Fact(new FactHandle(id), type, payload, id, Origin.ASSERTED);
+  }
+
+  /**
+   * A fact whose time sits under {@code meta}, because a payload is not always flat.
+   *
+   * @param id the handle id
+   * @param at the value of the {@code meta.at} field
+   * @return the fact
+   */
+  private static Fact nested(final long id, final long at) {
+    final ObjectNode payload = JsonNodeFactory.instance.objectNode();
+    payload.putObject("meta").put("at", at);
+    return new Fact(new FactHandle(id), "Event", payload, id, Origin.ASSERTED);
   }
 
   private static FixedView view(final Fact... facts) {
@@ -257,6 +289,156 @@ class EvictionPolicyTest {
       assertThat(dereferenced[0])
           .describedAs("one over the cap means one fact examined")
           .isEqualTo(1);
+    }
+  }
+
+  @Nested
+  @DisplayName("a window measured in the facts' own time")
+  class Window {
+
+    private final EvictionPolicy policy = EvictionPolicy.window("LoginFailure", "at", 600);
+
+    @Test
+    @DisplayName("evicts what is older than the newest time held, minus the span")
+    void evictsWhatIsOutsideTheWindow() {
+      assertThat(ids(policy.selectVictims(view(
+          timed(1, "LoginFailure", 1_000),
+          timed(2, "LoginFailure", 1_500),
+          timed(3, "LoginFailure", 1_900)))))
+          .describedAs("the newest is 1900, so the window opens at 1300")
+          .containsExactly(1L);
+    }
+
+    @Test
+    @DisplayName("the far edge is inclusive, as a temporal join's is")
+    void theEdgeIsInclusive() {
+      // `before` holds when other - within <= mine < other, so a fact sitting exactly on the edge
+      // is inside a rule's window -- and retention that dropped it would lose the author a match.
+      assertThat(policy.selectVictims(view(
+          timed(1, "LoginFailure", 1_000),
+          timed(2, "LoginFailure", 1_600))))
+          .isEmpty();
+    }
+
+    @Test
+    @DisplayName("time comes only from the type it names")
+    void otherTypesNeitherAgeNorAdvanceTheWatermark() {
+      assertThat(policy.selectVictims(view(
+          timed(1, "LoginFailure", 1_000),
+          timed(2, "Account", 9_999_999),
+          timed(3, "LoginFailure", 1_100))))
+          .describedAs("the Account's clock is not the LoginFailure's, and it is never a victim")
+          .isEmpty();
+    }
+
+    @Test
+    @DisplayName("the newest fact is never a victim, which is why the span must be positive")
+    void theNewestSurvives() {
+      assertThat(policy.selectVictims(view(timed(1, "LoginFailure", 1_000)))).isEmpty();
+      assertThatThrownBy(() -> EvictionPolicy.window("LoginFailure", "at", 0))
+          .isInstanceOf(IllegalArgumentException.class)
+          .hasMessageContaining("positive");
+    }
+
+    @Test
+    @DisplayName("a fact with no usable time is never evicted, and never moves the watermark")
+    void unusableTimesDecline() {
+      // Declining is the safe direction: eviction is the destructive act, and a policy that cannot
+      // prove a fact is old must not guess. The cost is the leak this documents rather than plugs.
+      assertThat(policy.selectVictims(view(
+          timed(1, "LoginFailure", null),
+          timed(2, "LoginFailure", 1_000),
+          timed(3, "LoginFailure", 1_200))))
+          .describedAs("nothing is outside the window, and the untimed fact is not swept up")
+          .isEmpty();
+      assertThat(ids(policy.selectVictims(view(
+          timed(1, "LoginFailure", 1),
+          timed(2, "LoginFailure", null),
+          timed(3, "LoginFailure", 700)))))
+          .describedAs("the untimed fact did not advance the watermark; 700 did")
+          .containsExactly(1L);
+    }
+
+    @Test
+    @DisplayName("a non-finite time is not a time")
+    void nonFiniteDeclines() {
+      assertThat(policy.selectVictims(view(
+          timed(1, "LoginFailure", Double.NaN),
+          timed(2, "LoginFailure", Double.POSITIVE_INFINITY))))
+          .describedAs("Canonical will not order either, so neither is a watermark or a victim")
+          .isEmpty();
+    }
+
+    @Test
+    @DisplayName("victims come back oldest-recency first, whatever order the times arrived in")
+    void victimOrderIsRecencyOrder() {
+      assertThat(ids(policy.selectVictims(view(
+          timed(1, "LoginFailure", 500),
+          timed(2, "LoginFailure", 9_000),
+          timed(3, "LoginFailure", 100),
+          timed(4, "LoginFailure", 300)))))
+          .describedAs("retract order is visible to listeners, so it is a §7.3 decision")
+          .containsExactly(1L, 3L, 4L);
+    }
+
+    @Test
+    @DisplayName("a nested time field, because a payload is not always flat")
+    void nestedField() {
+      assertThat(ids(EvictionPolicy.window("Event", "meta.at", 100)
+          .selectVictims(view(nested(1, 10), nested(2, 500)))))
+          .containsExactly(1L);
+    }
+
+    @Test
+    @DisplayName("an empty or malformed field path is a call the caller got wrong")
+    void badFieldPath() {
+      assertThatThrownBy(() -> EvictionPolicy.window("T", "", 1))
+          .isInstanceOf(IllegalArgumentException.class)
+          .hasMessageContaining("timeField");
+      assertThatThrownBy(() -> EvictionPolicy.window("T", "a..b", 1))
+          .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("selecting nothing is the answer for a type no fact has")
+    void unknownType() {
+      assertThat(policy.selectVictims(view(timed(1, "Account", 1)))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a fact that arrives already outside the window is selected on arrival")
+    void lateArrivalsAreEvictedImmediately() {
+      /*
+       * The ordinary out-of-order case for any watermark-based window, and the one eviction that
+       * costs a firing an author might have expected: the fact is taken inside the insert call that
+       * added it, so the handle comes back pointing at nothing. Correct -- a fact older than the
+       * window is one no windowed rule can match -- and asserted here so that it is a decision
+       * rather than a surprise. EvictionPolicy.window's fourth note says the same in prose.
+       */
+      assertThat(ids(policy.selectVictims(view(
+          timed(1, "LoginFailure", 1_000),
+          timed(2, "LoginFailure", 1_050),
+          timed(3, "LoginFailure", 10)))))
+          .describedAs("the newest arrival is the oldest fact, and it goes straight back out")
+          .containsExactly(3L);
+    }
+
+    @Test
+    @DisplayName("retracting the newest fact widens retention rather than breaking it")
+    void theWatermarkFollowsWhatIsHeld() {
+      // "The newest value the type currently holds", not "has ever been shown" -- the view is all
+      // this policy sees. Widening is the harmless direction, and it stays a pure function.
+      assertThat(policy.selectVictims(view(
+          timed(1, "LoginFailure", 1_000),
+          timed(2, "LoginFailure", 1_200))))
+          .describedAs("with the 1900 of the first case retracted, nothing is outside the window")
+          .isEmpty();
+    }
+
+    @Test
+    @DisplayName("it names itself the way it was configured")
+    void describesItself() {
+      assertThat(policy).hasToString("window(LoginFailure.at, 600)");
     }
   }
 }

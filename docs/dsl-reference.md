@@ -320,9 +320,13 @@ bounded form, which no pair of comparisons can express.
 relation to probe from the far end, because a reversal that lost the bound would silently widen the
 rule. `CompilerReport` names them like any other unindexable constraint.
 
-**What this is not.** There are no sliding windows and no "nothing happened for 24 hours". Both need
-something to notice that time has passed *with no fact arriving*, and this engine only ever acts when
-a fact moves. Stamp your facts at ingestion and let whatever drives your stream decide what is stale.
+**What this is not.** There is no engine-owned clock, so there is nothing that notices time passing
+*with no fact arriving* — this engine only ever acts when a fact moves. What you build instead of a
+sliding-window operator is two separate things that agree: a bounded temporal join for what a rule
+*matches*, and a [retention window](embedding.md#long-lived-sessions-and-eviction) for what the
+session *keeps*. For a window that ends at "now" rather than at an arriving fact, insert the clock as
+a fact and have your application advance it. Both recipes, including the velocity count they are
+usually wanted for, are in [the guide](dsl-guide.md#counting-things-in-a-window).
 
 ### Aggregates: `quantifier: accumulate`
 

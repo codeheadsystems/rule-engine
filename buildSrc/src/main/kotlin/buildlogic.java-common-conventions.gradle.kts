@@ -56,11 +56,11 @@ tasks.named("check") {
  *
  * Applied to every module rather than to the two that need it today, because the hole reopens the
  * next time somebody writes a third doc-reading test and does not think of this, and because these
- * three files are cheap: they change in a commit that is usually editing them on purpose. CI never
+ * files are cheap: they change in a commit that is usually editing them on purpose. CI never
  * sees the bug: CI always starts clean, which is precisely why it survived until a mutation went
  * unnoticed locally.
  *
- * The three documents are named individually rather than declaring `docs/` wholesale -- the spec is
+ * The four documents are named individually rather than declaring `docs/` wholesale -- the spec is
  * edited in most commits and would invalidate every module's test task and build-cache entry for a
  * file no test reads. For the same reason the OTHER file-reading suite, ApiSurfaceTest, declares
  * its inputs in the testkit's own build file: it reads seven source trees, and making those a
@@ -68,7 +68,8 @@ tasks.named("check") {
  */
 listOf("test", "strictTest").forEach { name ->
     tasks.named<Test>(name) {
-        listOf("README.md", "docs/dsl-guide.md", "docs/dsl-reference.md").forEach { document ->
+        listOf("README.md", "docs/dsl-guide.md", "docs/dsl-reference.md",
+            "docs/embedding.md").forEach { document ->
             inputs.file(rootProject.layout.projectDirectory.file(document))
                 .withPropertyName("fixture-$document")
                 .withPathSensitivity(PathSensitivity.RELATIVE)

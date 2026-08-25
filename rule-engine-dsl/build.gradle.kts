@@ -3,7 +3,7 @@ plugins {
     id("buildlogic.publish-conventions")
 }
 
-description = "Rule engine DSL: JSON and YAML rule files -> RuleDefinition, plus the rule-file schema"
+description = "Rule engine DSL: JSON and YAML rule files and fact documents, plus the rule-file schema"
 
 dependencies {
     /*
