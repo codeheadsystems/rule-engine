@@ -12,6 +12,7 @@ For a complete application that does all of this, read
 
 - [Platform requirements](#platform-requirements)
 - [The two tiers](#the-two-tiers)
+- [Building rules in Java](#building-rules-in-java)
 - [`SessionOptions`](#sessionoptions)
 - [Limits, and the one the engine does not enforce](#limits-and-the-one-the-engine-does-not-enforce)
 - [Host functions](#host-functions)
@@ -54,6 +55,36 @@ try (RuleSession session = rules.newSession(options)) {
 Compile once. Create a session per unit of work — a request, a message, a batch. Sessions are cheap
 to allocate; the rule set is not. `halt()` is the **only** method legal to call on a session from
 another thread.
+
+## Building rules in Java
+
+A rule file is not the only front end. `Rules` in `-testkit` builds the same constraint AST the DSL
+produces, which is useful when rules are generated rather than authored — from a database table, a
+UI, or a test fixture:
+
+```java
+RuleDefinition rule = Rules.rule("high-value-order-review")
+    .salience(10)
+    .noLoop()
+    .when("o", "Order", p -> p.gt("total", 10000).eq("status", "PENDING"))
+    .when("c", "Customer", p -> p.ref("id", "o.customerId").in("riskTier", "HIGH", "MEDIUM"))
+    .then(t -> t
+        .setField("o", "status", "REVIEW")
+        .emit("order.flagged",
+            "orderId", Rules.ref("o.id"),
+            "reason", "high value + risk tier"))
+    .build();
+
+CompiledRuleSet rules = RuleCompiler.compile(List.of(rule));
+```
+
+This is the same rule README prints as YAML, and the two are held to producing the **identical** rule
+set — down to the version hash — by `DslEquivalence`. That equivalence is the DSL's oracle test, and
+it is the strong one: it caught both defects the DSL module surfaced, because a hash comparison
+notices a normalisation difference that a firing-sequence comparison would step straight over.
+
+JSON and YAML are one language here: both parse into the same object model and compile to the same
+rule set, and the entire difference is which Jackson factory reads the text.
 
 ## `SessionOptions`
 

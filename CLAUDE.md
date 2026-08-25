@@ -11,11 +11,28 @@ governs it — the answer to "why is it written this way" is almost always there
 alternatives that were rejected. If the code and the spec disagree, one of them is a defect; decide
 which and say so, do not silently pick.
 
-`README.md` is the **guide to the project**, not a build diary: what the engine is, how to use it,
-what it deliberately does not do, and where the other documents are. It was deliberately rewritten
-out of phase-by-phase status narration, which told a first-time reader nothing they could act on —
-keep it that way. §9 of the spec holds the roadmap and each phase's exit criteria, and that is where
-phase talk belongs; §11.2's differential propagation is the one deliverable that is measured and
+`README.md` is the **introduction**, not a build diary and not an adoption committee's briefing:
+what the engine is, what a rule looks like, how to run one, and where the other documents are. It was
+rewritten twice — once out of phase-by-phase status narration, and once out of a caveat-first
+ordering that disqualified the reader in five bullets before showing them the engine working. **Reasons
+not to adopt do not belong at the top.** A first-time reader gets the capability first; the two facts
+that end the conversation regardless (Java 25 at runtime, Jackson 3 on the classpath) sit beside the
+dependency snippet where they are actionable. README keeps one short two-way section, `Is this engine
+for you?`, placed *after* the reader has seen a rule run — it names poor fits as well as good ones and
+links onward; the full account of fit lives in `docs/choosing-this-engine.md`. The one caveat README keeps inline is the eviction hazard, because it
+traps rule *authors* rather than evaluators.
+
+`docs/choosing-this-engine.md` is where "should I use this" is answered in both directions: the two
+hard requirements, the workload shapes it suits, the ones it does not, §9.1's not-built table, the
+comparisons against Drools and hand-written conditionals, project maturity, and getting out. It holds
+the not-built table **under that exact heading** because `CHANGELOG.md` links the anchor. Its
+comparisons are capability claims only — this project benchmarks nothing but itself, so no
+performance claim about another engine goes in it — and the Drools half is the spec's own §0 framing
+rather than anything invented later. It prints no complete rule files, which is what keeps it out of
+`DocExamplesTest` and out of the task-input list.
+
+§9 of the spec holds the roadmap and each phase's exit criteria, and that is where phase talk
+belongs; §11.2's differential propagation is the one deliverable that is measured and
 deliberately not built.
 
 `docs/embedding.md` is the host-side manual — sessions, `SessionOptions`, limits, concurrency,
@@ -28,8 +45,11 @@ carries the reporting address and the honest note that there is no automated adv
 file, its feed and its four demos are compiled and executed by CI.
 
 `docs/dsl-reference.md` and `docs/dsl-guide.md` document the rule-file DSL. Every rule file printed
-in either — and in README — is a fixture in `DocExamplesTest`; if a doc and the engine disagree, the
-doc is wrong.
+in either — and in README — is a compiled fixture; if a doc and the engine disagree, the doc is
+wrong. Which test compiles it depends on whether it needs §6.4's escape hatch: `DocExamplesTest`
+filters out anything containing `condition:` or `$expr`, because `-testkit` does not depend on
+`-cel`, and `CelDocExamplesTest` picks those up — for `docs/` **and** for README, whose `$expr`
+example nothing else would compile.
 
 ## Build and test
 

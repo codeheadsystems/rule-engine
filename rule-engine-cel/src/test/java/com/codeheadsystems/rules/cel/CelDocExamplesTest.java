@@ -24,16 +24,40 @@ import org.junit.jupiter.api.Test;
  * because CEL brings protobuf, guava and antlr and none of that belongs on the classpath of a
  * harness everyone uses. So the examples are split by who can compile them, and each side asserts
  * its own count so neither can quietly stop covering its half.
+ *
+ * <p>That split reaches README as well as {@code docs/}: README prints a {@code $expr} example
+ * because without one a reader concludes an action can only set a constant. {@code DocExamplesTest}
+ * filters it out for the reason above, so this class is the only thing that compiles it.
  */
 class CelDocExamplesTest {
 
   private static final Path DOCS = Path.of("..", "docs");
 
+  /** The project root, because README prints an escape-hatch example too. */
+  private static final Path ROOT = Path.of("..");
+
   private static List<DocExamples.Example> expressionExamples(final String fileName)
       throws IOException {
-    return DocExamples.in(DOCS.resolve(fileName)).stream()
+    return expressionExamplesIn(DOCS.resolve(fileName));
+  }
+
+  private static List<DocExamples.Example> expressionExamplesIn(final Path path)
+      throws IOException {
+    return DocExamples.in(path).stream()
         .filter(DocExamples.Example::needsExpressionCompiler)
         .toList();
+  }
+
+  private static void assertEveryExpressionExampleCompiles(
+      final List<DocExamples.Example> examples) {
+    for (final DocExamples.Example example : examples) {
+      assertThatCode(() -> RuleFiles.compile(
+          List.of(RuleSource.yaml(example.describe(), example.yaml())),
+          CompilerOptions.builder().expressions(CelExpressions.create()).build()))
+          .as("the rule file printed at %s does not compile:%n%s",
+              example.describe(), example.yaml())
+          .doesNotThrowAnyException();
+    }
   }
 
   @Test
@@ -73,14 +97,7 @@ class CelDocExamplesTest {
         .as("the reference documents the escape hatch; if it stops, this test should be removed")
         .isNotEmpty();
 
-    for (final DocExamples.Example example : examples) {
-      assertThatCode(() -> RuleFiles.compile(
-          List.of(RuleSource.yaml(example.describe(), example.yaml())),
-          CompilerOptions.builder().expressions(CelExpressions.create()).build()))
-          .as("the rule file printed at %s does not compile:%n%s",
-              example.describe(), example.yaml())
-          .doesNotThrowAnyException();
-    }
+    assertEveryExpressionExampleCompiles(examples);
   }
 
   @Test
@@ -92,13 +109,27 @@ class CelDocExamplesTest {
         .as("the guide documents the escape hatch; without this the loop below passes vacuously")
         .isNotEmpty();
 
-    for (final DocExamples.Example example : examples) {
-      assertThatCode(() -> RuleFiles.compile(
-          List.of(RuleSource.yaml(example.describe(), example.yaml())),
-          CompilerOptions.builder().expressions(CelExpressions.create()).build()))
-          .as("the rule file printed at %s does not compile:%n%s",
-              example.describe(), example.yaml())
-          .doesNotThrowAnyException();
-    }
+    assertEveryExpressionExampleCompiles(examples);
+  }
+
+  @Test
+  @DisplayName("the escape-hatch example README prints compiles, which nothing else checks")
+  void readmeExpressionExamplesCompile() throws IOException {
+    /*
+     * README shows a `$expr` on the right-hand side because without one a reader concludes an
+     * action can only set a constant -- which silently disqualifies the engine for anything that
+     * has to compute. That example needs the same guard as every other rule file in the docs, and
+     * DocExamplesTest cannot be it: -testkit does not depend on this module, so it filters the
+     * example out as needing a compiler it does not have. Without this test README would print the
+     * one rule file in the repository that nothing compiles.
+     */
+    final List<DocExamples.Example> examples = expressionExamplesIn(ROOT.resolve("README.md"));
+
+    assertThat(examples)
+        .as("README no longer prints an expression example; if that is deliberate, delete this "
+            + "test rather than leaving it to pass vacuously")
+        .isNotEmpty();
+
+    assertEveryExpressionExampleCompiles(examples);
   }
 }

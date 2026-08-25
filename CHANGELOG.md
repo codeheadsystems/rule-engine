@@ -42,8 +42,7 @@ there is no previous version to compare against.
 ### Known limitations
 
 Documented rather than hidden — see [what it deliberately does not
-do](README.md#what-it-deliberately-does-not-do) and [Before you
-adopt](README.md#before-you-adopt):
+do](docs/choosing-this-engine.md#what-it-deliberately-does-not-do):
 
 - **Java 25 at runtime**; the jars will not load on 17 or 21.
 - **Jackson 3** (`tools.jackson`), declared `api`.

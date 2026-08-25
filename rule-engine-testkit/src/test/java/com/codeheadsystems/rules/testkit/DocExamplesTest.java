@@ -127,8 +127,13 @@ class DocExamplesTest {
       assertEveryExampleCompiles("README.md", 1);
     }
 
+    /*
+     * The builder below is printed in docs/embedding.md, under "Building rules in Java" -- it used
+     * to sit in README beside this YAML, which is why the equivalence is asserted here. Nothing
+     * reads that document, so if the two drift this test is what notices.
+     */
     @Test
-    @DisplayName("and is the same rule as the Java example beside it, down to the version hash")
+    @DisplayName("and is the same rule the Java builder produces, down to the version hash")
     void readmeYamlMatchesReadmeJava() throws IOException {
       final DocExamples.Example yaml = examplesIn("README.md").stream()
           .filter(example -> example.yaml().contains("id: high-value-order-review"))

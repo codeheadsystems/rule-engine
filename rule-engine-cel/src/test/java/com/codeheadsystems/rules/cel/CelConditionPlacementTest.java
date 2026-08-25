@@ -19,8 +19,9 @@ import org.junit.jupiter.api.Test;
  * on the account -- they hit two diagnostics that pointed at each other: {@code having} refuses a
  * {@code $ref} and said "use a condition", and a condition on that accumulate pattern is refused
  * with "express it with the pattern's own constraints", which is the {@code having} that was just
- * rejected. They escaped by inferring, from a phrase in README about conditions running "after the
- * indexed constraints, once per surviving candidate", that a condition might be a whole-tuple filter
+ * rejected. They escaped by inferring, from a phrase in the documentation about a condition running
+ * "after them, once per surviving candidate" (now {@code dsl-guide.md}, then README), that a
+ * condition might be a whole-tuple filter
  * rather than a per-pattern one -- and so wrote it on an <em>earlier</em> pattern, naming an alias
  * declared <em>below</em> it.
  *
