@@ -801,7 +801,6 @@ Fix `schema-violation` errors first.
 | `unknown-quantifier` | A pattern's `quantifier` outside `exists`, `notExists`, `forAll` and `accumulate` |
 | `malformed-accumulate` | An `accumulate` block that does not compute exactly one thing, or a `having` whose operator cannot test a value |
 | `malformed-action` | An action names a field path that will not compile, such as `a..b` |
-| `condition-not-implemented` | The CEL escape hatch; see below |
 | `semantic` | Everything the compiler checks: forward references, unknown aliases, duplicate ids, duplicate aliases, invalid regexes, malformed `where` and `$ref` field paths, unregistered function names |
 
 `unknown-operator`, `malformed-operand`, `unknown-action` and `unknown-quantifier` are stated by the

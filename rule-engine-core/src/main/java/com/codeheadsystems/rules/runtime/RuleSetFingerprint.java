@@ -44,12 +44,11 @@ import tools.jackson.databind.JsonNode;
  * fact per test, and a defensive copy there would be paid on the hottest path in the engine to
  * defend against a caller doing something the contract already forbids.
  *
- * <p>So this is a detector rather than a defence, and it follows the precedent §7.5 sets for exactly
- * this kind of unenforceable contract -- "{@code insertOwned}/{@code updateOwned} payloads hashed on
- * entry, re-checked on read". Hashed at compile, re-checked when a session is created, under strict
- * mode only. Session creation is the right granularity: cheap, once per session, and in the batch
- * model sessions are created constantly. Doing it per read would put it on the hot path, which is
- * the same reason a defensive copy is not available there.
+ * <p>So this is a detector rather than a defence, and it is exactly the shape §7.5's table states for
+ * this contract: hashed at compile, re-checked when a session is created, under strict mode only.
+ * Session creation is the right granularity: cheap, once per session, and in the batch model
+ * sessions are created constantly. Doing it per read would put it on the hot path, which is the same
+ * reason a defensive copy is not available there.
  *
  * <h2>The hash walks the source, the matcher reads the compiled patterns</h2>
  *

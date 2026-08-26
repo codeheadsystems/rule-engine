@@ -36,11 +36,14 @@ public enum MatchingStrategy {
    * every fire cycle, deliberately, because that is the right trade for the one-shot and batch
    * shapes v1 targets.
    *
-   * <p><strong>Expect a constant factor, not a better curve.</strong> Measured at roughly 2-3x on a
-   * streaming insert-and-fire loop, with both shapes still growing super-linearly: the join is paid
-   * once per fact here, but the conflict set is still rebuilt per fire cycle for every dirty rule.
-   * §11.2's differential propagation is what addresses the remainder. Benchmark it against your own
-   * workload rather than switching on the strategy name.
+   * <p><strong>A better curve, not merely a constant factor.</strong> The join is paid once per
+   * fact here instead of once per fire cycle, and since §4.3's shape landed the conflict set is
+   * <em>pushed and pulled</em> rather than rebuilt: a match enters when derived and leaves when it
+   * fires, so a fire cycle ranks what is waiting rather than everything held. That is what stopped
+   * the fire cycle from growing with the working set at all -- measured at 0.77-1.12us across a
+   * sixteenfold range, where a rebuilt conflict set had been 19.9us-551.4us. Benchmark it against
+   * your own workload rather than switching on the strategy name; see {@code docs/benchmarks.md}
+   * for both columns and for what the measurement does not establish.
    *
    * <p><strong>Not a faster {@code NETWORK}, a different trade.</strong> A batch session that
    * inserts once and fires once does the same join work either way and additionally pays to

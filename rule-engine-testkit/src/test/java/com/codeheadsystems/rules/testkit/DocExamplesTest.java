@@ -106,6 +106,33 @@ class DocExamplesTest {
     }
 
     @Test
+    @DisplayName("the diagnostic table names exactly the codes the DSL can raise")
+    void diagnosticCatalogueHasNoStaleCode() throws IOException {
+      final String text =
+          Files.readString(DOCS.resolve("dsl-reference.md"), StandardCharsets.UTF_8);
+      final int start = text.indexOf("## Diagnostics");
+      final String diagnostics = text.substring(start);
+      final int end = diagnostics.indexOf("\n## ", 1);
+      assertThat(end).as("no section follows ## Diagnostics").isPositive();
+      final String table = diagnostics.substring(0, end);
+
+      final java.util.regex.Matcher rows =
+          java.util.regex.Pattern.compile("^\\| `([a-z-]+)` \\|", java.util.regex.Pattern.MULTILINE)
+              .matcher(table);
+      final List<String> codes = new ArrayList<>();
+      while (rows.find()) {
+        codes.add(rows.group(1));
+      }
+
+      assertThat(codes)
+          .as("the diagnostic table's codes should be exactly DslError's -- stale or missing row?")
+          .containsExactlyInAnyOrderElementsOf(
+              java.util.stream.Stream.of(com.codeheadsystems.rules.dsl.DslError.values())
+                  .map(com.codeheadsystems.rules.dsl.DslError::code)
+                  .toList());
+    }
+
+    @Test
     @DisplayName("documents every operator in §6.2.1's table")
     void operatorTableIsComplete() throws IOException {
       final String text =
