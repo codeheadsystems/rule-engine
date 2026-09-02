@@ -1,8 +1,11 @@
 version: 2
 
 updates:
-  # The four actions in .github/workflows/gradle.yml. Pinned to major tags (@v4), so this mostly
-  # catches the move to v5 rather than churning on patches.
+  # Every `uses:` line under .github/workflows/. gradle.yml pins major tags (@v5, @v6, @v7), so
+  # this mostly catches a move to the next major there; release.yml and pages.yml pin full commit
+  # SHAs, so this is what actually bumps them -- Dependabot rewrites the trailing "# vX.Y.Z"
+  # comment too, so it is machine-maintained, not just a note for humans. auto-dependabot.yml
+  # calls the gh CLI directly and has no `uses:` line, so it contributes nothing here.
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -38,3 +41,13 @@ updates:
       junit:
         patterns:
           - org.junit*
+    # A Jackson major is a major version *here* (CLAUDE.md: JsonNode is in ~60 public signatures,
+    # -core declares jackson `api`), and that is a judgment CI cannot make -- a Jackson 4.x bump
+    # could compile and pass the suite while still being a breaking change for every consumer.
+    # Auto-merge has no such filter (github-actions bumps included, by explicit choice), so this
+    # is the one place that decision needs to be kept out of it. Unlike networknt above, this is
+    # `ignore` rather than a red build: no PR opens at all, so nothing here will announce that a
+    # Jackson major shipped -- the networknt bump failing CI on its own major bump is that signal.
+    ignore:
+      - dependency-name: "tools.jackson*"
+        update-types: ["version-update:semver-major"]

@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>rule-engine — an in-process, forward-chaining rule engine for the JVM</title>
+  <meta name="description" content="An in-process, forward-chaining rule engine for the JVM. Rules in YAML or JSON, compiled once, sessions that are pure functions of the facts you insert — for decisions that need to be reproduced and justified, and that change more often than the code deploys.">
+  <meta property="og:title" content="rule-engine">
+  <meta property="og:description" content="An in-process, forward-chaining rule engine for the JVM — reproducible decisions from rules that change more often than the code deploys.">
+  <meta property="og:url" content="https://codeheadsystems.github.io/rule-engine/">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="rule-engine">
+  <meta name="twitter:description" content="An in-process, forward-chaining rule engine for the JVM — reproducible decisions from rules that change more often than the code deploys.">
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2a2d3a;
+      --text: #e2e4e9;
+      --muted: #9ca0ab;
+      --accent: #6c8cff;
+      --accent-hover: #8da6ff;
+      --green: #4ade80;
+      --red: #f87171;
+      --amber: #fbbf24;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { color: var(--accent-hover); text-decoration: underline; }
+    code {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 0.9em;
+      font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    }
+    pre {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      overflow-x: auto;
+      font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 0.85em;
+      line-height: 1.5;
+    }
+
+    /* Layout */
+    .container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+    /* Hero */
+    .hero {
+      padding: 80px 0 60px;
+      text-align: center;
+      border-bottom: 1px solid var(--border);
+    }
+    .hero h1 {
+      font-size: 2.5em;
+      font-weight: 700;
+      margin-bottom: 12px;
+      letter-spacing: -0.02em;
+    }
+    .hero .tagline {
+      font-size: 1.25em;
+      color: var(--muted);
+      max-width: 720px;
+      margin: 0 auto 32px;
+    }
+    .badges {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 32px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.8em;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .cta-row {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .cta {
+      display: inline-block;
+      padding: 12px 28px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 1em;
+      transition: background 0.2s;
+    }
+    .cta-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+    .cta-primary:hover { background: var(--accent-hover); text-decoration: none; }
+    .cta-secondary {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .cta-secondary:hover { background: var(--border); text-decoration: none; }
+
+    /* Sections */
+    section { padding: 60px 0; border-bottom: 1px solid var(--border); }
+    section:last-of-type { border-bottom: none; }
+    section h2 {
+      font-size: 1.6em;
+      margin-bottom: 24px;
+      letter-spacing: -0.01em;
+    }
+    section h3 {
+      font-size: 1.15em;
+      margin: 28px 0 12px;
+      color: var(--text);
+    }
+    section p { margin-bottom: 16px; color: var(--muted); }
+    section p strong { color: var(--text); }
+
+    /* Problem/Solution grid */
+    .comparison {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      margin: 24px 0;
+    }
+    @media (max-width: 640px) {
+      .comparison { grid-template-columns: 1fr; }
+      .hero h1 { font-size: 1.8em; }
+    }
+    .comparison-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+    }
+    .comparison-card h3 {
+      margin: 0 0 16px;
+      font-size: 1.1em;
+    }
+    .comparison-card ul {
+      list-style: none;
+      padding: 0;
+    }
+    .comparison-card ul li {
+      padding: 6px 0;
+      color: var(--muted);
+      padding-left: 24px;
+      position: relative;
+    }
+    .comparison-card ul li::before {
+      position: absolute;
+      left: 0;
+      font-weight: bold;
+    }
+    .card-problem ul li::before { content: "x"; color: var(--red); }
+    .card-solution ul li::before { content: "+"; color: var(--green); }
+
+    /* Feature list */
+    .features {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin: 24px 0;
+    }
+    @media (max-width: 640px) { .features { grid-template-columns: 1fr; } }
+    .feature {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+    }
+    .feature h4 {
+      font-size: 1em;
+      margin-bottom: 8px;
+      color: var(--text);
+    }
+    .feature p { font-size: 0.9em; margin: 0; }
+
+    /* Links section */
+    .link-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin: 24px 0;
+    }
+    @media (max-width: 640px) { .link-grid { grid-template-columns: 1fr; } }
+    .link-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      transition: border-color 0.2s;
+    }
+    .link-card:hover { border-color: var(--accent); text-decoration: none; }
+    .link-card h4 { color: var(--text); margin-bottom: 8px; }
+    .link-card p { color: var(--muted); font-size: 0.85em; margin: 0; }
+
+    /* Quick start */
+    .quickstart-tabs {
+      display: flex;
+      gap: 0;
+      margin-bottom: -1px;
+      position: relative;
+      z-index: 1;
+      flex-wrap: wrap;
+    }
+    .quickstart-tab {
+      padding: 10px 20px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-bottom: none;
+      border-radius: 8px 8px 0 0;
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 0.9em;
+      font-weight: 600;
+      font-family: inherit;
+    }
+    .quickstart-tab.active {
+      color: var(--text);
+      border-bottom: 1px solid var(--surface);
+    }
+    .quickstart-content { display: none; }
+    .quickstart-content.active { display: block; }
+    .quickstart-content pre {
+      border-radius: 0 8px 8px 8px;
+      margin: 0 0 16px;
+    }
+    .quickstart-content p { margin-top: 16px; }
+
+    /* Tables */
+    table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
+    thead tr { border-bottom: 2px solid var(--border); text-align: left; }
+    th { padding: 12px 16px; color: var(--text); }
+    tbody { color: var(--muted); }
+    tbody tr { border-bottom: 1px solid var(--border); }
+    tbody tr:last-child { border-bottom: none; }
+    td { padding: 12px 16px; }
+    .table-wrap { overflow-x: auto; margin: 24px 0; }
+
+    /* Footer */
+    footer {
+      padding: 40px 0;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.85em;
+    }
+    footer a { color: var(--muted); }
+    footer a:hover { color: var(--text); }
+  </style>
+</head>
+<body>
+
+  <!-- Hero -->
+  <div class="hero">
+    <div class="container">
+      <h1>rule-engine</h1>
+      <p class="tagline">
+        An in-process, forward-chaining rule engine for the JVM. It decides things that depend on
+        <strong>more than one fact</strong> &mdash; for services where the rules change more often
+        than the code deploys, or where somebody has to justify a decision six months after it was
+        made.
+      </p>
+      <div class="badges">
+        <span class="badge">Java 25</span>
+        <span class="badge">Forward-chaining</span>
+        <span class="badge">Rete-capable</span>
+        <span class="badge">Jackson 3</span>
+        <span class="badge">Maven Central</span>
+        <span class="badge">Apache-2.0</span>
+      </div>
+      <div class="cta-row">
+        <a class="cta cta-primary" href="#quickstart">Get started &rarr;</a>
+        <a class="cta cta-secondary" href="https://github.com/codeheadsystems/rule-engine">GitHub Repository</a>
+        <a class="cta cta-secondary" href="https://github.com/codeheadsystems/rule-engine/blob/main/docs/rule-engine-spec.md">The spec</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- What is it -->
+  <section>
+    <div class="container">
+      <h2>What is rule-engine?</h2>
+      <p>
+        Rules are written in <strong>YAML or JSON</strong>, validated against a published schema, and
+        compiled once at startup into an immutable, thread-safe <code>CompiledRuleSet</code>. Facts
+        are your own JSON. Firing a rule set is a <strong>pure function</strong> of the facts you put
+        in &mdash; the same facts in the same order produce the same firings, on any host, in any
+        year, because the engine owns no clock. That is what makes a decision reproducible long after
+        it was made.
+      </p>
+      <div class="comparison">
+        <div class="comparison-card card-problem">
+          <h3>A pile of if-statements</h3>
+          <ul>
+            <li>Every new rule is another branch nested inside the last one</li>
+            <li>Correlating facts that arrive separately means threading state by hand</li>
+            <li>A policy change means a code review, a build, and a deploy</li>
+            <li>Explaining <em>why</em> something didn't fire means re-reading the whole method</li>
+          </ul>
+        </div>
+        <div class="comparison-card card-solution">
+          <h3>rule-engine</h3>
+          <ul>
+            <li>Joins, absence (<code>notExists</code>), universals (<code>forAll</code>) and aggregates
+              (<code>accumulate</code>) as first-class pattern kinds</li>
+            <li>Compile once, share the rule set, one cheap session per unit of work</li>
+            <li>Rules swap under load &mdash; a typo in a rule file fails to compile, not in production</li>
+            <li><code>MatchExplainer</code> names the exact constraint that emptied the match set</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- A rule, and running it -->
+  <section>
+    <div class="container">
+      <h2>A rule, and running it</h2>
+      <p>This is the rule from <a href="https://github.com/codeheadsystems/rule-engine#a-rule-and-running-it">README</a>, where it is a compiled fixture &mdash; if this page and the engine disagree, trust README.</p>
+      <pre>apiVersion: rules.v1
+rules:
+  - id: high-value-order-review
+    salience: 10
+    noLoop: true
+    when:
+      - fact: Order
+        as: o
+        where:
+          total:  { gt: 10000 }
+          status: { eq: "PENDING" }
+      - fact: Customer
+        as: c
+        where:
+          id:       { eq: { $ref: o.customerId } }
+          riskTier: { in: ["HIGH", "MEDIUM"] }
+    then:
+      - action: setField
+        target: o
+        field: status
+        value: "REVIEW"
+      - action: emit
+        event: "order.flagged"
+        payload:
+          orderId: { $ref: o.id }
+          reason: "high value + risk tier"</pre>
+      <p>Compiled once, at startup, and shared by everything. Then a session per unit of work &mdash; a request, a message, a batch:</p>
+      <pre><span style="color:var(--muted)">// RuleSource.of(Path) reads the file, so it declares IOException.</span>
+CompiledRuleSet rules = RuleFiles.compile(RuleSource.of(Path.of("orders.yaml")));
+
+ObjectMapper json = new ObjectMapper();
+try (RuleSession session = rules.newSession()) {
+    session.insert("Order",    json.readTree("""
+        {"id": 1, "total": 25000, "status": "PENDING", "customerId": 7}"""));
+    session.insert("Customer", json.readTree("""
+        {"id": 7, "riskTier": "HIGH"}"""));
+
+    FireResult result = session.fireAllRules();
+    <span style="color:var(--muted)">// result.fired()    -> high-value-order-review, once
+    // result.emitted()  -> order.flagged, stamped with the session id and the rule-set version
+    // result.why()      -> DRAINED</span>
+}</pre>
+      <p>
+        Nothing performs I/O by default &mdash; emitted events come back as the return value of the
+        fire call, so a rule set is testable with no mocking at all.
+      </p>
+    </div>
+  </section>
+
+  <!-- How it works -->
+  <section>
+    <div class="container">
+      <h2>How it works</h2>
+      <div class="features">
+        <div class="feature">
+          <h4>Facts are JSON</h4>
+          <p>A type name plus a <code>JsonNode</code> payload. Field paths are dotted and map to RFC
+             6901 JSON Pointers. The engine persists nothing &mdash; fact identity is the handle it
+             hands back, not anything in the payload.</p>
+        </div>
+        <div class="feature">
+          <h4>Two tiers, and the split is the whole design</h4>
+          <p>A <code>CompiledRuleSet</code> is immutable and shared by every thread. A
+             <code>RuleSession</code> is single-writer, cheap to allocate (248ns), and never shared
+             &mdash; one virtual thread per session.</p>
+        </div>
+        <div class="feature">
+          <h4>Three matchers, held to agreement</h4>
+          <p>A naive correctness oracle, an indexed network (the default), and a streaming Rete-style
+             matcher for long-lived sessions. <code>MatcherEquivalence</code> asserts they produce
+             identical firing sequences.</p>
+        </div>
+        <div class="feature">
+          <h4>Five actions and no more</h4>
+          <p><code>setField</code>, <code>insertFact</code>, <code>retractFact</code>, <code>emit</code>,
+             <code>callFunction</code> &mdash; a closed vocabulary that stays diffable and reviewable
+             by someone who is not a programmer.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Semantics that impact rule writing -->
+  <section>
+    <div class="container">
+      <h2>Semantics that impact rule writing</h2>
+      <div class="features">
+        <div class="feature">
+          <h4>Absent and null are different values</h4>
+          <p><code>{ eq: null }</code> matches an explicit JSON null and never an absent field. Use
+             <code>hasField: false</code> for "the field isn't there".</p>
+        </div>
+        <div class="feature">
+          <h4><code>ne</code> is true for an absent field</h4>
+          <p>Because <code>ne</code> is defined as <code>!eq</code>. Pair it with
+             <code>hasField: true</code> when you mean "present and not equal".</p>
+        </div>
+        <div class="feature">
+          <h4>Flatten collections at ingestion</h4>
+          <p>JSON Pointer has no wildcard. An <code>Order</code> with an <code>items[]</code> array
+             becomes one <code>Order</code> fact plus N <code>LineItem</code> facts, joined normally.</p>
+        </div>
+        <div class="feature">
+          <h4>Never evict a fact type a rule negates</h4>
+          <p>An evicted fact and an absent one are indistinguishable. A cap on a negated type stops
+             costing a firing and starts asserting a false conclusion.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Modules -->
+  <section>
+    <div class="container">
+      <h2>Modules</h2>
+      <p>Seven modules ship to Maven Central under <code>com.codeheadsystems</code> and move together &mdash; a release tags one version and publishes all of them in a single deployment.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Artifact</th>
+              <th>Contents</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>rule-engine-core</code></td>
+              <td>Fact model, working memory, all three matchers, agenda, refraction, RHS execution, sessions, concurrency helpers</td>
+            </tr>
+            <tr>
+              <td><code>rule-engine-compiler</code></td>
+              <td><code>RuleDefinition</code> &rarr; <code>CompiledRuleSet</code>: validation, accessor and pattern compilation, network build, version hash</td>
+            </tr>
+            <tr>
+              <td><code>rule-engine-dsl</code></td>
+              <td>JSON and YAML rule files &rarr; <code>RuleDefinition</code>, plus the <code>rules.v1</code> schema. <strong>Start here</strong> &mdash; brings the compiler and core with it</td>
+            </tr>
+            <tr>
+              <td><code>rule-engine-cel</code></td>
+              <td>Optional. The expression escape hatch, backed by dev.cel</td>
+            </tr>
+            <tr>
+              <td><code>rule-engine-schema</code></td>
+              <td>Optional. Fact schemas, backed by JSON Schema</td>
+            </tr>
+            <tr>
+              <td><code>rule-engine-observability</code></td>
+              <td><code>TracingListener</code>, <code>JfrListener</code>, <code>MatchExplainer</code></td>
+            </tr>
+            <tr>
+              <td><code>rule-engine-testkit</code></td>
+              <td>Fixtures, the firing-sequence oracle, shuffle-determinism and matcher-equivalence harnesses, JMH benchmarks. <strong>Not optional</strong> for testing your own rules</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Documentation -->
+  <section>
+    <div class="container">
+      <h2>Documentation</h2>
+      <p>This site is the entry point; the docs themselves live in the repository.</p>
+      <div class="link-grid">
+        <a class="link-card" href="https://github.com/codeheadsystems/rule-engine/tree/main/rule-engine-example">
+          <h4>Worked example (start here)</h4>
+          <p>One rule file, a ten-event feed, and four deployment shapes side by side.</p>
+        </a>
+        <a class="link-card" href="https://github.com/codeheadsystems/rule-engine/blob/main/docs/dsl-guide.md">
+          <h4>DSL guide</h4>
+          <p>Writing a rule, from a blank file.</p>
+        </a>
+        <a class="link-card" href="https://github.com/codeheadsystems/rule-engine/blob/main/docs/dsl-reference.md">
+          <h4>DSL reference</h4>
+          <p>Every operator, every action, every diagnostic code.</p>
+        </a>
+        <a class="link-card" href="https://github.com/codeheadsystems/rule-engine/blob/main/docs/embedding.md">
+          <h4>Embedding guide</h4>
+          <p>The host side: sessions, options, limits, concurrency, operations, diagnosing production.</p>
+        </a>
+        <a class="link-card" href="https://github.com/codeheadsystems/rule-engine/blob/main/docs/choosing-this-engine.md">
+          <h4>Choosing this engine</h4>
+          <p>Where it fits, where it does not, the comparisons, and getting out.</p>
+        </a>
+        <a class="link-card" href="https://github.com/codeheadsystems/rule-engine/blob/main/docs/rule-engine-spec.md">
+          <h4>The specification</h4>
+          <p>The full spec and the source of truth for the engine's behavior.</p>
+        </a>
+        <a class="link-card" href="https://github.com/codeheadsystems/rule-engine/blob/main/docs/benchmarks.md">
+          <h4>Benchmarks</h4>
+          <p>What is measured, on what, and what the numbers do not show.</p>
+        </a>
+        <a class="link-card" href="https://github.com/codeheadsystems/rule-engine/blob/main/CHANGELOG.md">
+          <h4>Changelog</h4>
+          <p>What changed release by release.</p>
+        </a>
+        <a class="link-card" href="https://github.com/codeheadsystems/rule-engine/blob/main/SECURITY.md">
+          <h4>Security</h4>
+          <p>How to report a vulnerability.</p>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Quick start -->
+  <section id="quickstart">
+    <div class="container">
+      <h2>Quick start</h2>
+      <p>Requires Java 25 at runtime. Gradle resolves a JDK 25 toolchain via the foojay plugin if it is not installed.</p>
+
+      <div class="quickstart-tabs">
+        <button type="button" class="quickstart-tab active" onclick="showTab(this, 'install')">Install</button>
+        <button type="button" class="quickstart-tab" onclick="showTab(this, 'example')">Run the example</button>
+        <button type="button" class="quickstart-tab" onclick="showTab(this, 'build')">Build &amp; test</button>
+      </div>
+
+      <div id="tab-install" class="quickstart-content active">
+        <pre>implementation("com.codeheadsystems:rule-engine-dsl:1.0.0")
+testImplementation("com.codeheadsystems:rule-engine-testkit:1.0.0")</pre>
+        <p>
+          On Maven Central under <code>com.codeheadsystems</code>. One line is usually the whole
+          dependency &mdash; <code>rule-engine-dsl</code> brings the compiler and the core with it.
+          The snippet above is bumped by hand and can lag; the
+          <a href="https://central.sonatype.com/artifact/com.codeheadsystems/rule-engine-dsl">Maven Central listing</a>
+          has the version that is actually there. Two requirements come with it: Java 25 at
+          runtime, and Jackson 3 (<code>tools.jackson.*</code>) on your classpath as a declared
+          <code>api</code> dependency &mdash; a second Jackson if you're already on Jackson 2.
+        </p>
+      </div>
+
+      <div id="tab-example" class="quickstart-content">
+        <pre>git clone https://github.com/codeheadsystems/rule-engine.git
+cd rule-engine
+./gradlew :rule-engine-example:run</pre>
+        <p>
+          The fastest way to see what a reference page cannot show you: what belongs in the ingestion
+          path rather than in a rule, what a long-lived session has to do to stay bounded, and what to
+          assert about a rule set in CI.
+        </p>
+      </div>
+
+      <div id="tab-build" class="quickstart-content">
+        <pre>./gradlew build        <span style="color:var(--muted)"># compile, test, and the strict-mode test run</span>
+./gradlew test         <span style="color:var(--muted)"># the suite</span>
+./gradlew strictTest   <span style="color:var(--muted)"># the same suite with -Drules.strict=true</span></pre>
+        <p>
+          CI runs both <code>test</code> and <code>strictTest</code>; strict mode turns on contract
+          checks too expensive for production and must never run there.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <p>
+        rule-engine is open source under the
+        <a href="https://github.com/codeheadsystems/rule-engine/blob/main/LICENSE">Apache License 2.0</a>.
+        Created by <a href="https://github.com/wolpert">Ned Wolpert</a>.
+      </p>
+      <p style="margin-top: 8px;">
+        <a href="https://github.com/codeheadsystems/rule-engine">GitHub</a> &middot;
+        <a href="https://github.com/codeheadsystems/rule-engine/tree/main/rule-engine-example">Worked example</a> &middot;
+        <a href="https://github.com/codeheadsystems/rule-engine/blob/main/docs/rule-engine-spec.md">Spec</a> &middot;
+        <a href="https://central.sonatype.com/namespace/com.codeheadsystems">Maven Central</a>
+      </p>
+    </div>
+  </footer>
+
+  <script>
+    function showTab(button, name) {
+      document.querySelectorAll('.quickstart-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.quickstart-content').forEach(c => c.classList.remove('active'));
+      button.classList.add('active');
+      document.getElementById('tab-' + name).classList.add('active');
+    }
+  </script>
+
+</body>
+</html>
