@@ -1,0 +1,27 @@
+name: Approve and auto-merge Dependabot PRs
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  dependabot:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    steps:
+      # Approve first: an approval on an unmerged PR is harmless, so if the next step fails
+      # (auto-merge disabled, a transient API error) this half still lands.
+      - name: Approve the PR
+        run: gh pr review --approve "$PR_URL"
+        env:
+          PR_URL: ${{github.event.pull_request.html_url}}
+          GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
+      # Requires branch protection on main to require the "build" check -- otherwise the PR is
+      # already in "clean" merge status and gh rejects enabling auto-merge on it, and CI could not
+      # have gated the merge anyway.
+      - name: Enable auto-merge for the PR
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{github.event.pull_request.html_url}}
+          GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
