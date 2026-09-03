@@ -17,6 +17,7 @@ For a complete application that does all of this, read
 - [`SessionOptions`](#sessionoptions)
 - [Limits, and the one the engine does not enforce](#limits-and-the-one-the-engine-does-not-enforce)
 - [Host functions](#host-functions)
+- [Host-owned lists and reference data](#host-owned-lists-and-reference-data)
 - [Choosing a matcher](#choosing-a-matcher)
 - [Concurrency](#concurrency)
 - [Long-lived sessions and eviction](#long-lived-sessions-and-eviction)
@@ -243,6 +244,96 @@ object serves many sessions.
 **`callFunction` is the wrong default.** It runs at commit, outside the staging that makes §4.6
 atomic, and cannot be withdrawn. Prefer `emit` and act on `FireResult.emitted()` after the call
 returns.
+
+## Host-owned lists and reference data
+
+The question arrives as "can a rule check whether this value is in a list my application owns", and
+the list is usually mutable, often written by the rules' own decisions, and in a cluster it lives in
+a store every node reads. The engine has no lookup operator, no SPI that consults a host structure
+during matching, and no CEL binding that reaches outside the tuple. That is deliberate, and the
+reason is the one contract everything else here rests on: **during one session, a match's answer
+changes only because a fact moved.** Refraction, the streaming matcher's conflict set, truth
+maintenance and replay all assume it. A structure that changed underneath a running session would
+break all four at once, whatever thread-safety it had.
+
+So the list enters as a fact, and there are two shapes for that.
+
+| Shape | Use it when | How |
+|---|---|---|
+| **Read-through per session** | one session per event; the list is large, shared, and lives in a store | before the session, look up each entity the event names and insert one membership fact per (list, entity), `member: true` or `false`. Writes leave as emitted events and the host applies them after the fire call |
+| **Entries as facts in a long-lived session** | the list *is* the stream: entries arrive and expire continuously, and one session runs for days | insert each entry as its own fact, ask with `notExists`, let a rule's `insertFact` add one. The host retracts an entry when it expires, and that retract is the bound on the session's growth: eviction is not available here, because a `notExists` over an evicted type manufactures matches |
+
+The guide has the rule-file half of the first shape, including how a rule that adds to the list
+makes the addition visible to the rest of the same session:
+[Checking a list your application owns](dsl-guide.md#checking-a-list-your-application-owns). The
+host half is a lookup before `newSession()` and a write after `fireAllRules()`:
+
+```java
+List<ExportedFact> memberships = lookups.membershipsFor(event);   // your store, your client
+try (RuleSession session = rules.newSession(options)) {
+    session.insert("Payment", payment);
+    memberships.forEach(m -> session.insert(m.type(), m.payload()));
+    FireResult result;
+    try {
+        result = session.fireAllRules();
+    } catch (RuleEngineLimitExceeded breach) {
+        result = breach.partialResult();       // completed work is never discarded; decide what it means
+    }
+    for (EmittedEvent e : result.emitted()) {   // AFTER the decision, never during it
+        if (e.eventType().equals("list.entry.add")) {
+            // The one-argument form: path() gives a MissingNode for an absent key, and Jackson 3's
+            // stringValue() THROWS on it where the null-returning read is what a payload check wants.
+            String list = e.payload().path("list").stringValue(null);
+            String entityId = e.payload().path("entityId").stringValue(null);
+            if (list != null && entityId != null) {
+                outbox.record(list, entityId);      // durable before the decision is acted on
+            }
+        }
+    }
+}
+```
+
+That last line is the dual-write problem in one word. The session has decided and the store has not
+yet heard; a crash between the two loses the addition while the decision stands. Write the emitted
+event to something durable before acting on the decision, or accept the loss and say so where the
+next reader will find it.
+
+A membership fact, as a fact document, so a fixture can say what the store would have said:
+
+```yaml
+# memberships.yaml: one fact per (list, entity) the event names; member is true OR false
+- type: ListMembership
+  payload: { list: "card-blocklist", entityId: "4111000000001111", member: false, asOfEpochMs: 1756800000000 }
+```
+
+Four things to hold onto:
+
+- **A failed lookup is an absent fact, never `member: false`.** With `member` true *or* false on
+  every fact the store answered for, a missing fact means one thing only: the store did not answer.
+  Insert `false` on an outage and every `member: { eq: false }` fires against a card nobody checked;
+  insert nothing and neither `eq: true` nor `eq: false` has a fact to bind, while a `notExists` over
+  the membership sees the gap and can fail closed. It is the absence-versus-value distinction §2.6.1
+  draws for a field, applied one level up, to the fact. The entries-as-facts shape has the mirror
+  hazard: a load that fails part-way leaves an *empty list*, indistinguishable from a list with no
+  entries, so every `notExists` over it fires. There, a failed load must fail the session rather
+  than leave it half-filled.
+- **Cluster propagation is the store's job, and the engine keeps no copy.** Every node reads through
+  at session start, so a write from any node is visible to the next session anywhere as soon as the
+  store has it. A per-node cache would reintroduce the problem this design removes.
+- **Determinism holds per session, and ordering across sessions is yours.** Two sessions for the same
+  key running concurrently each read before either writes. Make list writes idempotent, or route
+  events for one key to one lane so they run in sequence. The engine cannot order sessions it did not
+  start.
+- **Which lists a rule set reads is derivable from the compiled rules**, without parsing anything:
+  walk `CompiledRule.source().when()` for patterns on the membership type and read the `list`
+  literal. **Read it and never mutate it**: the constraint records deep-copy a literal on the way in
+  but hand back the live node, so an edit there changes what every session matches (§5.5's
+  invariant 1, `ImmutabilityTest`). An explicit declaration beside the rule file is the better audit
+  record; the walk is what checks that the declaration is complete.
+
+`callFunction` is not the door for either half. It is `void`, so it cannot bring a value back; it
+runs at commit, inside the fire loop; and its own contract asks handlers to be deterministic and
+non-blocking, which a store round trip is not.
 
 ## Choosing a matcher
 

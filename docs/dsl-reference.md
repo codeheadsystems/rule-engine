@@ -1054,6 +1054,11 @@ than quietly corrected because of what the stale version cost: a reader who grep
 "temporal" before scrolling to the section that documents them concludes the feature does not exist
 and goes off to compute it at ingestion. That is exactly what happened to somebody.
 
+**Neither is a lookup operator, and one is not coming.** "Is this value in a list my application
+owns" is answered by inserting the membership as a fact before the session, `member: true` or
+`false`, and letting a rule that adds to the list flip that field and `emit` the write. The guide has
+the complete file: [Checking a list your application owns](dsl-guide.md#checking-a-list-your-application-owns).
+
 The quantifiers are *not* on that list any more — [`notExists`](#negation-quantifier-notexists) and
 [`forAll`](#universals-quantifier-forall) are both implemented, with the boundaries those sections
 name: never over an evicted type, and — for `forAll` — vacuously true over an

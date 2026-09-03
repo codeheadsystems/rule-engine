@@ -7,12 +7,15 @@ import com.codeheadsystems.rules.dsl.FactFiles;
 import com.codeheadsystems.rules.dsl.FactSource;
 import com.codeheadsystems.rules.dsl.RuleFiles;
 import com.codeheadsystems.rules.dsl.RuleSource;
+import com.codeheadsystems.rules.rule.RuleDefinition;
+import com.codeheadsystems.rules.session.RuleSession;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -291,6 +294,112 @@ class DocExamplesTest {
 
       assertThat(fired.steps()).singleElement()
           .satisfies(step -> assertThat(step.emitted().getFirst()).contains("\"A\""));
+    }
+  }
+
+  /**
+   * "Checking a list your application owns", run rather than merely compiled.
+   *
+   * <p>The recipe claims more than that its file compiles: that a rule adding a card to the
+   * blocklist, by pairing {@code setField} on the membership fact with an {@code emit}, makes the
+   * decline rule fire <em>in the same session</em> -- the {@code setField} is an update on a tested
+   * path (§3.4.1), so the retract-and-reassert derives the decline rule's match afresh in the next
+   * cycle; and that an <em>absent</em> membership fact, the shape a failed lookup must take, is seen
+   * by the fail-closed rule and by nothing else. Both are the argument for answering "is this in a
+   * list" with a fact rather than a lookup, so both are held to here, through
+   * {@link MatcherEquivalence} so that all three matchers are held to them.
+   */
+  @Nested
+  @DisplayName("the guide's list-membership recipe")
+  class ListMembershipRecipe {
+
+    private static final String ADD = "blocklist-card-after-third-failure";
+    private static final String DECLINE = "decline-blocklisted-card";
+    private static final String UNCHECKED = "review-when-the-list-could-not-be-checked";
+
+    private List<RuleDefinition> recipe() throws IOException {
+      final DocExamples.Example example = examplesIn("dsl-guide.md").stream()
+          .filter(candidate -> candidate.yaml().contains("id: " + DECLINE))
+          .findFirst()
+          .orElseThrow(() -> new AssertionError(
+              "the guide no longer contains the list-membership recipe"));
+      return RuleFiles.parse(RuleSource.yaml(example.describe(), example.yaml()));
+    }
+
+    private static Consumer<RuleSession> payment(final String cardId, final int failures) {
+      return session -> session.insert("Payment",
+          Facts.obj("id", "p-" + cardId, "cardId", cardId, "failureCount", failures));
+    }
+
+    private static Consumer<RuleSession> membership(final String cardId, final Object... rest) {
+      final Object[] fields = new Object[4 + rest.length];
+      fields[0] = "list";
+      fields[1] = "card-blocklist";
+      fields[2] = "entityId";
+      fields[3] = cardId;
+      System.arraycopy(rest, 0, fields, 4, rest.length);
+      return session -> session.insert("ListMembership", Facts.obj(fields));
+    }
+
+    @Test
+    @DisplayName("a rule that adds to the list makes the decline rule fire in the same session")
+    void additionIsVisibleToTheRestOfTheSession() throws IOException {
+      final FiringSequence fired = MatcherEquivalence.assertEquivalent(recipe(),
+          payment("c1", 3).andThen(membership("c1", "member", false)));
+
+      // Order is the claim: the addition first, and the decline BECAUSE of it, in one fire call.
+      assertThat(fired.steps()).extracting(FiringSequence.Step::ruleId)
+          .containsExactly(ADD, DECLINE);
+
+      // The write names the card that was added, not merely the event that something was.
+      final FiringSequence.Step added = fired.steps().get(0);
+      // effects() carries the field write AND the emit; pin the write by content.
+      assertThat(added.effects()).anySatisfy(effect ->
+          assertThat(effect).contains("path=/member").contains("value=true"));
+      assertThat(added.emitted()).singleElement().asString()
+          .startsWith("list.entry.add").contains("\"card-blocklist\"").contains("\"c1\"");
+
+      final FiringSequence.Step declined = fired.steps().get(1);
+      assertThat(declined.effects()).anySatisfy(effect ->
+          assertThat(effect).contains("path=/decision").contains("\"DECLINE\""));
+      assertThat(declined.emitted()).singleElement().asString()
+          .startsWith("payment.declined").contains("\"p-c1\"");
+    }
+
+    @Test
+    @DisplayName("an already-listed card is declined once, and the add rule stays quiet")
+    void existingMembershipDeclines() throws IOException {
+      final FiringSequence fired = MatcherEquivalence.assertEquivalent(recipe(),
+          payment("c2", 5).andThen(membership("c2", "member", true)));
+
+      assertThat(fired.steps()).extracting(FiringSequence.Step::ruleId).containsExactly(DECLINE);
+    }
+
+    @Test
+    @DisplayName("no membership fact at all, the shape of a failed lookup, reaches only the fail-closed rule")
+    void absentFactFailsClosed() throws IOException {
+      final FiringSequence fired = MatcherEquivalence.assertEquivalent(recipe(), payment("c3", 3));
+
+      // Not the add rule, even at three failures: nothing says the card was NOT listed.
+      assertThat(fired.steps()).extracting(FiringSequence.Step::ruleId).containsExactly(UNCHECKED);
+      assertThat(fired.steps().getFirst().effects()).anySatisfy(effect ->
+          assertThat(effect).contains("path=/decision").contains("\"REVIEW\""));
+    }
+
+    @Test
+    @DisplayName("a membership fact with no member field decides nothing")
+    void absentFieldIsNeitherTrueNorFalse() throws IOException {
+      /*
+       * The reader's likeliest mistake: a fact that was inserted but never given the field. §2.6.1's
+       * table is what governs here -- an absent field satisfies neither `eq: true` nor `eq: false`
+       * -- and the fact's presence means the fail-closed rule has nothing to say either. The fixture
+       * shows the safe shape (member true OR false); this pins what the unsafe one costs, which is
+       * a silent nothing rather than an error.
+       */
+      final FiringSequence fired = MatcherEquivalence.assertEquivalent(recipe(),
+          payment("c4", 3).andThen(membership("c4")));
+
+      assertThat(fired.steps()).isEmpty();
     }
   }
 }
