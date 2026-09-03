@@ -30,6 +30,16 @@ version protects is the API surface `ApiSurfaceTest` calls exported.
   two ways to get it wrong in [`embedding.md`](docs/embedding.md#long-lived-sessions-and-eviction).
   A window in a rule and a window in the session are separate decisions that have to agree, and
   nothing checks that they do.
+- **Documentation for host-owned lists and reference data**, the question this engine had no written
+  answer to: "can a rule check whether a value is in a list my application owns, when a rule's own
+  decision may add to it and every node in a cluster must see the addition". The answer is a fact,
+  looked up before the session with `member: true` *or* `false` so that an outage is an absence and
+  not a false, flipped by `setField` so the same session sees the change, and carried out by `emit`
+  for the host to persist. [`dsl-guide.md`](docs/dsl-guide.md#checking-a-list-your-application-owns)
+  has the compiled recipe, [`embedding.md`](docs/embedding.md#host-owned-lists-and-reference-data)
+  the host half and the cluster note, and the spec records in §1 why a lookup *during* matching is
+  structurally off the table rather than deferred. Nothing in the engine changed to support it,
+  which is the point.
 
 ### Changed
 

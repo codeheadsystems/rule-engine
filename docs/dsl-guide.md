@@ -14,6 +14,7 @@ and the engine disagree, this page is wrong.
 - [Matching two facts together](#matching-two-facts-together)
 - [Asking that a fact not exist](#asking-that-a-fact-not-exist)
 - [Doing something](#doing-something)
+- [Checking a list your application owns](#checking-a-list-your-application-owns)
 - [Running it](#running-it)
 - [When it does not fire](#when-it-does-not-fire)
 - [Checking your rules in CI](#checking-your-rules-in-ci)
@@ -606,6 +607,120 @@ action cannot read a field an earlier action just wrote. If you need that, you w
 event comes back as the return value of the fire call, so a rule is testable with no mocking at all.
 A `callFunction` runs real code at commit time, is not transactional, and if it throws, the changes
 that already landed stay landed.
+
+## Checking a list your application owns
+
+Blocklists, allowlists, watchlists. A rule wants to ask "is this card on the blocklist", and the list
+belongs to the application: it changes on its own cadence, a rule's own decision may add to it, and
+it may live in a store shared by every process running this engine. There is no operator that reaches
+out and asks. There is something better placed: **the answer is a fact.**
+
+Look the membership up *before* the session, once per entity the event names, and insert what you
+found. Then the rules read it the way they read everything else:
+
+```yaml
+apiVersion: rules.v1
+rules:
+  - id: decline-blocklisted-card
+    when:
+      - fact: Payment
+        as: p
+      - fact: ListMembership
+        as: m
+        where:
+          list:     { eq: "card-blocklist" }
+          entityId: { eq: { $ref: p.cardId } }
+          member:   { eq: true }
+    then:
+      - action: setField
+        target: p
+        field: decision
+        value: "DECLINE"
+      - action: emit
+        event: payment.declined
+        payload:
+          paymentId: { $ref: p.id }
+          reason: "card-blocklist"
+
+  - id: blocklist-card-after-third-failure
+    when:
+      - fact: Payment
+        as: p
+        where:
+          failureCount: { gte: 3 }
+      - fact: ListMembership
+        as: m
+        where:
+          list:     { eq: "card-blocklist" }
+          entityId: { eq: { $ref: p.cardId } }
+          member:   { eq: false }
+    then:
+      - action: setField            # the first rule sees this in the next cycle of THIS session
+        target: m
+        field: member
+        value: true
+      - action: emit                # your application writes this to the shared store afterwards
+        event: list.entry.add
+        payload:
+          list:     { $ref: m.list }
+          entityId: { $ref: m.entityId }
+
+  - id: review-when-the-list-could-not-be-checked
+    when:
+      - fact: Payment
+        as: p
+      - fact: ListMembership       # no answer at all: the lookup failed, so fail closed
+        as: m
+        quantifier: notExists
+        where:
+          list:     { eq: "card-blocklist" }
+          entityId: { eq: { $ref: p.cardId } }
+    then:
+      - action: setField
+        target: p
+        field: decision
+        value: "REVIEW"
+```
+
+One `ListMembership` fact per (list, entity) the event names, with `member` true **or false**. That
+second half matters: the fact saying "not on the list" is what the second rule matches, and it is also
+what lets you tell an outage from a known non-membership. If the lookup fails, insert nothing. With no
+fact to bind, neither of the first two rules can fire, so a store that is down declines nobody and
+blocklists nobody; the third rule is the one that sees the gap, because `notExists` over the
+membership is true exactly when nothing answered. Whether "could not check" means review, decline or
+approve is a decision the rule file should state, and that third rule is where it says it.
+
+Three things are going on in that file, and each is a decision.
+
+**Why a fact rather than a callback.** Everything that decides which activation fires assumes that
+during one session a match's answer can only change because a fact moved: refraction is cleared for
+the rules testing a changed path, the streaming matcher drops a rejected match knowing an update will
+bring it back, and truth maintenance re-asks a tuple expecting the same answer. A list consulted live
+would change its answer with nothing moving, and every one of those mechanisms would be blind to it.
+The same reasoning is why the engine owns no clock and time arrives as a
+[`Clock` fact](#as-of-now-and-nothing-has-happened). A fact is constant until you update it, and
+updating it is how the change is announced.
+
+**Reading your own write.** The second rule does two things. `setField` flips `member` on the fact,
+which is a change to a path the first rule tests, so the first rule gets another look in the same
+session and declines the payment in the next cycle. `emit` carries the addition to the outside
+world, where your application writes it to the store after `fireAllRules()` returns. The next
+evaluation, in this process or any other, looks the card up and finds it. The membership fact is a
+snapshot that lives exactly as long as the session, which is why this shape wants one short session
+per event: the engine keeps no longer-lived copy, so across a cluster there is nothing to invalidate
+and the store is the only durable one. Two writes are involved, the decision and the list, and a
+crash between them loses the addition after the decision has been acted on. Record the emitted event
+durably before acting on the decision, or accept that loss knowingly.
+
+**What the engine cannot order for you.** Two evaluations for the same card running at the same
+time each look the card up before either has written. Both see `member: false`, both decide, both
+add. Adding to a set twice is harmless; a list write that is not idempotent is not, and the fix is
+outside the engine: route events for one key to one lane, so they run in sequence.
+
+When the list *is* the stream, because entries arrive and expire continuously and the session runs
+for days, model each entry as its own fact in a long-lived session and ask with `notExists` instead.
+[`embedding.md`](embedding.md#host-owned-lists-and-reference-data) sets the two shapes side by side
+and says when each is the right one.
 
 ## When operator maps aren't enough
 
