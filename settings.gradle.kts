@@ -16,7 +16,7 @@ plugins {
      * and one validation result. Seven separate uploads would be seven deployments that can each
      * half-succeed.
      */
-    id("com.gradleup.nmcp.settings") version "1.6.1"
+    id("com.gradleup.nmcp.settings") version "1.6.2"
 }
 
 rootProject.name = "rule-engine"
