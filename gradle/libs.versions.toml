@@ -9,7 +9,7 @@ cel = "0.14.0"
 # Tracks the jackson line above: networknt 3.x is the Jackson 3 line, 2.x the Jackson 2 one. The
 # project maintains both in parallel, so this pin follows our tree model rather than their support.
 networknt = "3.0.7"
-slf4j = "2.0.18"
+slf4j = "2.0.19"
 
 [libraries]
 assertj = { module = "org.assertj:assertj-core", version.ref = "assertj" }
