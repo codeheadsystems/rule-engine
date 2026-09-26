@@ -40,7 +40,7 @@ class PublishedModulesTest {
    * the {@code EXPECTED} of the pre-flight step that refuses to upload unless that many modules come
    * back signed. There is no way to derive one from the other -- the point of that check is to have
    * an independent count -- so adding a module here means editing that number too, or the release
-   * job fails at the last gate with "expected 7, found 8" while every test stays green.
+   * job fails at the last gate with "expected 8, found 9" while every test stays green.
    */
   private static final Set<String> PUBLISHED = Set.of(
       "rule-engine-core",
@@ -49,7 +49,10 @@ class PublishedModulesTest {
       "rule-engine-schema",
       "rule-engine-cel",
       "rule-engine-observability",
-      "rule-engine-testkit");
+      "rule-engine-testkit",
+      // A POM with no code: the modules above plus the Jackson they are built against, so a
+      // consumer takes that version from here rather than copying it.
+      "rule-engine-bom");
 
   /**
    * The modules deliberately not published, each with the reason it is not.
@@ -163,6 +166,32 @@ class PublishedModulesTest {
               + " test says are published. Either the build file changed without the decision, or"
               + " the decision changed without the build file")
           .isEqualTo(new TreeSet<>(PUBLISHED));
+    }
+
+    @Test
+    @DisplayName("is exactly what the BOM aligns")
+    void theBomConstrainsEveryPublishedModule() {
+      /*
+       * The BOM's constraint list is a third copy of this set, and the one that decays quietest: a
+       * published module missing from it still resolves, just at whatever version the consumer's
+       * graph happens to pick, so a consumer mixing engine versions gets no error from anyone. One
+       * naming an unpublished module is worse -- a managed version for coordinates Central never
+       * has. Read off the build file, anchored per line like the scans above.
+       */
+      final Matcher matcher = Pattern.compile(
+              "(?m)^\\s*api\\(project\\(\":(rule-engine-[\\w-]+)\"\\)\\)")
+          .matcher(read(Path.of("..", "rule-engine-bom", "build.gradle.kts")));
+      final Set<String> constrained = new TreeSet<>();
+      while (matcher.find()) {
+        constrained.add(matcher.group(1));
+      }
+      final Set<String> libraries = new TreeSet<>(PUBLISHED);
+      libraries.remove("rule-engine-bom");
+
+      assertThat(constrained)
+          .describedAs("rule-engine-bom's constraints are not the published libraries. Every"
+              + " published module except the BOM itself belongs there, and nothing else does")
+          .isEqualTo(libraries);
     }
 
     @Test

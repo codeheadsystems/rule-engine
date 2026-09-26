@@ -1,30 +1,29 @@
 # Benchmarks
 
-Recorded so that each phase has something to be measured against. Spec §10 asks for JMH
-microbenchmarks per primitive plus end-to-end throughput; §9 makes each later phase's exit criterion
-a comparison, and a comparison needs a number from before.
+JMH results for the rule engine, recorded phase by phase. The specification's §10 asks for JMH
+microbenchmarks per primitive plus end-to-end throughput, and §9 states each later phase's exit
+criterion as a comparison, which needs a number from before.
 
-Regenerate with `./gradlew :rule-engine-testkit:jmh :rule-engine-cel:jmh` — two modules, two
-`results.txt` files, and nothing collates them, so the tables below are assembled by hand. The source is
-`rule-engine-testkit/src/jmh/java/com/codeheadsystems/rules/bench/`, plus
-`rule-engine-cel/src/jmh/.../ExpressionBenchmarks.java`. Every benchmarking module takes its
-sizing from `buildlogic.jmh-conventions`, because columns from differently-warmed suites are
-not comparable and comparing columns is the whole point.
+`./gradlew :rule-engine-testkit:jmh :rule-engine-cel:jmh` regenerates them. That runs two modules
+and writes two `results.txt` files, and nothing collates them, so the tables below are assembled by
+hand. The sources are `rule-engine-testkit/src/jmh/java/com/codeheadsystems/rules/bench/` and
+`rule-engine-cel/src/jmh/.../ExpressionBenchmarks.java`. Every benchmarking module takes its sizing
+from `buildlogic.jmh-conventions`, because columns from differently warmed suites are not
+comparable, and the tables exist to compare columns.
 
 ## Run
 
-| | |
+| Condition | Value |
 |---|---|
 | Date | 2026-08-20 |
 | Engine | Phase 0, naive matcher (no network, no indexes) |
 | JDK | 25 (Temurin/OpenJDK, Linux x86-64) |
 | JMH | 1.37, `AverageTime`, 1 fork, 3 warmup + 3 measurement iterations at 2s |
 
-**Read these as order-of-magnitude, not as precise figures.** The iteration counts are sized so the
-benchmark actually gets run; the error bars on the batch benchmarks are wide because a session
-allocation and 100 inserts is a lumpy unit of work. What they have to support is "Phase 1 made this
-faster", which is not a 2% question. Lengthen the iterations before hanging a decision on a small
-difference.
+These figures are order-of-magnitude, not precise. The iteration counts are sized so the benchmark
+actually gets run; the error bars on the batch benchmarks are wide because a session allocation and
+100 inserts is a lumpy unit of work. What they have to support is "Phase 1 made this faster", which
+is not a 2% question. A decision that rests on a small difference needs longer iterations first.
 
 ## Results
 
@@ -46,39 +45,39 @@ EngineBenchmarks.refractionProbe         N/A  100 000         N/A              N
 
 ## What they say
 
-**The deep copy is the dominant insert cost, exactly as §2.2 claims.** Insert is the batch of 100,
-so per fact: copying costs ~147ns at 5 fields and ~1 025ns at 50; the ownership-transfer variant is
-flat at ~49ns per fact regardless of payload size, because there is nothing to copy. At 50 fields
-the copy is **95% of the cost of inserting a fact** — larger, as §2.2 says, than the alpha tests it
-protects. That is the number to quote when deciding whether `insertOwned` is worth its contract at
-an ingestion boundary.
+The deep copy is the dominant insert cost, as §2.2 claims. Insert is the batch of 100, so per fact:
+copying costs ~147ns at 5 fields and ~1 025ns at 50; the ownership-transfer variant is flat at ~49ns
+per fact regardless of payload size, because there is nothing to copy. At 50 fields the copy is 95%
+of the cost of inserting a fact, which is larger, as §2.2 says, than the alpha tests it protects.
+That is the number that decides whether `insertOwned` is worth its contract at an ingestion
+boundary.
 
-**Comparison evaluation is ~1.3–1.6ns for scalars and ~7ns for `in`.** `in` is linear in the array
+Comparison evaluation is ~1.3–1.6ns for scalars and ~7ns for `in`. `in` is linear in the array
 literal (three elements here) and re-derives each element's canonical key per probe. Phase 1 hoists
 the literal side to compile time and turns `eq`/`in` into an index lookup instead, which is where
 that 7ns goes.
 
-**The refraction probe is flat from 1 000 to 100 000 fired matches.** That is the point of keying it
-on a hash set with its own handle index rather than scanning. (The 100 000 case measuring slightly
-*faster* is noise, not a real inversion.)
+The refraction probe is flat from 1 000 to 100 000 fired matches, because it is keyed on a hash set
+with its own handle index rather than a scan. (The 100 000 case measuring slightly faster is noise,
+not a real inversion.)
 
-**The end-to-end number is the one that has to move.** Ten orders and ten customers cost ~21µs;
-a hundred of each cost ~1.26ms. Ten times the facts, **sixty-one times the time** — the join is a
-cross product, and the naive matcher walks it. That is not a defect in the benchmark; it is §3.1's
-"naive re-scan, `O(rules × facts^arity)`" row, measured.
+The end-to-end number is the one that has to move. Ten orders and ten customers cost ~21µs; a
+hundred of each cost ~1.26ms. Ten times the facts takes sixty-one times the time: the join is a
+cross product, and the naive matcher walks it. This is §3.1's "naive re-scan,
+`O(rules × facts^arity)`" row, measured.
 
-**This is the curve Phase 2 has to flatten.** §3.3 puts it plainly: indexed joins are "the single
-biggest lever for join-heavy rule sets, and exactly what hand-rolled 'simple' engines skip and then
-can't scale." A repeat of this benchmark that still shows 61× is a Phase 2 that did not work.
+Phase 2 has to flatten this curve. §3.3 puts it plainly: indexed joins are "the single biggest lever
+for join-heavy rule sets, and exactly what hand-rolled 'simple' engines skip and then can't scale."
+A repeat of this benchmark that still shows 61× is a Phase 2 that did not work.
 
-## What is not measured yet, and why
+## What is not measured yet
 
-- **The update diff.** §9's Phase 1 exit criterion is that an untested-field update is a *measured*
+- The update diff. §9's Phase 1 exit criterion is that an untested-field update is a measured
   no-op. It is measured today, but by a counter in the correctness suite
   (`DefaultWorkingMemoryTest.untestedFieldIsAMeasuredNoOp`) rather than by JMH, because in Phase 0
-  the interesting cost — walking a large tested-path set, or the prefix trie that replaces it — does
+  the interesting cost (walking a large tested-path set, or the prefix trie that replaces it) does
   not exist yet. The benchmark belongs with the thing it measures.
-- **Concurrent multi-session throughput.** §10 wants facts/sec and rules-fired/sec under concurrent
+- Concurrent multi-session throughput. §10 wants facts/sec and rules-fired/sec under concurrent
   load, and §5.5 wants session-creation cost bounded and measured as the throughput ceiling. The
   correctness of the concurrency model is covered (`SmokeTest.acrossSessionConcurrency`), and
   session creation is inside the `oneShotSession` figure, but the scaling curve is Phase 4's
@@ -100,68 +99,67 @@ EngineBenchmarks.oneShotSession      100    NETWORK   454 843 ±     61 989  ns/
 EngineBenchmarks.oneShotSession      100      NAIVE 1 232 042 ±  1 746 044  ns/op
 ```
 
-**Read the last row with the error bar in view.** At a hundred facts the naive figure's error is
+The last row has to be read with its error bar. At a hundred facts the naive figure's error is
 larger than the figure. Three two-second iterations is not enough to pin a lumpy unit of work like
-"allocate a session, insert two hundred facts, fire to completion", and the honest statement is that
-the network is somewhere between somewhat and several times faster there — not "2.7× faster".
-Lengthen the iterations before quoting a number to anyone.
+"allocate a session, insert two hundred facts, fire to completion", and what the data supports is
+that the network is somewhere between somewhat and several times faster there, not "2.7× faster".
+Quoting a number needs longer iterations.
 
 What the numbers do support:
 
-**The shape of the curve improved, which is the point.** Ten times the facts costs the naive matcher
-about 58× the time and the network about 30×. Both are still super-linear, and they should be: the
-join is still enumerate-then-filter. Phase 1 only made the *candidate sets* smaller. §4.1's TREAT
-join is Phase 2, and flattening this curve properly is its job.
+The shape of the curve improved. Ten times the facts costs the naive matcher about 58× the time and
+the network about 30×. Both are still super-linear, and they should be: the join is still
+enumerate-then-filter. Phase 1 only made the candidate sets smaller. §4.1's TREAT join is Phase 2,
+and flattening this curve properly is its job.
 
-**Inserts got more expensive, and that is the trade, not a regression.** The ownership-transfer
+Inserts got more expensive, which is the trade rather than a regression. The ownership-transfer
 insert went from ~49ns per fact in Phase 0 to ~95ns, because an insert now evaluates the type's
 distinct alpha tests and files the fact into every pattern memory it belongs to. That is the whole
-Rete/TREAT bargain stated in §3.1 — work moves from fire time to insert time — and it is worth
-watching in a workload that inserts far more than it fires.
+Rete/TREAT bargain stated in §3.1 (work moves from fire time to insert time), and it matters in a
+workload that inserts far more than it fires.
 
-**The microbenchmarks did not move**, as expected: comparison evaluation and the refraction probe
-are below the network, and neither phase touched them.
+The microbenchmarks did not move, as expected: comparison evaluation and the refraction probe are
+below the network, and neither phase touched them.
 
 ## What is still not measured
 
-- **Node sharing's effect on insert cost.** The benchmark's rule set has almost no duplicate
+- Node sharing's effect on insert cost. The benchmark's rule set has almost no duplicate
   constraints, so it exercises none of the sharing that §6.5's sublinearity claim is about. A rule
   set with fifty rules testing the same three constraints is the shape that would show it, and it
   is the shape a real deployment has. `NetworkStructureTest` asserts the sharing structurally; no
   benchmark yet asserts it is worth anything.
-- **The prefix trie.** §3.4.2's whole argument is that the diff should cost the size of the change
-  rather than the size of the rule set, and the benchmark rule set has six tested paths — far too
-  few for the difference to appear. Needs a wide rule set and a high update rate.
-- **Concurrent multi-session throughput**, still Phase 4's deliverable.
+- The prefix trie. §3.4.2's whole argument is that the diff should cost the size of the change
+  rather than the size of the rule set, and the benchmark rule set has six tested paths, far too
+  few for the difference to appear. It needs a wide rule set and a high update rate.
+- Concurrent multi-session throughput, still Phase 4's deliverable.
 
 
 ---
 
 # Phase 2: indexed joins
 
-The Phase 1 note above ended by saying the growth curve was still super-linear because the join was
-still enumerate-then-filter, and that flattening it was Phase 2's job. It is flattened.
+Phase 1 left the growth curve super-linear because the join was still enumerate-then-filter, and
+flattening it was Phase 2's job. Phase 2 flattens it.
 
-A first attempt at measuring this failed instructively and is worth recording, because the failure
-is easy to repeat. It joined two thousand orders against three customers — lopsided, which is the
-shape the join planner exists for — and measured essentially nothing: 3.50ms against 4.05ms with
-error bars of ±4.9ms. The reason was not the engine. Two thirds of those orders *matched*, so the
-benchmark spent its time firing six hundred right-hand sides and whatever the join did was invisible
-underneath them. **A join benchmark has to produce few matches, or it is a right-hand-side
-benchmark.**
+The first attempt at measuring this failed in a way that is easy to repeat. It joined two thousand
+orders against three customers (lopsided, which is the shape the join planner exists for) and
+measured essentially nothing: 3.50ms against 4.05ms with error bars of ±4.9ms. The reason was not
+the engine. Two thirds of those orders matched, so the benchmark spent its time firing six hundred
+right-hand sides and whatever the join did was invisible underneath them. A join benchmark has to
+produce few matches, or it is a right-hand-side benchmark.
 
-So: both sides large, and a join key selective enough that only five pairs match.
+So both sides are large, and the join key is selective enough that only five pairs match.
 
-**And then it was wrong a second time, in a subtler way.** That version still measured session
-construction and `2 x facts` copying inserts along with the join. A review measured the split and
-found inserts were between half and three quarters of the network arm — so the "linear growth"
-reading described insert cost, not join cost. Insert cost is linear in `facts`, which means a
-network doing a perfectly linear join and one doing *no join at all* would both have looked linear.
-The conclusion was unsupported even though it happened to be true.
+The second version was wrong in a subtler way. It still measured session construction and
+`2 x facts` copying inserts along with the join. A review measured the split and found inserts were
+between half and three quarters of the network arm, so the "linear growth" reading described insert
+cost, not join cost. Insert cost is linear in `facts`, which means a network doing a perfectly
+linear join and one doing no join at all would both have looked linear. The conclusion was
+unsupported even though it happened to be true.
 
 Population and session construction now happen in per-invocation setup, so the measured region is
 `fireAllRules` alone. The correction is visible in the numbers: at 2000 facts the network arm went
-from 1 048us to 206us, i.e. **80% of what the previous table called join cost was insert cost.**
+from 1 048us to 206us, so 80% of what the previous table called join cost was insert cost.
 
 ```
 Benchmark                       (facts)  (matcher)          Score           Error  Units
@@ -171,16 +169,16 @@ EngineBenchmarks.selectiveJoin     2000    NETWORK        206 033 ±       153 2
 EngineBenchmarks.selectiveJoin     2000      NAIVE    304 932 781 ±   141 780 185  ns/op
 ```
 
-**Read the error bars.** The network figures carry relative errors of 74% and over 300%, because
-the absolute numbers are small and three two-second iterations is not much. Treat them as
-"tens to hundreds of microseconds", never as figures. The oracle's are 46% and 99%.
+The network figures carry relative errors of 74% and over 300%, because the absolute numbers are
+small and three two-second iterations is not much. They read as "tens to hundreds of microseconds",
+never as figures. The oracle's are 46% and 99%.
 
 What survives all of that is the separation and the shape, both of which are far outside the noise:
 
-| | 500 -> 2000 facts (4x) | growth |
+| Matcher | 500 -> 2000 facts (4x) | growth |
 |---|---|---|
-| Network | 68us -> 206us | **3.0x — linear or better** |
-| Oracle | 15.0ms -> 305ms | **20.4x — quadratic** (4^2 = 16) |
+| Network | 68us -> 206us | 3.0x (linear or better) |
+| Oracle | 15.0ms -> 305ms | 20.4x (quadratic; 4^2 = 16) |
 
 Four times the facts costs the network about four times the work and the oracle about sixteen to
 twenty. That is the difference between probing an index once per fact and comparing every fact
@@ -188,45 +186,45 @@ against every other, and it is §3.3's claim measured: indexed join probing is "
 lever for join-heavy rule sets, and exactly what hand-rolled 'simple' engines skip and then can't
 scale."
 
-The separation is two to three orders of magnitude. Do not quote that as a multiple either — with
-the network arm this noisy, the honest statement is the growth exponent, not the ratio.
+The separation is two to three orders of magnitude. That does not support a multiple either: with
+the network arm this noisy, the supportable statement is the growth exponent, not the ratio.
 
 ## What is still not measured
 
-- **The join planner specifically.** Both sides of this benchmark are the same size, so it measures
+- The join planner specifically. Both sides of this benchmark are the same size, so it measures
   indexed probing and not the per-fire reordering. Isolating the planner needs a lopsided join whose
   matches stay few, which is an awkward shape to construct: lopsidedness usually brings either very
   many matches or very few candidates. `JoinPlanTest` asserts the ordering decisions structurally;
   no benchmark yet puts a number on what they are worth.
-- **Node sharing's effect on insert cost.** The benchmark rule sets have almost no duplicate
+- Node sharing's effect on insert cost. The benchmark rule sets have almost no duplicate
   constraints, so they exercise none of the sharing §6.5's sublinearity claim is about.
-- **The prefix trie.** Six tested paths is far too few for the difference to appear.
-- **Concurrent multi-session throughput**, still Phase 4's deliverable.
+- The prefix trie. Six tested paths is far too few for the difference to appear.
+- Concurrent multi-session throughput, still Phase 4's deliverable.
 
-# The gated update, and Phase 5
+# The gated update and Phase 5
 
-| | |
+| Condition | Value |
 |---|---|
 | Date | 2026-08-21 |
 | Engine | Phases 0-2 and 5 complete; both matchers |
 | JDK | 25 (JetBrains Runtime, Linux x86-64) |
 | JMH | 1.36, `AverageTime`, 1 fork, 3 warmup + 3 measurement iterations at 2s |
 
-**Three iterations is not much, and the tables below say so per row.** Where a relative error exceeds
-its own figure, no multiple is quoted — the rule the Phase 2 section set for itself.
+Three iterations is not much, and the tables below give the relative error per row. Where a relative
+error exceeds its own figure, no multiple is quoted, the same rule as in Phase 2.
 
 The Phase 1 and Phase 2 benchmarks were re-run at the same time. `oneShotSession` and
 `selectiveJoin`'s network arm reproduce (437us and 215us against 455us and 206us recorded above).
-The naive `selectiveJoin` arm came in at 222ms against the 305ms recorded above — a 27% move, which
-is inside neither error bar and is unexplained. The tables above were left as they were rather than
-silently reconciled; treat that row as "hundreds of milliseconds" in both runs.
+The naive `selectiveJoin` arm came in at 222ms against the 305ms recorded above, a 27% move, which
+is inside neither error bar and is unexplained. The tables above keep their original figures; that
+row reads as "hundreds of milliseconds" in both runs.
 
 ## §3.4.1's gated update
 
 §9 gives Phase 1 a two-part exit criterion and is careful that the parts test different things. The
-correctness part is asserted on a counter in the suite — "assert it, don't infer it", since "no
-propagation happened" is trivially satisfied by an engine that never propagates. This is the other
-part, which a counter cannot answer: whether the no-op path is actually *cheap*.
+correctness part is asserted on a counter in the suite ("assert it, don't infer it", since "no
+propagation happened" is trivially satisfied by an engine that never propagates). This is the other
+part, which a counter cannot answer: whether the no-op path is actually cheap.
 
 ```
 Benchmark                           (testedPaths)      Score       Error  Units   rel.err
@@ -238,38 +236,39 @@ UpdateBenchmarks.testedPathBatch               40    190 153 ±    26 086  ns/op
 
 One op is a batch of 100 updates; divide by 100 for a per-update figure.
 
-**The gate is worth roughly 3x, and that survives the error bars.** 87ns against 255ns per update at
-two tested paths, 511ns against 1 902ns at forty — 2.9x and 3.7x, with every row inside 14%. §3.4.1's
-diff really does stop before the retract-and-reassert.
+The gate is worth roughly 3x, and that survives the error bars. 87ns against 255ns per update at two
+tested paths, 511ns against 1 902ns at forty: 2.9x and 3.7x, with every row inside 14%. §3.4.1's
+diff does stop before the retract-and-reassert.
 
-**The no-op is linear in the rule set's tested paths, not constant.** Twenty times the paths costs
-six times the no-op update. A two-point fit puts it near 11ns per tested path over roughly 64ns of
-fixed overhead — two points is a line by definition, so read those as the right order of magnitude
-and not as a slope.
+The no-op is linear in the rule set's tested paths, not constant. Twenty times the paths costs six
+times the no-op update. A two-point fit puts it near 11ns per tested path over roughly 64ns of fixed
+overhead; two points is a line by definition, so those are the right order of magnitude and not a
+slope.
 
-That is not a criticism of §3.4.2. The forty paths here are `watched0`..`watched39`: forty *disjoint*
-top-level fields, the worst possible case for a prefix trie, because there is no shared prefix to
-collapse. This measures the walk, not the pruning. **The trie's actual claim remains unmeasured** —
-the shape that would show it is a rule set whose tested paths share deep prefixes.
+This result does not test §3.4.2's prefix trie. The forty paths here are `watched0`..`watched39`:
+forty disjoint top-level fields, the worst possible case for a prefix trie, because there is no
+shared prefix to collapse. This measures the walk, not the pruning. The trie's actual claim remains
+unmeasured; the shape that would show it is a rule set whose tested paths share deep prefixes.
 
-**What is outside the measured region, and why.** `updateOwned` rather than `update`, so §2.2's
-payload copy is not on the clock — it is already measured by `insertBatchCopying` against
-`insertBatchOwned`. One session for the trial, since session construction is measured by
-`oneShotSession`. And a batch of 100, because the interesting cost is a few hundred nanoseconds and
-per-invocation setup cannot be trusted at that scale.
+Three costs are outside the measured region. The benchmark calls `updateOwned` rather than `update`,
+so §2.2's payload copy is not on the clock; `insertBatchCopying` against `insertBatchOwned` already
+measures it. One session serves the whole trial, since `oneShotSession` measures session
+construction. And one op is a batch of 100, because the interesting cost is a few hundred
+nanoseconds and per-invocation setup cannot be trusted at that scale.
 
-There is deliberately **no matcher parameter**. `DefaultRuleSession` installs its observer
-unconditionally and that observer maintains the network's memories on every fact change whatever the
+The benchmark has no matcher parameter. `DefaultRuleSession` installs its observer unconditionally
+and that observer maintains the network's memories on every fact change whatever the
 `MatchingStrategy`; the strategy only selects `matchesOf`, which runs at fire time, and this
-benchmark never fires. Parameterising on it produced two identical columns — which an earlier draft
-of this section reported as a finding about memory-maintenance costs. It was not a finding. It was
-the same code run twice.
+benchmark never fires. Parameterising on it produces two identical columns, because it is the same
+code run twice.
 
-## Phase 5: what the DSL and the escape hatch cost
+## Phase 5: DSL and escape-hatch cost
 
 Nothing here was measured before; the sections above predate Phase 5.
 
-### Compiling a rule set: parsing is the expensive half
+### Compiling a rule set
+
+Parsing is the expensive half.
 
 ```
 Benchmark                            (rules)      Score       Error  Units   rel.err
@@ -281,32 +280,32 @@ CompilationBenchmarks.compileRuleFile     10    381.046 ±    15.357  us/op     
 CompilationBenchmarks.compileRuleFile    100  3 887.018 ±   131.999  us/op       3%
 ```
 
-**§6.5's pipeline is the cheap stage.** At a hundred rules, validation, accessor and regex
-compilation, node sharing, index plans, tested paths, the version hash and the report together cost
-0.42ms; getting there from YAML costs 3.20ms. If rule-set loading ever needs to be faster, the DSL is
-where the time is. The ratio is about 7.5x at a hundred rules and about 7.5x at ten, so it is at
-least stable across the range measured.
+§6.5's pipeline is the cheap stage. At a hundred rules, validation, accessor and regex compilation,
+node sharing, index plans, tested paths, the version hash, and the report together cost 0.42ms;
+getting there from YAML costs 3.20ms. If rule-set loading ever needs to be faster, the DSL is where
+the time is. The ratio is about 7.5x at a hundred rules and about 7.5x at ten, so it is at least
+stable across the range measured.
 
-**Each column grows about tenfold for ten times the rules.** Two points is not a curve, so that is
-consistent with linear rather than evidence of it. Note also what this rule set cannot show: every
+Each column grows about tenfold for ten times the rules. Two points is not a curve, so that is
+consistent with linear rather than evidence of it. This rule set also cannot show one thing: every
 rule shares `total > 10000` and the `Customer` join, so there are about four distinct constraints
-however many rules there are and **the alpha network is constant in rule count**. §6.5's sublinearity
+however many rules there are, and the alpha network is constant in rule count. §6.5's sublinearity
 claim is about network size, and nothing here measures it.
 
-**These are warm figures and a service's first compile is not.** The rule-file schema is compiled
+These are warm figures, and a service's first compile is not warm. The rule-file schema is compiled
 once in a static holder and both Jackson mappers are static finals, so JMH's warmup amortises every
 one-time cost to zero. Cold startup is a real question and this table does not answer it; answering
 it needs a single-shot benchmark in a fresh fork, which does not exist yet.
 
-### §6.4's escape hatch: the fire cycle, and only the fire cycle
+### §6.4's escape hatch in the fire cycle
 
 §6.4 makes one quantified claim about the expression escape hatch: "an unindexed CEL condition
 against 100 000 facts is 100 000 evaluations per fire cycle. Cheap-per-call is not cheap."
 
-Both rules select the same facts and fire the same right-hand side; only the constraint form differs,
-and **the session is loaded in per-invocation setup so that only `fireAllRules` is measured**. That
-placement is the benchmark, not a detail — see the note at the end of this file for what happened
-when it was not.
+Both rules select the same facts and fire the same right-hand side; only the constraint form
+differs. The session is loaded in per-invocation setup, so only `fireAllRules` is measured. That
+placement determines what the benchmark measures; [Measurement failures and
+defences](#measurement-failures-and-defences) records what the version without it reported.
 
 ```
 Benchmark                       (facts)            (form)      Score      Error  Units   rel.err
@@ -318,99 +317,100 @@ ExpressionBenchmarks.fireCycle    10000        EXPRESSION  5 290.520 ±   335.98
 ExpressionBenchmarks.fireCycle    10000  EXPRESSION_VALUE      9.599 ±   50.118  us/op     522%
 ```
 
-**Read the two cheap columns as noise floor, not as figures.** Their errors run from 100% to 934%,
-because there is almost nothing to measure: the operator map's work happened at insert time, and by
-fire time the facts that failed it are not candidates. So **no ratio is quoted here.** The honest
-statement is that the expression arm is measured in hundreds of microseconds to milliseconds while
-the other two sit at or below what three two-second iterations can resolve.
+The two cheap columns are noise floor, not figures. Their errors run from 100% to 934%, because
+there is almost nothing to measure: the operator map's work happened at insert time, and by fire
+time the facts that failed it are not candidates. So no ratio is quoted here. What the data supports
+is that the expression arm is measured in hundreds of microseconds to milliseconds while the other
+two sit at or below what three two-second iterations can resolve.
 
-**The expression column is the one with something in it, and it is well determined** — 6% and 10%
-relative error. About 400ns per candidate at a thousand facts and 530ns at ten thousand. That is
-§6.4's sentence measured: the cost is the *number* of evaluations, one per candidate per cycle.
+The expression column is the one with something in it, and it is well determined, at 6% and 10%
+relative error. That is about 400ns per candidate at a thousand facts and 530ns at ten thousand, and
+it is §6.4's sentence measured: the cost is the number of evaluations, one per candidate per cycle.
 
-**It grew 13.2x for 10x the facts**, which is faster than linear and outside both error bars. This
-benchmark does not explain why, and it is worth someone's attention: the per-candidate cost rising
-from 400ns to 530ns as the memory grows is the kind of thing that is either an allocation effect or
-something structural in the post-filter.
+It grew 13.2x for 10x the facts, which is faster than linear and outside both error bars. This
+benchmark does not explain why, and the question is open: the per-candidate cost rising from 400ns
+to 530ns as the memory grows is the kind of thing that is either an allocation effect or something
+structural in the post-filter.
 
-**A value expression stays at the floor** — 3.1us and 9.6us, both dominated by their own error — which
-is the once-per-firing claim behaving as §6.4 says it should.
+A value expression stays at the floor (3.1us and 9.6us, both dominated by their own error), which is
+the once-per-firing claim behaving as §6.4 says it should.
 
-**What the operator map pays instead is one alpha test per insert**, which `EngineBenchmarks.comparison`
-measures at a little over a nanosecond. That is the other half of the comparison, and it belongs on
-the insert clock rather than this one.
+What the operator map pays instead is one alpha test per insert, which
+`EngineBenchmarks.comparison` measures at a little over a nanosecond. That is the other half of the
+comparison, and it belongs on the insert clock rather than this one.
 
 ## What is still not measured
 
 Carried forward, plus what Phase 5 added:
 
-- **Cold-start compilation.** The table above is warm. A fresh service pays one-time costs JMH
+- Cold-start compilation. The table above is warm. A fresh service pays one-time costs JMH
   amortises away, and nothing measures them.
-- **Why the expression post-filter grows faster than linearly.** 13.2x for 10x facts, unexplained.
-- **The prefix trie's pruning.** The update benchmark uses disjoint top-level paths, the worst case
-  for a trie, and so measures the walk. Needs tested paths sharing deep prefixes.
-- **Node sharing's effect on network size and insert cost.** `NetworkStructureTest` asserts the
-  sharing structurally; no benchmark puts a number on it, and `CompilationBenchmarks`' rule set has a
+- Why the expression post-filter grows faster than linearly. 13.2x for 10x facts, unexplained.
+- The prefix trie's pruning. The update benchmark uses disjoint top-level paths, the worst case
+  for a trie, and so measures the walk. It needs tested paths sharing deep prefixes.
+- Node sharing's effect on network size and insert cost. `NetworkStructureTest` asserts the sharing
+  structurally; no benchmark puts a number on it, and `CompilationBenchmarks`' rule set has a
   constant-size alpha network by construction.
-- **The join planner specifically.** Both sides of `selectiveJoin` are the same size, so it measures
+- The join planner specifically. Both sides of `selectiveJoin` are the same size, so it measures
   indexed probing rather than the per-fire reordering.
-- **Fact-payload schema validation.** §2.3 makes it opt-in and says nothing about its cost, so an
+- Fact-payload schema validation. §2.3 makes it opt-in and says nothing about its cost, so an
   author choosing whether to register a schema has no figure to weigh.
-- **How the concurrency curve moves once §5.3's within-session parallelism exists.** The section
+- How the concurrency curve moves once §5.3's within-session parallelism exists. The section
   below measures the across-session model only, which is the only one v1 has.
 
 
 ---
 
-# Phase 4: does it scale across cores?
+# Phase 4: scaling across cores
 
-| | |
+| Condition | Value |
 |---|---|
 | Date | 2026-08-21 |
 | Engine | Phases 0-2, 4 and 5 complete; `NETWORK` matcher |
-| Machine | AMD Ryzen 7 7840U — **8 physical cores, 16 logical (SMT)**, `powersave` governor, IDE and Gradle daemons resident |
+| Machine | AMD Ryzen 7 7840U, 8 physical cores and 16 logical (SMT), `powersave` governor, IDE and Gradle daemons resident |
 | JDK | 25 (OpenJDK, Linux x86-64) |
-| JMH | 1.36, `AverageTime`, **3 forks**, 3 warmup + 5 measurement iterations at 2s (15 samples per row) |
+| JMH | 1.36, `AverageTime`, 3 forks, 3 warmup + 5 measurement iterations at 2s (15 samples per row) |
 
-Regenerate exactly:
+The exact commands that regenerate it:
 
 ```
 ./gradlew :rule-engine-testkit:jmhJar
 java -jar rule-engine-testkit/build/libs/*-jmh.jar ConcurrencyBenchmarks -wi 3 -i 5 -r 2s -w 2s
 ```
 
-**Three forks, not the suite's one, and the class now carries `@Fork(3)` so this is a setting rather
-than a request.** JMH's ± is the spread across iterations *within* one fork, and every parameter
-combination here is its own fork, so at one fork the error bars say nothing about how much of a gap
-between two columns is JIT and layout luck. That is not hypothetical — see the calibration below,
-which is what caught it.
+The class runs at three forks rather than the suite's one, and carries `@Fork(3)` so that the fork
+count is a setting of the class rather than of the command line. JMH's ± is the spread across
+iterations within one fork, and every parameter combination here is its own fork, so at one fork
+the error bars say nothing about how much of a gap between two columns is JIT and layout luck. The
+calibration row below shows the effect.
 
-## The calibration row, which is the first thing to read
+## The calibration row
 
-At `threads=1` the `sharing` parameter is a **null experiment**: one thread means one thread-local
-rule set, so PRIVATE and SHARED are the same configuration running twice. Whatever separation that
-row shows is the floor below which no difference anywhere else in the table means anything.
+This row is the first thing to read. At `threads=1` the `sharing` parameter is a **null
+experiment**: one thread means one thread-local rule set, so `PRIVATE` and `SHARED` are the same
+configuration running twice. Whatever separation that row shows is the floor below which no
+difference anywhere else in the table means anything.
 
-| forks | SHARED @1 | PRIVATE @1 | apparent difference |
+| forks | `SHARED` @1 | `PRIVATE` @1 | apparent difference |
 |---|---|---|---|
-| 1 | 36.385 ± 0.257 | 37.773 ± 0.659 | 3.8%, error bars **not** overlapping |
+| 1 | 36.385 ± 0.257 | 37.773 ± 0.659 | 3.8%, error bars not overlapping |
 | 3 | 37.063 ± 0.435 | 37.118 ± 0.590 | 0.15%, overlapping |
 
 The single-fork run reported a 3.8% difference, with non-overlapping error bars, between a
-configuration and itself. An earlier draft of this section read a 6% gap elsewhere in that same table
-as a cache-footprint finding. It was inter-fork noise. That claim is retracted, not softened, and
-this row exists so the next one gets caught the same way.
+configuration and itself. At one fork, a 6% gap elsewhere in that same table looks like a
+cache-footprint effect; it is inter-fork noise, and no such effect is claimed. The row exists so
+that the next gap of that kind is caught the same way.
 
 ## What is inside the measured region
 
-Written down before the numbers, per this file's standing rule. `concurrentBatches` measures
-submitting 256 tasks to an already-running pool, each creating a session, inserting 50 order/customer
-pairs, firing to completion and closing; then awaiting all of them. Rule compilation, executor
-construction and thread creation are all in trial setup. **Total work is fixed at 256 batches and the
-thread count varies**, so perfect scaling is `time(N) == time(1) / N`. A benchmark that ran 256
-batches *per thread* would have shown a flat line and proved nothing.
+`concurrentBatches` measures submitting 256 tasks to an already-running pool, each creating a
+session, inserting 50 order/customer pairs, firing to completion, and closing; then awaiting all of
+them. Rule compilation, executor construction, and thread creation are all in trial setup. Total
+work is fixed at 256 batches and the thread count varies, so perfect scaling is
+`time(N) == time(1) / N`. A benchmark that ran 256 batches per thread would have shown a flat line
+and proved nothing.
 
-## The curve, and the control it must be read against
+## The scaling curve and its control
 
 ```
 Benchmark                                (sharing)  (threads)  Cnt    Score   Error  Units
@@ -434,52 +434,51 @@ ConcurrencyBenchmarks.sharedNothingBaseline SHARED         16   15    4.131 ± 0
 | 8 | 5.79x | 72% | 7.16x | 89% | 81% |
 | 16 | 6.14x | 38% | 11.74x | 73% | 52% |
 
-`sharedNothingBaseline` is the experimental control: the identical harness — same pool, same 256
-tasks, same submit-and-await — over arithmetic on locals. It exists because **a raw scaling curve on
-a laptop measures the laptop.** Under a `powersave` governor a one-thread run boosts to a clock an
+`sharedNothingBaseline` is the experimental control: the identical harness (same pool, same 256
+tasks, same submit-and-await) over arithmetic on locals. It exists because a raw scaling curve on a
+laptop measures the laptop. Under a `powersave` governor a one-thread run boosts to a clock an
 all-core run cannot hold, the 16-thread column is 16 threads on 8 cores, and the machine is not
 quiescent. All of that would produce sub-linearity before the engine did anything.
 
-**The control does not excuse the engine, but it accounts for a real share.** At 8 threads the
-engine gives up 27.6 points of efficiency and the box gives up 10.6 of them, so **roughly two fifths
-of the shortfall is the machine and three fifths is the engine.** (An earlier draft said "about a
-tenth"; that was arithmetic error, not a different measurement.) Against its own machine's ceiling
-the engine reaches 81% at 8 threads.
+The control does not excuse the engine, but it accounts for a real share. At 8 threads the engine
+gives up 27.6 points of efficiency and the machine gives up 10.6 of them, so roughly two fifths of
+the shortfall is the machine and three fifths is the engine. Against its own machine's ceiling the
+engine reaches 81% at 8 threads.
 
-**Near-linear holds to 4 threads and degrades from there.** 92% and 82% at two and four threads; 72%
-at eight, the physical core count. Whether that satisfies §9's "scale near-linearly for the batch
-case" is a judgement call, and the number is recorded rather than graded so a later change has
+Near-linear scaling holds to 4 threads and degrades from there: 92% and 82% at two and four threads,
+and 72% at eight, the physical core count. Whether that satisfies §9's "scale near-linearly for the
+batch case" is a judgement call, and the number is recorded rather than graded so a later change has
 something to be compared against.
 
-**SMT buys the engine almost nothing** — 1.06x from 8 threads to 16, where the arithmetic baseline
-gets 1.64x. That is the most informative row, and it is worth being careful about what it means,
-because the obvious reading is backwards.
+SMT buys the engine almost nothing: 1.06x from 8 threads to 16, where the arithmetic baseline gets
+1.64x. That is the most informative row, and its obvious reading is backwards.
 
 SMT fills one thread's idle issue slots with a sibling thread's instructions. A workload full of
-*memory stalls is therefore the classic SMT beneficiary* — a cache miss is precisely the idle slot
-the sibling uses. So "SMT does not help this" cannot mean "this is memory-bound"; if the engine were
-merely stalling on memory latency, the 16-thread column would look like the baseline's.
+memory stalls is therefore the classic SMT beneficiary, because a cache miss is precisely the idle
+slot the sibling uses. So "SMT does not help this" cannot mean "this is memory-bound"; if the engine
+were merely stalling on memory latency, the 16-thread column would look like the baseline's.
 
-The baseline shows what SMT paying off looks like: `accumulator += index ^ (accumulator >>> 3)` is a
-serial dependency chain with very low ILP — each iteration waits on the last — so it leaves slots
+The baseline shows what SMT paying off looks like. `accumulator += index ^ (accumulator >>> 3)` is a
+serial dependency chain with very low ILP (each iteration waits on the last), so it leaves slots
 idle every iteration and a sibling thread fills them, hence 1.64x. What 1.06x indicates instead is
-**saturation of a shared resource** at 8 threads: memory bandwidth, last-level cache capacity, or the
+saturation of a shared resource at 8 threads: memory bandwidth, last-level cache capacity, or the
 allocator. A second hyperthread on the same core adds demand to something already at its limit and
 gets nothing back. The two rows are consistent with each other under that reading and contradictory
 under the other one.
 
 §5.5 predicted the ceiling would be "cache-line sharing, not locking". The data agrees it is not
-locking — the shared-versus-private table rules that out directly — and points at a saturated shared
-resource rather than at contention over the rule set. **Which** resource is exactly what `-prof gc`
-would name, and it has not been run.
+locking (the shared-versus-private table rules that out directly) and points at a saturated shared
+resource rather than at contention over the rule set. `-prof gc` would name which resource, and it
+has not been run.
 
-## Sharing the rule set costs nothing, which is §5.5's actual claim
+## Shared and private rule sets
 
-The `sharing` parameter gives every task one shared rule set, or every *thread* its own — keyed by
-thread rather than by batch index, so that "no two concurrent tasks share a rule set" is true by
-construction rather than true of whatever order the pool happened to pick.
+Sharing the rule set costs nothing measurable, which is §5.5's claim. The `sharing` parameter gives
+every task one shared rule set, or every thread its own. It is keyed by thread rather than by batch
+index, so that "no two concurrent tasks share a rule set" is true by construction rather than true
+of whatever order the pool happened to pick.
 
-| threads | SHARED | PRIVATE |
+| threads | `SHARED` | `PRIVATE` |
 |---|---|---|
 | 1 | 37.063 ± 0.435 | 37.118 ± 0.590 |
 | 2 | 20.052 ± 0.167 | 19.875 ± 0.164 |
@@ -487,16 +486,16 @@ construction rather than true of whatever order the pool happened to pick.
 | 8 | 6.398 ± 0.169 | 6.557 ± 0.298 |
 | 16 | 6.033 ± 0.082 | 6.068 ± 0.060 |
 
-**Every row overlaps.** §5.5 stakes the whole scaling story on "thousands of concurrent virtual
-threads reference the same `CompiledRuleSet` with zero contention, because nothing about it mutates
-after compile", and this is that claim measured: the private column is what zero contention has to
-be compared against, and there is nothing between them at any thread count.
+Every row overlaps. §5.5 stakes the whole scaling story on "thousands of concurrent virtual threads
+reference the same `CompiledRuleSet` with zero contention, because nothing about it mutates after
+compile", and this is that claim measured: the private column is what zero contention has to be
+compared against, and there is nothing between them at any thread count.
 
 No cache-footprint effect is claimed in either direction, and the threshold for claiming one comes
-from the calibration row rather than from taste: its error half-widths are ±1.2% and ±1.6% of score,
-so a gap under about 1.5% is inside the noise this method can resolve. None of these gaps reach it.
-(The 0.15% *separation* on that row is how far apart two identical configurations landed; the ±1.2%
-and ±1.6% are how far apart they could have landed. It is the second number that sets the floor.)
+from the calibration row: its error half-widths are ±1.2% and ±1.6% of score, so a gap under about
+1.5% is inside the noise this method can resolve. None of these gaps reach it. (The 0.15%
+separation on that row is how far apart two identical configurations landed; the ±1.2% and ±1.6% are
+how far apart they could have landed. It is the second number that sets the floor.)
 
 ## Session creation: 248ns
 
@@ -504,12 +503,11 @@ and ±1.6% are how far apart they could have landed. It is the second number tha
 ConcurrencyBenchmarks.sessionCreation  avgt  15  248.320 ± 3.065  ns/op
 ```
 
-From the same run as everything above, which needed a method-level `@OutputTimeUnit(NANOSECONDS)`:
-JMH's score formatter collapses anything below a thousandth of the chosen unit to `~= 10^-4`, so in
-this class's milliseconds the row printed no digits at all. An earlier draft quoted a number taken
-from a *separate* invocation and presented it inside this table.
+This row is from the same run as everything above, which needed a method-level
+`@OutputTimeUnit(NANOSECONDS)`: JMH's score formatter collapses anything below a thousandth of the
+chosen unit to `~= 10^-4`, so in this class's milliseconds the row printed no digits at all.
 
-§10 calls this "your concurrency throughput ceiling" — the per-task constant no amount of parallelism
+§10 calls this "your concurrency throughput ceiling": the per-task constant no amount of parallelism
 amortises. At 248ns against a 145us batch it is 0.17% of the workload above, so for batches of this
 shape it is not the ceiling in practice. One order of magnitude smaller it is still only 1.7%; two
 orders down, at a 1.4us batch, it is a sixth of the work and the name §10 gives it starts to earn
@@ -517,48 +515,46 @@ itself. That is the reason to have the number rather than assume it.
 
 ## What Phase 4 still does not measure
 
-- **Whether the 8-thread shortfall is allocation.** The SMT row points that way but does not prove
+- Whether the 8-thread shortfall is allocation. The SMT row points that way but does not prove
   it; `-prof gc` on this same benchmark would, and was not run.
-- **The virtual-thread path.** `concurrentBatches` uses platform threads deliberately, so the column
-  count means cores. `RuleBatches` ships one virtual thread per task over the carrier pool, so it is
-  *expected* to track this curve — a similar shape is a reasonable expectation, not a construction —
-  and its own per-task overhead is unmeasured.
-- **Swap cost under load.** `RuleSetHolder.publish` is a volatile write and `ConcurrencyTest` proves
+- The virtual-thread path. `concurrentBatches` uses platform threads so that the column count means
+  cores. `RuleBatches` ships one virtual thread per task over the carrier pool, so it is expected to
+  track this curve (a similar shape is a reasonable expectation, not a construction), and its own
+  per-task overhead is unmeasured.
+- Swap cost under load. `RuleSetHolder.publish` is a volatile write and `ConcurrencyTest` proves
   it mixes nothing, but nothing measures whether a publish perturbs in-flight throughput.
-- **Drain and replay.** `SessionDrain.restart` is O(asserted facts) by inspection and untimed.
-- **Whether the immutability audit stays true.** Two instances of the shallow-copy trap have been
-  found by hand and a manual sweep found no third — but a sweep expires the moment someone adds a
+- Drain and replay. `SessionDrain.restart` is O(asserted facts) by inspection and untimed.
+- Whether the immutability audit stays true. Two instances of the shallow-copy trap have been
+  found by hand and a manual sweep found no third, but a sweep expires the moment someone adds a
   field. The systemic answer is a test that walks everything reachable from a `CompiledRuleSet`
   reflectively and asserts every `Collection` and `Map` it finds rejects mutation, turning "somebody
   checked" into "the build checks". `ImmutabilityTest` covers the literals only.
-- **Listener dispatch under concurrency.** `TracingListener` now takes a lock per firing (§7.1's
-  premise about per-session listeners being false, see the amendment there). Once per firing is not
-  once per candidate, so this is expected to be invisible — but "expected" is what this file exists
-  to replace.
+- Listener dispatch under concurrency. `TracingListener` now takes a lock per firing (§7.1's
+  premise about per-session listeners being false; see the amendment there). Once per firing is not
+  once per candidate, so this is expected to be invisible, but an expectation is not a measurement.
 
 # Phase 3: where the streaming cost actually is
 
-`StreamingBenchmarks`, added with §4.4's eviction and the first benchmark here with the shape Phase
-3 exists for: insert-then-fire, repeated, against a working memory that stays the same size.
-`EngineBenchmarks` says plainly that it does not have this shape — it inserts a batch and fires
-once, which is what §11.1 chose TREAT for and what the streaming matcher is worst at.
+`StreamingBenchmarks` arrived with §4.4's eviction and is the first benchmark here with the shape
+Phase 3 exists for: insert-then-fire, repeated, against a working memory that stays the same size.
+`EngineBenchmarks` says plainly that it does not have this shape. It inserts a batch and fires once,
+which is what §11.1 chose TREAT for and what the streaming matcher is worst at.
 
-## Why this could not be written before eviction
+## Eviction as a precondition
 
-Insert continuously and working memory grows, so the join walk grows, so the conflict set grows —
+Under continuous insertion working memory grows, so the join walk grows and the conflict set grows,
 and a rising per-operation cost could be any of them. §4.4's eviction fixes the working set, which
 makes the terms separable at all.
 
-Two benchmarks over one steady-state session, differing by one statement. `insertOnly` inserts a
+Two benchmarks run over one steady-state session, differing by one statement. `insertOnly` inserts a
 fact: the alpha network, the pattern memories and their indexes, the beta memory under the streaming
 shape, and the eviction that insert triggers. `insertAndFire` inserts the same fact and fires to
 quiescence. The difference between the columns is the fire cycle.
 
-**What is in the fire cycle is not the same on both matchers, and the write-up originally got this
-wrong.** Under Rete the join is already materialised, so the fire is the conflict-set rebuild. Under
-TREAT the join happens *inside* the fire (`NetworkAgenda`: "Nothing pinned: TREAT re-joins the whole
-working memory at fire time"), so the difference there is join walk **plus** rebuild. Every
-conclusion below is scoped accordingly.
+What is in the fire cycle is not the same on both matchers. Under Rete the join is already
+materialised, so the fire is the conflict-set rebuild. Under TREAT the join happens inside the fire
+(`NetworkAgenda`: "Nothing pinned: TREAT re-joins the whole working memory at fire time"), so the
+difference there is join walk plus rebuild. Every conclusion below is scoped accordingly.
 
 ## Results
 
@@ -581,18 +577,17 @@ StreamingBenchmarks.insertAndFire       RETE          1000  avgt    3   102.647 
 StreamingBenchmarks.insertAndFire       RETE          4000  avgt    3   554.038 ±   198.192  us/op
 ```
 
-**Three of those intervals are wider than any conclusion could survive** — 230 ± 302 and
-1144 ± 623 are the worst. The fix used here is replication rather than a longer run, for a reason
-recorded in the class: annotating it `@Fork(2) @Measurement(iterations = 10)` does nothing, because
-the Gradle JMH plugin passes `-f/-wi/-i` from its own `jmh` block and command-line options beat
-annotations. Two alternatives exist and both were declined for this run: raising the shared sizing, which makes
-the whole suite slow enough that it stops being run, or registering a `JavaExec` on
+Three of those intervals are wider than any conclusion could survive; 230 ± 302 and 1144 ± 623 are
+the worst. The fix used here is replication rather than a longer run, for a reason recorded in the
+class: annotating it `@Fork(2) @Measurement(iterations = 10)` does nothing, because the Gradle JMH
+plugin passes `-f/-wi/-i` from its own `jmh` block and command-line options beat annotations. Two
+alternatives exist and both were declined for this run: raising the shared sizing, which makes the
+whole suite slow enough that it stops being run, or registering a `JavaExec` on
 `org.openjdk.jmh.Main` over the jmh runtime classpath with its own `-f/-wi/-i`, which is about eight
-lines and buys per-class sizing without touching the shared block. The second is the right answer if
-this section is ever regenerated. For this one the class was simply run a second time, in a fresh
-JVM:
+lines and buys per-class sizing without touching the shared block. The second is the right approach
+for any regeneration of these figures. For these, the class was run a second time, in a fresh JVM.
 
-Run 2's scores, so the comparison below can be checked rather than taken:
+Run 2's scores:
 
 ```
 StreamingBenchmarks.insertOnly       NETWORK           250  avgt    3     0.732 ±     0.153  us/op
@@ -618,45 +613,42 @@ StreamingBenchmarks.insertAndFire       RETE          4000  avgt    3   578.095 
 | RETE, W=1000 | 100.5us | 109.5us | +9.0% |
 | RETE, W=4000 | 551.4us | 575.4us | +4.4% |
 
-Six independent comparisons agreeing to within 9% across fresh JVMs says the *means* are
-reproducible even where a single run's interval is not, and every derived number quoted below is
-given for both runs. That is the claim this section rests on; the within-run intervals are not.
+Six independent comparisons agreeing to within 9% across fresh JVMs says the means are reproducible
+even where a single run's interval is not, and every derived number quoted below is given for both
+runs. That is the claim this section rests on; the within-run intervals are not.
 
-Two limits on it, since it is doing a lot of work here. **n = 2 establishes reproducibility, not a
-distribution** — it says the mean is stable, not what its spread is. And **both runs are the same
-machine**, so it controls for JVM seeding and for nothing systematic about the host.
+The claim has two limits. n = 2 establishes reproducibility, not a distribution: it says the mean is
+stable, not what its spread is. And both runs are on the same machine, so it controls for JVM
+seeding and for nothing systematic about the host.
 
 ## What they say
 
-**The fire cycle is essentially the whole operation.** At W=4000 it is 99.9% of `insertAndFire`
-under TREAT and 99.5% under Rete, and it is 100–400x maintenance at every size in both runs. This is
-the most robust thing on the page: it survives the widest error bar, because the maintenance term is
-both tiny and tightly measured. **Any optimisation that does not touch the fire cycle is rounding
-error on this workload.**
+The fire cycle is essentially the whole operation. At W=4000 it is 99.9% of `insertAndFire` under
+TREAT and 99.5% under Rete, and it is 100–400x maintenance at every size in both runs. This is the
+most robust result here: it survives the widest error bar, because the maintenance term is both tiny
+and tightly measured. Any optimisation that does not touch the fire cycle is rounding error on this
+workload.
 
-**Maintenance is flat, and that is by construction rather than a discovery.** Across a 16x working
-set: 0.736→1.133us then 0.732→1.149us (TREAT, run 1 then run 2), and 1.780→2.668us then
-1.711→2.711us (Rete). Before reading anything into it: the only population
-that scales here is the *pinned* one. `Customer` is fixed at 8 and uncapped, so an arriving `Order`
-probes 8 facts whatever the cap is, and under TREAT the insert does no join work at all. A flat
-column was guaranteed by the rule shape. What it shows is that maintenance is O(1) in the streamed
-type's working set, as designed — it is **not** evidence for §9's "amortizes join cost", and an
-earlier version of this section wrongly cited it as exactly that. The shape that would test §9's
+Maintenance is flat by construction. Across a 16x working set: 0.736→1.133us then 0.732→1.149us
+(TREAT, run 1 then run 2), and 1.780→2.668us then 1.711→2.711us (Rete). The only population that
+scales here is the pinned one. `Customer` is fixed at 8 and uncapped, so an arriving `Order` probes
+8 facts whatever the cap is, and under TREAT the insert does no join work at all. The rule shape
+guarantees a flat column. What it shows is that maintenance is O(1) in the streamed type's working
+set, as designed. It is not evidence for §9's "amortizes join cost". The shape that would test §9's
 criterion is one where the counterpart population also scales: a second capped type, or the
 self-join §4.4's amendment names as the O(N²) surface Rete introduces. Unmeasured.
 
-**Fire cost grows about 5x for each 4x of working set, on both shapes.** Run 1: 5.45, 4.98 (TREAT)
-and 5.06, 5.49 (Rete). Run 2: 5.21, 4.82 and 5.35, 5.25. Modestly super-linear, and the same shape
-on both.
+Fire cost grows about 5x for each 4x of working set, on both shapes. Run 1: 5.45, 4.98 (TREAT) and
+5.06, 5.49 (Rete). Run 2: 5.21, 4.82 and 5.35, 5.25. Modestly super-linear, and the same shape on
+both.
 
-**Rete's fire is 0.44–0.51 of TREAT's**, across three sizes and two runs — a constant factor of
-roughly 2x, with no change in exponent. Some of that gap is the join walk TREAT redoes and Rete
-does not, which is the thing Rete is for; the rest is a cheaper rebuild. This benchmark does not
-separate those two, and that separation is what would size §4.3's payoff exactly rather than
-approximately.
+Rete's fire is 0.44–0.51 of TREAT's across three sizes and two runs, a constant factor of roughly
+2x, with no change in exponent. Some of that gap is the join walk TREAT redoes and Rete does not,
+which is the thing Rete is for; the rest is a cheaper rebuild. This benchmark does not separate
+those two, and that separation is what would size §4.3's payoff exactly rather than approximately.
 
-**The per-activation residual.** Held matches equal the working set exactly here — 8 customers, each
-order joining one of them, no fan-out — so fire cost divided by W is what one activation costs:
+Held matches equal the working set exactly here (8 customers, each order joining one of them, no
+fan-out), so fire cost divided by W is the per-activation residual, what one activation costs:
 
 | Working set | ns per activation, TREAT (run 1 / run 2) | ns per activation, Rete (run 1 / run 2) |
 |---|---|---|
@@ -664,77 +656,76 @@ order joining one of them, no fan-out — so fire cost divided by W is what one 
 | 1000 | 230 / 236 | 100 / 110 |
 | 4000 | 286 / 285 | 138 / 144 |
 
-**This table is an identity transform and proves nothing on its own** — dividing by W assumes the
+This table is an identity transform and proves nothing on its own: dividing by W assumes the
 linearity it appears to show. The evidence that the term is linear in held matches is
 `RecomputingAgenda.materialise` replacing a dirty rule's slice wholesale, which is reading the code.
 What the table adds is the size and shape of what linearity leaves over: a per-activation cost that
 degrades across a 16x working set by 1.70x then 1.57x (TREAT, run 1 then run 2) and 1.74x then 1.76x
-(Rete). Rete's figure replicates; TREAT's moves by 8%, which is a reminder that this residual is the
-least well-measured thing here. All four sit in 1.5-1.8, and that band is the claim.
+(Rete). Rete's figure replicates; TREAT's moves by 8%, so this residual is the least well-measured
+thing here. All four sit in 1.5-1.8, and that band is the claim.
 
-Two candidate explanations, and this benchmark does not choose between them. The memory system —
-allocation and cache pressure from an ever-larger array of short-lived activations — is the obvious
-one, and a genuine O(log W) term would give 2.77x across 16x rather than 1.7x. But the two matchers
-**share** `RecomputingAgenda`, which owns `materialise`, the refraction check at selection and the
-conflict-resolution comparator; a super-linear term living there would also degrade both columns
+There are two candidate explanations, and this benchmark does not choose between them. The memory
+system (allocation and cache pressure from an ever-larger array of short-lived activations) is the
+obvious one, and a genuine O(log W) term would give 2.77x across 16x rather than 1.7x. But the two
+matchers share `RecomputingAgenda`, which owns `materialise`, the refraction check at selection, and
+the conflict-resolution comparator; a super-linear term living there would also degrade both columns
 alike. What the agreement does rule out is a term hiding in one matcher's `matchesOf` and not the
 other's. `-prof gc` would separate the rest and was not run.
 
 ## What this decides
 
-**For the Rete shape, §4.3 is the lever, and the prediction is specific.** Its conflict set is
-replaced wholesale at recomputation, so an activation is constructed for every held match on every
-fire — one per surviving order here — though at most one can fire and refraction discards the rest
-at selection. §4.3's `activate`/`deactivate` interface touches the matches that *changed*, which is
-one per insert in this workload. If that is right, Rete's fire cycle stops growing with the working
-set, taking `insertAndFire` at W=4000 from ~554us toward the ~2.7us its maintenance costs. Nothing
-in *this* section measures that; the benchmark exists so the claim is falsifiable when the commit
-lands. It landed, and the section below is that claim tested — 3.83us against a 2.71us maintenance
-floor, with the fire cycle flat across the whole range.
+For the Rete shape, §4.3 is the lever, and the prediction is specific. Its conflict set is replaced
+wholesale at recomputation, so an activation is constructed for every held match on every fire (one
+per surviving order here), though at most one can fire and refraction discards the rest at
+selection. §4.3's `activate`/`deactivate` interface touches the matches that changed, which is one
+per insert in this workload. If that is right, Rete's fire cycle stops growing with the working set,
+taking `insertAndFire` at W=4000 from ~554us toward the ~2.7us its maintenance costs. Nothing in
+this section measures that; the benchmark makes the claim falsifiable. The [next
+section](#phase-3-the-agenda-shape-43) tests it: 3.83us against a 2.71us maintenance floor, with the
+fire cycle flat across the whole range.
 
-**§4.3 is not available to TREAT**, and the first version of this section said otherwise. §4.3 is
-explicit: the `activate`/`deactivate`/`deactivateAllInvolving` trio "is the *Rete* interface… Under
-TREAT nothing pushes and nothing pulls — the conflict set for a dirty rule is replaced wholesale at
-recomputation." The NETWORK column is expected to be largely unmoved by that commit, and anyone
-reading a flat TREAT result as a failed optimisation would be reading it wrong.
+§4.3 is not available to TREAT. §4.3 is explicit: the
+`activate`/`deactivate`/`deactivateAllInvolving` trio "is the *Rete* interface… Under TREAT nothing
+pushes and nothing pulls — the conflict set for a dirty rule is replaced wholesale at
+recomputation." The NETWORK column is therefore expected to be largely unmoved by §4.3's change, and
+a flat TREAT result is not a failed optimisation.
 
-**§11.2 could not have moved anything on this page.** Differential propagation is about update
-semantics — re-propagating only through the subgraph an update affects — and this workload performs
-no updates. `ReteAgenda`'s class documentation named it as "the commit that changes it"; that has
-been corrected to §4.3.
+§11.2 could not have moved anything in these results. Differential propagation is about update
+semantics (re-propagating only through the subgraph an update affects), and this workload performs
+no updates. `ReteAgenda`'s class documentation attributes the change to §4.3.
 
 ## What Phase 3 still does not measure
 
-- **§9's "amortizes join cost".** See the maintenance paragraph: the joined-against population does
-  not scale here, so the criterion is untested by this benchmark despite an earlier draft claiming
-  it as met.
-- **How much of Rete's 2x is the join and how much is the rebuild.** That split is what sizes §4.3's
+- §9's "amortizes join cost". See the maintenance paragraph: the joined-against population does
+  not scale here, so the criterion is untested by this benchmark.
+- How much of Rete's 2x is the join and how much is the rebuild. That split is what sizes §4.3's
   payoff, and this benchmark reports only their sum.
-- **The §4.3 prediction itself**, by construction — it has not been built.
-- **Whether the residual is allocation.** `-prof gc`, not run, and `RecomputingAgenda` is a live
+- The §4.3 prediction itself, by construction: it has not been built.
+- Whether the residual is allocation. `-prof gc`, not run, and `RecomputingAgenda` is a live
   alternative explanation.
-- **The eviction itself.** One eviction per operation is inside both columns and cancels in the
+- The eviction itself. One eviction per operation is inside both columns and cancels in the
   subtraction; the flat maintenance column bounds it under a microsecond, which is enough to know it
   is not a term in this argument and not enough to quote.
-- **More than one rule.** One rule means one dirty slice per fire. Many rules sharing a fact type
-  rebuild each of their slices, which should multiply the dominant term — the shape most likely to
+- More than one rule. One rule means one dirty slice per fire. Many rules sharing a fact type
+  rebuild each of their slices, which should multiply the dominant term: the shape most likely to
   make this worse in production.
-- **Firing less often than every insert.** Real callers batch, the fire cost amortises across the
+- Firing less often than every insert. Real callers batch, the fire cost amortises across the
   batch, and where the crossover sits is the tuning question an operator actually asks.
 
 # Phase 3: the agenda shape (§4.3)
 
 The section above ends with a prediction: that §4.3's push-and-pull conflict set would stop the fire
 cycle growing with the working set, taking Rete's `insertAndFire` at W=4000 "from ~554us toward the
-~2.7us its maintenance costs". This section is that prediction tested, and first the measurement
-that decided what to build.
+~2.7us its maintenance costs". This section tests that prediction, after the profile that decided
+what to build.
 
-## What the profile said, and what it changed
+## The profile behind §4.3
 
-The earlier section could say the fire cycle was 99.5% of the operation but not what *inside* it
-was expensive. Two candidates, needing different fixes: constructing an activation per held match,
-and scanning the conflict set to select from it. §4.3 specifies remedies for both — a push interface
-for the first, a heap over rule heads for the second — so the split decided the scope.
+The streaming results put the fire cycle at 99.5% of the operation but did not say what inside it
+was expensive. There were two candidates, needing different fixes: constructing an activation per
+held match, and scanning the conflict set to select from it. §4.3 specifies remedies for both (a
+push interface for the first, a heap over rule heads for the second), so the split decided the
+scope.
 
 JMH's sampling and allocation profilers on `insertAndFire`, RETE, W=4000:
 
@@ -754,17 +745,16 @@ JMH's sampling and allocation profilers on `insertAndFire`, RETE, W=4000:
 | NETWORK | 1000 | 346 KB |
 | NETWORK | 4000 | 2.70 MB |
 
-**Megabytes of garbage per single firing**, and roughly 16% of samples in the scan against 12% in
-construction. Both terms were real, both had the same cause — the conflict set was rebuilt from
-every held match on every fire — and the allocation grew *faster* than the time (6.0x and 7.8x per
-4x of working set), which corroborates the memory-system reading of the residual the earlier section
-argued about.
+That is megabytes of garbage per single firing, and roughly 16% of samples in the scan against 12%
+in construction. Both terms were real and both had the same cause: the conflict set was rebuilt from
+every held match on every fire. The allocation grew faster than the time (6.0x and 7.8x per 4x of
+working set), which corroborates the memory-system reading of the residual in the streaming results.
 
-**It also removed a step from the plan.** The heap was scoped for a conflict set that stays large,
-which is what a rebuilding agenda has. If the set instead holds only the matches that have not
-fired, a streaming steady state leaves it near-empty and a heap over nothing buys nothing. So §4.3
-was built as the push interface alone, and `SessionStats.pendingMatchCount` exists so that "is the
-conflict set actually small?" has an answer rather than an opinion.
+The profile also removed a step from the plan. The heap was scoped for a conflict set that stays
+large, which is what a rebuilding agenda has. If the set instead holds only the matches that have
+not fired, a streaming steady state leaves it near-empty and a heap over nothing buys nothing. So
+§4.3 was built as the push interface alone, and `SessionStats.pendingMatchCount` exists so that "is
+the conflict set actually small?" has an answer rather than an opinion.
 
 ## Results
 
@@ -789,117 +779,118 @@ StreamingBenchmarks.insertAndFire    NETWORK          4000  avgt    3   1085.766
 
 The fire cost, which is what changed:
 
-| Working set | Rete fire, before | Rete fire, after | |
+| Working set | Rete fire, before | Rete fire, after | Speed-up |
 |---|---|---|---|
 | 250 | 19.9us | 0.77us | 26x |
 | 1000 | 100.5us | 1.02us | 99x |
-| 4000 | 551.4us | **1.12us** | **492x** |
+| 4000 | 551.4us | 1.12us | 492x |
 
 ## What they say
 
-**The prediction held, quantitatively.** `insertAndFire` at W=4000 went from 554us to 3.83us, and
-the predicted floor was "toward the ~2.7us its maintenance costs" — maintenance measures 2.71us and
-the fire cycle now adds 1.12us on top of it.
+The prediction held, quantitatively. `insertAndFire` at W=4000 went from 554us to 3.83us, and the
+predicted floor was "toward the ~2.7us its maintenance costs"; maintenance measures 2.71us and the
+fire cycle now adds 1.12us on top of it.
 
-**The fire cycle no longer grows with the working set.** 0.77 → 1.02 → 1.12us across a sixteenfold
-range, where it had been 19.9 → 100.5 → 551.4us. That is the exponent change §4.3 was for, and it
-is the only result on this page that is a change in shape rather than in constant.
+The fire cycle no longer grows with the working set: 0.77 → 1.02 → 1.12us across a sixteenfold
+range, where it had been 19.9 → 100.5 → 551.4us. That is the exponent change §4.3 was for, and it is
+the only result in these benchmarks that is a change in shape rather than in constant.
 
-**For rule sets without a §6.4 condition.** A condition is applied after the conflict set has been
-read, so a match it rejects is never fired and therefore never pulled back out: it stays pending and
-is rebuilt and re-evaluated every cycle its rule is dirty for. A rule set that rejects most of what
-it matches keeps the old O(held matches) fire cycle and gets none of the result above. That is a
-cost rather than a defect — the filter re-runs, so a match whose condition starts holding fires —
-and it is pinned by `CelEngineTest.theConflictSetHoldsWhatAConditionRejects`, which records why
-pruning on rejection was not built. Nothing here measures how much it costs.
+That result holds for rule sets without a §6.4 condition. A condition is applied after the conflict
+set has been read, so a match it rejects is never fired and therefore never pulled back out: it
+stays pending and is rebuilt and re-evaluated every cycle its rule is dirty for. A rule set that
+rejects most of what it matches keeps the old O(held matches) fire cycle and gets none of the result
+above. That is a cost rather than a defect: the filter re-runs, so a match whose condition starts
+holding fires. It is pinned by `CelEngineTest.theConflictSetHoldsWhatAConditionRejects`, which
+records why pruning on rejection was not built. Nothing here measures how much it costs.
 
-**Allocation is flat and roughly two orders of magnitude smaller**: 8211, 8172, 8288 B/op against
-251KB and 1.51MB. A fire cycle allocates what the *change* costs rather than what the *memory*
-holds, which is the same sentence as the timing result from the other side.
+Allocation is flat and roughly two orders of magnitude smaller: 8211, 8172, and 8288 B/op against
+251KB and 1.51MB. A fire cycle allocates what the change costs rather than what the memory holds,
+which is the same sentence as the timing result from the other side.
 
-**TREAT is unchanged, and that was predicted rather than observed after the fact**: 44.2, 218.8,
-1085.8us against 42.8, 230.2, 1143.5 before, and its allocation within 1% (2.674MB against 2.703MB
-at W=4000). The timing halves of that comparison sit inside the before-run's error bars rather than
-outside them, so read it as "nothing moved" rather than as a measurement of no movement. §4.3's interface is the Rete one; the recomputing shapes have nothing to push. Anyone
-reading a flat NETWORK column as a failed optimisation is reading it wrong.
+TREAT is unchanged, as the streaming results predicted: 44.2, 218.8, and 1085.8us against 42.8,
+230.2, and 1143.5 before, and its allocation within 1% (2.674MB against 2.703MB at W=4000). The
+timing halves of that comparison sit inside the before-run's error bars rather than outside them, so
+the comparison supports "nothing moved" rather than a measurement of no movement. §4.3's interface
+is the Rete one; the recomputing shapes have nothing to push. A flat NETWORK column is not a failed
+optimisation.
 
-**Between the two shapes it is now 284x** at W=4000 — 3.83us against 1085.8us — where before this
-commit it was 2.1x.
+Between the two shapes the gap is now 284x at W=4000 (3.83us against 1085.8us), where before §4.3
+it was 2.1x.
 
-## The narrower fix, scoped and not built
+## The narrower fix
 
-The profile's largest single line is `PatternMemory`'s `TreeSet` add and remove — 15.6% of samples,
-re-inserting a membership that did not change — and skipping it looked like a contained win with
-none of (B)'s obligation. It is not contained, and the reason is where the churn happens.
+The profile's largest single line is `PatternMemory`'s `TreeSet` add and remove, 15.6% of samples,
+re-inserting a membership that did not change. Skipping it looked like a contained win with none of
+(B)'s obligation. It is not contained, and the reason is where the churn happens.
 
 An update reaches the network as two independent callbacks, `factRetracted(before)` and then
 `factInserted(after)`. Neither knows it is half of an update, so neither can compare the two
 payloads. Making the churn skippable needs one of two things:
 
-- **Declare, per pattern, the paths it depends on** — its alpha test paths, its indexed paths, and
-  the paths its joins read — and skip patterns none of whose paths changed. This is (B)'s mechanism
+- Declaring, per pattern, the paths it depends on (its alpha test paths, its indexed paths, and the
+  paths its joins read) and skipping patterns none of whose paths changed. This is (B)'s mechanism
   at a smaller scale and inherits (B)'s failure mode, with an extra trap: declaring only the alpha
-  paths is the obvious version and is wrong, because the beta memory would keep tuples whose *join
-  key* changed. That is silent wrong output rather than a lost firing, which is worse.
-- **Compare values rather than declaring them** — evaluate acceptance and the index keys against
-  both the old and the new payload and skip when they agree. This cannot under-declare, because it
-  reads what the pattern actually computes. It costs a second alpha evaluation, which the profile
-  puts at 6.7% of samples against the 15.6% it saves: **of order 9% net**, and still requires a
+  paths is the obvious version and is wrong, because the beta memory would keep tuples whose join
+  key changed. That is silent wrong output rather than a lost firing, which is worse.
+- Comparing values rather than declaring them: evaluating acceptance and the index keys against
+  both the old and the new payload, and skipping when they agree. This cannot under-declare, because
+  it reads what the pattern actually computes. It costs a second alpha evaluation, which the profile
+  puts at 6.7% of samples against the 15.6% it saves: of order 9% net, and it still requires a
   combined update path through the network in place of the retract-and-reassert observer pair that
-  the agenda, refraction, eviction and beta maintenance all depend on.
+  the agenda, refraction, eviction, and beta maintenance all depend on.
 
 Both are recorded as measured and not built. The 9% is arithmetic on profile shares rather than a
-measurement, and a third of the samples in that profile were unwalkable, so treat it as an order of
+measurement, and a third of the samples in that profile were unwalkable, so it is an order of
 magnitude for a decision rather than a number for a table.
 
-What that leaves is the finding this section opened with: the cost is linear in the rules patterning
-the hot type, and (B) is the only mechanism measured here that changes the exponent rather than the
-constant.
+What that leaves is the finding of the [§11.2 section](#112-differential-propagation): the cost is
+linear in the rules patterning the hot type, and (B) is the only mechanism measured here that
+changes the exponent rather than the constant.
 
 ## What this still does not measure
 
-- **A workload with many simultaneously-eligible matches.** Everything above fires each match as
+- A workload with many simultaneously-eligible matches. Everything above fires each match as
   soon as it is derived, so the conflict set is near-empty and selection is trivial. A rule set with
   salience tiers, or a session that inserts a great deal before firing, holds many eligible matches
-  at once — and that is the shape where §4.3's heap over rule heads would start to matter. It was
-  deliberately not built; `pendingMatchCount` is the number that would say when it should be.
-- **§9's "amortizes join cost"**, still. The joined-against population does not scale here, which
-  the section above explains at length. Unchanged by this commit.
-- **More than one rule.** One rule means one slice. Unchanged by this commit, and still the shape
-  most likely to make the remaining cost worse in production.
-- **Whether the maintenance term is now worth attacking.** It is 71% of what is left at W=4000, and
+  at once, and that is the shape where §4.3's heap over rule heads would start to matter. It was not
+  built; `pendingMatchCount` is the number that would say when it should be.
+- §9's "amortizes join cost", still. The joined-against population does not scale here, as the
+  streaming results explain. Unchanged by §4.3.
+- More than one rule. One rule means one slice. Unchanged by §4.3, and still the shape most likely
+  to make the remaining cost worse in production.
+- Whether the maintenance term is now worth attacking. It is 71% of what is left at W=4000, and
   nothing here breaks it down.
-- **What a condition costs the new shape.** Per the caveat above, a conditioned rule keeps the old
+- What a condition costs the new shape. Per the caveat above, a conditioned rule keeps the old
   per-fire cost, and no benchmark here has a condition in it. That is the first workload to measure
   if this shape ever looks slower than these numbers promise.
 
-# §11.2: differential propagation, and a benchmark that had to be thrown away
+# §11.2: differential propagation
 
-§11.2 reversed itself once — from (B), differential propagation, to (A'), a gated retract and
-reassert — and named what would reverse it back: *"If profiling on a real rule set shows that cost
-dominating — the honest test is a hot fact type with many mutually-disjoint rules under a high
-update rate — differential propagation goes back in."*
+§11.2 reversed itself once: it moved from (B), differential propagation, to (A'), a gated retract
+and reassert. It also named what would reverse it back: "If profiling on a real rule set shows that
+cost dominating — the honest test is a hot fact type with many mutually-disjoint rules under a high
+update rate — differential propagation goes back in."
 
-`PropagationBenchmarks` is that test. **The precondition is met.** This section is the measurement,
-and it begins with the version of it that said the opposite.
+`PropagationBenchmarks` is that test, and the precondition is met. The first version of the
+benchmark said the opposite.
 
 ## The benchmark that measured nothing
 
 The first version built its rules as `eq("watched" + n, "SET")` and wrote payloads whose watched
-fields were only ever `CLEAR` or `OFF`. `Network.insert` files a fact into a pattern memory only when
-`pattern.accepts(evaluation)` — so **no fact ever entered a pattern memory, an index, or a beta
-memory.** Every form of state churn an update performs, and therefore every form (B) exists to skip,
+fields were only ever `CLEAR` or `OFF`. `Network.insert` files a fact into a pattern memory only
+when `pattern.accepts(evaluation)`, so no fact ever entered a pattern memory, an index, or a beta
+memory. Every form of state churn an update performs, and therefore every form (B) exists to skip,
 was zero by construction. What remained on the clock was alpha evaluation and the tested-path diff.
 
 That version reported re-testing at 12.3% of walkable samples against a diff at 12.2%, concluded (B)
-could not be worth its cost, and described the workload as "sized to be maximally favourable to (B)".
-It was close to the one shape where (B) has nothing to win. The conclusion was recorded, reviewed,
-and withdrawn before it was committed.
+could not be worth its cost, and described the workload as "sized to be maximally favourable to
+(B)". It was close to the one shape where (B) has nothing to win.
 
-The fixed version constrains on `in("watched" + n, "CLEAR", "OFF")`, so the facts match, the memories
-and indexes fill, and a `patternsPerRule` parameter adds join tuples for an update to tear down and
-re-derive. Two arms as before: `oneTestedPathChanges` (one field differs — (B)'s case) and
-`everyTestedPathChanges` (all of them — the control, where re-testing everything is correct work).
+The fixed version constrains on `in("watched" + n, "CLEAR", "OFF")`, so the facts match, the
+memories and indexes fill, and a `patternsPerRule` parameter adds join tuples for an update to tear
+down and re-derive. Two arms as before: `oneTestedPathChanges` (one field differs, which is (B)'s
+case) and `everyTestedPathChanges` (all of them: the control, where re-testing everything is correct
+work).
 
 ## Results
 
@@ -921,11 +912,9 @@ One op is 50 updates; the table is per update.
 | Rete | 2 | 8 | 25 117ns | 25 069ns | 1.00 | 7.6x |
 | Rete | 2 | 64 | 274 150ns | 273 177ns | 1.00 | 83.2x |
 
-**Every cell above is from one run of one build**, which is worth saying because an earlier version of
-this table was not: it carried a post-change figure for one arm beside a pre-change figure for the
-other and derived a ratio from the pair. The two arms traverse the same propagation path and differ
-only in payload contents, so a change to that path moves both, and a table that updates one column
-is comparing two engines.
+Every cell above is from one run of one build. The two arms traverse the same propagation path and
+differ only in payload contents, so a change to that path moves both, and a table that pairs a
+post-change figure for one arm with a pre-change figure for the other is comparing two engines.
 
 Raw JMH output, with error bars, is in the run log; every score above sits inside 12% relative error
 except `everyTestedPathChanges` at 64/TREAT/1 (20%) and 64/Rete/2 (9%). Where an update spends, at
@@ -941,148 +930,136 @@ except `everyTestedPathChanges` at 64/TREAT/1 (20%) and 64/Rete/2 (9%). Where an
 
 ## What they say
 
-**Update cost is linear in the number of rules on the hot type.** 230ns → 759ns → 5 800ns for 1, 8
-and 64 single-pattern rules under TREAT; 64x the rules costs 25x. With joins and the streaming
-matcher it is 83x across the same range. The fact is retracted from and re-asserted into every pattern memory of every
-rule that patterns its type, whichever field changed.
+Update cost is linear in the number of rules on the hot type. 230ns → 759ns → 5 800ns for 1, 8, and
+64 single-pattern rules under TREAT; 64x the rules costs 25x. With joins and the streaming matcher
+it is 83x across the same range. The fact is retracted from and re-asserted into every pattern
+memory of every rule that patterns its type, whichever field changed.
 
-**That is exactly what (B) removes.** Differential propagation touches only the patterns whose
-constraints read a changed path — one rule here, not sixty four. Its floor is therefore the 1-rule
+That is exactly what (B) removes. Differential propagation touches only the patterns whose
+constraints read a changed path: one rule here, not sixty-four. Its floor is therefore the 1-rule
 column plus the diff: roughly 227ns against 5 911ns at arity 1, and 3 177ns against 259 789ns under
-Rete with joins. The profile agrees with the scaling: 22.3% of all samples and 78% of *identified*
+Rete with joins. The profile agrees with the scaling: 22.3% of all samples and 78% of identified
 work is memory churn plus re-testing, against 5.1% for the diff that (B) must keep.
 
-**The gate does not save what the broken benchmark suggested.** With state churn present, a
-one-field update costs 0.70 to 1.00 of a whole-fact one at realistic arity — not 0.29. §3.4.1's diff
-decides *whether* to propagate, and once it decides yes the churn is the same either way. Under Rete
-with joins it saves **nothing measurable at all** (1.00 at both 8 and 64 rules): the beta memory is
-torn down and re-derived whichever field moved. The 0.50 at arity 1 with 64 rules under TREAT is the
-most the gate ever recovers here, and it is the least realistic column in the table.
+The gate does not save what the broken benchmark suggested. With state churn present, a one-field
+update costs 0.70 to 1.00 of a whole-fact one at realistic arity, not 0.29. §3.4.1's diff decides
+whether to propagate, and once it decides yes the churn is the same either way. Under Rete with
+joins it saves nothing measurable at all (1.00 at both 8 and 64 rules): the beta memory is torn down
+and re-derived whichever field moved. The 0.50 at arity 1 with 64 rules under TREAT is the most the
+gate ever recovers here, and it is the least realistic column in the table.
 
-**§11.2's precondition is met**, on §11.2's own nominated workload, by a wide margin. That is a
-finding about the measurement, not a decision to build: (B)'s cost is a `dependsOn()` superset
-obligation on every node, where over-declaring loses performance and under-declaring loses an
-activation — a permanent, invisible correctness burden that this file cannot price.
+§11.2's precondition is met, on §11.2's own nominated workload, by a wide margin. That is a finding
+about the measurement, not a decision to build: (B)'s cost is a `dependsOn()` superset obligation on
+every node, where over-declaring loses performance and under-declaring loses an activation, a
+permanent, invisible correctness burden that no benchmark here can price.
 
 ## What this still does not measure
 
-- **A rule set spread across fact types**, which dilutes the effect: the linear term is rules *on
-  the hot type*, so a realistic set moves the finding down. How far is unmeasured.
-- **What (B) would actually cost to run**, as opposed to what (A') costs now. The floor quoted above
+- A rule set spread across fact types, which dilutes the effect: the linear term is rules on the
+  hot type, so a realistic set moves the finding down. How far is unmeasured.
+- What (B) would actually cost to run, as opposed to what (A') costs now. The floor quoted above
   is the 1-rule column, which assumes (B) adds nothing per unaffected pattern. Its own bookkeeping
   is unmeasured because it does not exist.
-- **Whether a cheaper fix gets most of it.** `PatternMemory` is a `TreeSet` and 15.6% of samples are
+- Whether a cheaper fix gets most of it. `PatternMemory` is a `TreeSet` and 15.6% of samples are
   its `add`/`remove`; an update that re-asserts an unchanged membership might be made to skip the
   index churn without the full `dependsOn()` machinery. Unexplored.
-- **A rule set spread across fact types**, again: the linear term is rules on the *hot* type.
 
-## The `JoinPlan` fast path, which came out of this measurement
+## The `JoinPlan` fast path
 
 The profile of the broken run found `JoinEnumerator.enumerate` building a `JoinPlan` per pattern
-site per insert — including for single-pattern rules, which have no join to plan. `ReteAgenda`
-enumerates once per site of the arriving type, so sixty four single-pattern rules on one type built
-sixty four plans per insert, each allocating two lists, two BitSets, an ArrayList, two stream
-pipelines and a `List.copyOf` to describe one trivial step.
+site per insert, including for single-pattern rules, which have no join to plan. `ReteAgenda`
+enumerates once per site of the arriving type, so sixty-four single-pattern rules on one type built
+sixty-four plans per insert, each allocating two lists, two `BitSet`s, an `ArrayList`, two stream
+pipelines, and a `List.copyOf` to describe one trivial step.
 
 For arity one the plan is a constant: bind position zero, no edges (an edge needs another alias to
-point at), no implicit inequalities (they need two patterns of a type). It does not depend on the
-memory sizes either, so it is now a single shared instance — safe because `Step` copies both
-components on the way in and clones the array on the way out.
+point at), and no implicit inequalities (they need two patterns of a type). It does not depend on
+the memory sizes either, so it is now a single shared instance. That is safe because `Step` copies
+both components on the way in and clones the array on the way out.
 
-Rete's update cost, arity one, per update — same benchmark, before and after the fast path:
+Rete's update cost, arity one, per update, from the same benchmark before and after the fast path:
 
-| rules | before | after | |
+| rules | before | after | Change |
 |---|---|---|---|
 | 1 | 640ns | 412ns | −36% |
 | 8 | 3 708ns | 2 624ns | −29% |
 | 64 | 27 889ns | 20 315ns | −27% |
 
-At 64 rules that is 7 573ns per update over 64 plans — about **118ns per plan**, which is what one
-of these costs to build and throw away.
+At 64 rules that is 7 573ns per update over 64 plans, or about 118ns per plan, which is what one of
+these costs to build and throw away.
 
-**The two controls are the interesting part.** Two-pattern rules are unchanged — 3 177ns against
-3 297ns at one rule, 259 789ns against 274 150ns at sixty four — because they have a real join and
-still need a real plan. And TREAT is unchanged throughout, because `NetworkAgenda` does not
-enumerate on insert, so nothing in the measured region builds a plan at all. (It does take the fast
-path at fire time, once per dirty single-pattern rule per cycle; no benchmark here measures that
-side.) A change that claimed to remove plan construction for rules with no join should move exactly
-one column, and it does.
+The two controls are the interesting part. Two-pattern rules are unchanged (3 177ns against 3 297ns
+at one rule, 259 789ns against 274 150ns at sixty-four) because they have a real join and still need
+a real plan. And TREAT is unchanged throughout, because `NetworkAgenda` does not enumerate on
+insert, so nothing in the measured region builds a plan at all. (It does take the fast path at fire
+time, once per dirty single-pattern rule per cycle; no benchmark here measures that side.) A change
+that claimed to remove plan construction for rules with no join should move exactly one column, and
+it does.
 
 It does not change §11.2's case: cost is still linear in rules on the hot type (418ns, 2 557ns,
 20 551ns is 49x across 64x the rules), so differential propagation's floor is still the one-rule
-column. What it does is take Rete's update from 4.7x TREAT's to 3.5x at arity one — a third of that gap,
-not most of it.
+column. What it does is take Rete's update from 4.7x TREAT's to 3.5x at arity one, a third of that
+gap and not most of it.
 
-## A note on this file's own history
+## Measurement failures and defences
 
-Three versions of the join benchmark: the first measured right-hand sides, the second measured
-inserts, the third measures the join. Both earlier ones produced a plausible number and a plausible
-story. Neither was measuring what its heading said. If you add a benchmark here, say what is inside
-the measured region and what is outside it, and check that the thing you are claiming credit for is
-actually the majority of what is on the clock.
+The join benchmark has had three versions: the first measured right-hand sides, the second measured
+inserts, and the third measures the join. Both earlier versions produced a plausible number and a
+plausible story, and neither measured what its heading said. A benchmark added here states what is
+inside the measured region and what is outside it, and checks that the thing it claims credit for is
+the majority of what is on the clock.
 
-Then it happened three more times, which is why this section is no longer a footnote about one
-benchmark. Its first version called `update` rather than `updateOwned`, so it measured §2.2's
-payload deep copy: cost grew 3.6x with payload size and read *identically* on both matchers, which
-cannot happen if a tested-path diff is on the clock. Its second version fixed that but sized the
-payload from the `testedPaths` parameter, so the wide arm changed two variables at once and the 6x
-growth it reported could not be attributed to either. Only the third version varies one thing.
+The same failure recurred three more times. `UpdateBenchmarks`' first version called `update` rather
+than `updateOwned`, so it measured §2.2's payload deep copy: cost grew 3.6x with payload size and
+read identically on both matchers, which cannot happen if a tested-path diff is on the clock. Its
+second version fixed that but sized the payload from the `testedPaths` parameter, so the wide arm
+changed two variables at once and the 6x growth it reported could not be attributed to either. Only
+the third version varies one thing.
 
-And `ExpressionBenchmarks` shipped the worst one. Its first version loaded the facts *inside* the
-measured region, so `session.insert` was 96-98% of the cheaper arm and the headline was
-`(insert + expression) / (insert + almost nothing)`. Every conclusion drawn from it was an artifact
+`ExpressionBenchmarks` shipped the worst one. Its first version loaded the facts inside the measured
+region, so `session.insert` was 96-98% of the cheaper arm and the headline was
+`(insert + expression) / (insert + almost nothing)`. Every conclusion drawn from it was an artefact
 of that shared term: the "flat 4x ratio" was arithmetically guaranteed rather than observed, the
-"per-candidate cost of an operator map" compared against an arm with **zero** candidates, and the
-number moved when `insert` was swapped for `insertOwned` — a knob with nothing to do with either
-constraint form. Hoisting the load into setup changed the finding from "about 4x" to "hundreds of
-microseconds against an unmeasurable floor", which is a different claim entirely.
+"per-candidate cost of an operator map" compared against an arm with zero candidates, and the number
+moved when `insert` was swapped for `insertOwned`, a knob with nothing to do with either constraint
+form. Hoisting the load into setup changed the finding from "about 4x" to "hundreds of microseconds
+against an unmeasurable floor", which is a different claim entirely.
 
 `UpdateBenchmarks` also carried a `matcher` parameter that selected nothing, because the observer
-maintains the network whatever the strategy and the benchmark never fires. Two identical columns were
-written up as a finding about memory-maintenance cost.
+maintains the network whatever the strategy and the benchmark never fires. Two identical columns
+were written up as a finding about memory-maintenance cost.
 
-The pattern across all six is the same and it is not subtle: **every wrong version produced a number
-and a story that hung together.** Nothing in the output said "this is measuring something else"; each
+The pattern across all six is the same and it is not subtle: every wrong version produced a number
+and a story that hung together. Nothing in the output said "this is measuring something else"; each
 was caught by reading the code against the claim, or by a reviewer decomposing the measured region.
-Three defences have actually worked here — naming what is inside the measured region and what is
-outside it, checking that a parameter changes exactly one thing, and checking that a parameter
-changes *anything*.
+Three defences have worked here: naming what is inside the measured region and what is outside it,
+checking that a parameter changes exactly one thing, and checking that a parameter changes anything.
 
+Phase 4 also produced a wrong inference over correct numbers, which is a different failure mode.
+The SMT row was read as "SMT cannot help this, therefore it is memory-bound", and that inverts the
+mechanism, because a workload full of memory stalls is the classic SMT beneficiary: a cache miss is
+exactly the idle issue slot the sibling thread fills. The conclusion happened to survive under a
+different argument (saturation of a shared resource, which the baseline's own 1.64x corroborates),
+but the reasoning printed alongside it contradicted its own premise. Numbers that reproduce are only
+half of it; the sentence drawn from them is the other half, and it gets the same scrutiny.
 
-
-Phase 4 also produced a wrong *inference* over correct numbers, which is a failure mode this note
-had not recorded before. The SMT row was read as "SMT cannot help this, therefore it is memory-bound"
--- and that inverts the mechanism, because a workload full of memory stalls is the classic SMT
-beneficiary: a cache miss is exactly the idle issue slot the sibling thread fills. The conclusion
-happened to survive under a different argument (saturation of a shared resource, which the baseline's
-own 1.64x corroborates), but the reasoning printed alongside it contradicted its own premise. Numbers
-that reproduce are only half of it; the sentence drawn from them is the other half, and it gets the
-same scrutiny.
-
-Phase 4 added a fourth defence, and it is the one the earlier six needed most: **an experimental
-control run through the identical harness.** A scaling curve is a ratio between the benchmark's own
-columns, so nothing inside it can reveal that the machine, not the code, produced the shape — the
+Phase 4 added a fourth defence, and it is the one the earlier six needed most: an experimental
+control run through the identical harness. A scaling curve is a ratio between the benchmark's own
+columns, so nothing inside it can reveal that the machine, not the code, produced the shape; the
 error bars stay tight and the story stays plausible, which is exactly the failure mode above.
 `sharedNothingBaseline` is not a benchmark of anything anyone ships; it exists so the concurrency
-numbers have something other than a straight line to be compared against, and it changed the reading:
-the box scales at 89% where the engine scales at 72%, so about two fifths of the shortfall is the
-machine. The first write-up of that put it at a tenth — the control was right and the arithmetic over
-it was wrong, which is its own lesson about where to look after a measurement survives review.
+numbers have something other than a straight line to be compared against, and it changed the
+reading: the machine scales at 89% where the engine scales at 72%, so about two fifths of the
+shortfall is the machine. The first write-up of that put it at a tenth. The control was right and
+the arithmetic over it was wrong, which is its own lesson about where to look after a measurement
+survives review.
 
-Phase 4 also produced the sharpest single correction this file has had, and it was not about a
-measured region at all. The concurrency table was run at one fork, and JMH's ± is the spread *within*
-a fork while every parameter combination is its own fork — so the error bars said nothing about
+Phase 4 also produced the sharpest single correction in these results, and it was not about a
+measured region at all. The concurrency table was run at one fork, and JMH's ± is the spread within
+a fork while every parameter combination is its own fork, so the error bars said nothing about
 inter-fork variance and a 6% gap got written up as a cache-footprint finding. What exposed it was
-noticing that one row of the table is a **null experiment**: at `threads=1` the shared-versus-private
+noticing that one row of the table is a null experiment: at `threads=1` the shared-versus-private
 parameter compares a configuration with itself, and it was reporting a 3.8% difference with
-non-overlapping error bars. **Build a row into the table whose answer you already know**, and read it
-first. Nothing else in that section could have caught this, because every other number is a ratio
-between two columns that were wrong in the same way.
-
-A seventh entry, of a different kind: the Phase 5 commit left this file with **two copies of its own
-tail** — the corrected text and the superseded draft it was meant to replace, one after the other.
-The stale copy still asserted the flat 4x expression ratio measured before the facts were moved out
-of the measured region, and the "both matchers read identically" non-finding. A reader arriving at
-the second copy would have found retracted claims presented as current. Deleted in the Phase 4
-commit. Appending to a benchmark log is right; appending a revision instead of replacing what it
-revises is how a log grows contradictions.
+non-overlapping error bars. The defence is a row whose answer is already known, built into the table
+and read first. Nothing else in that section could have caught this, because every other number is a
+ratio between two columns that were wrong in the same way.

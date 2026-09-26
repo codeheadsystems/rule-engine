@@ -1,50 +1,78 @@
 # Changelog
 
-What changed between releases, for somebody deciding whether to upgrade. The mechanism of a release
-is [`RELEASING.md`](RELEASING.md); this file is the communication half.
+What changed between releases, for somebody deciding whether to upgrade.
+[`RELEASING.md`](RELEASING.md) covers the mechanism of a release.
 
-Versions follow [semantic versioning](https://semver.org/). All seven published artifacts move
-together — a release tags one version and publishes them in a single deployment. What a major
-version protects is the API surface `ApiSurfaceTest` calls exported.
+Versions follow [semantic versioning](https://semver.org/). All published artifacts move together:
+a release tags one version and publishes them in a single deployment. What a major version protects
+is the API surface `ApiSurfaceTest` calls exported.
 
-## 1.1.0 — unreleased
+## 1.1.0 (2026-09-26)
 
 ### Added
 
-- **Fact documents.** `FactFiles` and `FactSource` in `rule-engine-dsl` read a list of typed facts
-  from YAML *or* JSON and insert it into a session, for the facts that are not a stream: a fixture, a
-  seed, a captured session. §6.1's answer for rule files — one object model, two serializations, one
-  factory choice — now covers facts too, which had been JSON-only for no better reason than that the
+- `rule-engine-bom`, a new published artifact: a POM with no code that manages every engine module
+  at its own version and imports `tools.jackson:jackson-bom` at the version the engine was built and
+  tested against. A build imports it as `platform(...)` in Gradle or as a `dependencyManagement`
+  import in Maven and no longer writes a Jackson version by hand. That matters more here than for
+  most libraries, because a fact is a `JsonNode` handed to `RuleSession.insert()` unconverted, so
+  the host's Jackson and the engine's are the same library. It works in a module that depends on no
+  engine module too, which relying on `rule-engine-core`'s transitive `jackson-databind` does not.
+  [`embedding.md`](docs/embedding.md#platform-requirements) has the three resolution details that
+  decide which version actually resolves.
+- Fact documents: `FactFiles` and `FactSource` in `rule-engine-dsl` read a list of typed facts from
+  YAML or JSON and insert it into a session, for the facts that are not a stream (a fixture, a seed,
+  a captured session). §6.1's answer for rule files (one object model, two serialisations, one
+  factory choice) now covers facts too, which had been JSON-only for no better reason than that the
   rule files were built first. `docs/embedding.md` has the format, the guarantees (document order is
-  insertion order, all-or-nothing loading, every fact `ASSERTED`, a repeated key is an error) and the
-  two YAML details worth knowing before writing a fixture in it.
+  insertion order, all-or-nothing loading, every fact `ASSERTED`, a repeated key is an error), and
+  the three YAML details that apply to a fixture written in it.
 - `Facts.yaml(...)` in `rule-engine-testkit`, beside `Facts.json(...)`.
-- **`EvictionPolicy.window(factType, timeField, span)`** — a retention window over one fact type,
-  measured by a time field on the facts themselves. The bound a streaming rule set usually wants:
-  `perType` caps the arrival *count*, and the two differ by exactly the traffic spike the rules exist
-  to notice. Not the TTL §4.4 refuses — its far edge is the newest value that type currently
-  *holds*, minus the span, so it is derived from the input and the determinism contract survives. The engine
-  still owns no clock: time advances when a fact carrying a later time arrives.
+- `EvictionPolicy.window(factType, timeField, span)`: a retention window over one fact type,
+  measured by a time field on the facts themselves. It is the bound a streaming rule set usually
+  wants: `perType` caps the arrival count, and the two differ by exactly the traffic spike the rules
+  exist to notice. It is not the TTL §4.4 refuses: its far edge is the newest value that type
+  currently holds, minus the span, so it is derived from the input and the determinism contract
+  survives. The engine still owns no clock: time advances when a fact carrying a later time arrives.
 - Documentation for the windowing this completes: velocity counts and the caller-advanced `Clock`
-  fact in [`dsl-guide.md`](docs/dsl-guide.md#counting-things-in-a-window), the retention half and the
-  two ways to get it wrong in [`embedding.md`](docs/embedding.md#long-lived-sessions-and-eviction).
-  A window in a rule and a window in the session are separate decisions that have to agree, and
-  nothing checks that they do.
-- **Documentation for host-owned lists and reference data**, the question this engine had no written
-  answer to: "can a rule check whether a value is in a list my application owns, when a rule's own
-  decision may add to it and every node in a cluster must see the addition". The answer is a fact,
-  looked up before the session with `member: true` *or* `false` so that an outage is an absence and
-  not a false, flipped by `setField` so the same session sees the change, and carried out by `emit`
-  for the host to persist. [`dsl-guide.md`](docs/dsl-guide.md#checking-a-list-your-application-owns)
-  has the compiled recipe, [`embedding.md`](docs/embedding.md#host-owned-lists-and-reference-data)
-  the host half and the cluster note, and the spec records in §1 why a lookup *during* matching is
-  structurally off the table rather than deferred. Nothing in the engine changed to support it,
-  which is the point.
+  fact in [`dsl-guide.md`](docs/dsl-guide.md#counting-things-in-a-window), and the retention half
+  and the two ways to get it wrong in
+  [`embedding.md`](docs/embedding.md#long-lived-sessions-and-eviction). A window in a rule and a
+  window in the session are separate decisions that have to agree, and nothing checks that they do.
+- Documentation for host-owned lists and reference data, answering a question that previously had no
+  written answer: "can a rule check whether a value is in a list my application owns, when a rule's
+  own decision may add to it and every node in a cluster must see the addition". The answer is a
+  fact, looked up before the session with `member: true` or `false` so that an outage is an absence
+  and not a false, flipped by `setField` so the same session sees the change, and carried out by
+  `emit` for the host to persist.
+  [`dsl-guide.md`](docs/dsl-guide.md#checking-a-list-your-application-owns) has the compiled recipe,
+  [`embedding.md`](docs/embedding.md#host-owned-lists-and-reference-data) the host half and the
+  cluster note, and the spec records in §1 why a lookup during matching is structurally off the
+  table rather than deferred. Nothing in the engine changed to support it.
+- [`docs/style.md`](docs/style.md), the documentation style guide: third person and present tense,
+  bold only for a defined term, no em dashes, headings that are noun phrases, British spelling, and
+  a terminology table. Its scope table names what it covers (the READMEs, `docs/` except the
+  specification, `RELEASING.md`, `SECURITY.md`, this file from 1.1.0, and the project site) and what
+  is exempt.
 
 ### Changed
 
-- `Facts.json(...)` now parses through the same reader as everything else, which means **a repeated
-  key in a fixture is rejected** rather than silently taking the last one. It still throws
+- Jackson 3.2.2 → 3.2.3, a patch release on the same line. The pinned rule-set version hash
+  (`CompilerValidationTest.versionHashIsPinned`) did not move, so compiled rule sets keep the
+  identity hot reload and refraction key on.
+- Each published POM now carries its module's own `<description>`. In 1.0.0 they all carried the
+  project's generic one, because the build read the description before the module had set it.
+  Metadata only; no code or dependency changed.
+- The documentation and the project site are copy-edited to `docs/style.md`. The technical claims,
+  benchmark figures, and rule-file examples are unchanged, and every rule file printed in the
+  documentation is still compiled by the test suite. A few passages that narrated the documents' own
+  history are gone, and several count mismatches are corrected.
+- Headings across the documentation now label their sections, so many anchors changed; a bookmark
+  to an old anchor lands at the top of the page. Every link inside the repository and on the site
+  was updated. The one anchor the 1.0.0 notes link,
+  `docs/choosing-this-engine.md#what-it-deliberately-does-not-do`, still resolves.
+- `Facts.json(...)` now parses through the same reader as everything else, so a repeated key in a
+  fixture is rejected rather than silently taking the last one. It still throws
   `IllegalArgumentException`; the message now names a line and column. A fixture that this newly
   rejects held two values for one field and was using the second.
 

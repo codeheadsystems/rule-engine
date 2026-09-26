@@ -168,14 +168,14 @@ jobs:
       # The last check before anything leaves the machine, and it asserts rather than prints. It has
       # to run HERE: `signed` is decided by whether GPG_KEY_ID is visible to the build, so asking
       # earlier -- as an earlier version of this workflow did -- reports `signed=false` and proves
-      # nothing. Seven lines, every one a release and every one signed, or the upload does not start.
+      # nothing. Eight lines, every one a release and every one signed, or the upload does not start.
       - name: Verify every module is about to publish, signed, at this version
         env:
           GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
         run: |
           CONFIG=$(./gradlew verifyPublishConfig -q | grep ':rule-engine-')
           echo "$CONFIG"
-          EXPECTED=7
+          EXPECTED=8
           SIGNED=$(echo "$CONFIG" | grep -c "snapshot=false signed=true")
           if [ "$SIGNED" -ne "$EXPECTED" ]; then
             echo "ERROR: expected $EXPECTED signed release modules, found $SIGNED."
@@ -188,7 +188,7 @@ jobs:
             exit 1
           fi
 
-      # ONE aggregated deployment for all seven library modules, not seven separate ones. A partial
+      # ONE aggregated deployment for all eight published modules, not eight separate ones. A partial
       # success would leave the namespace holding some modules at this version and not others, and
       # the missing ones can never be added later under the same version.
       - name: Publish to Maven Central
@@ -247,19 +247,35 @@ jobs:
 
             ### Depending on it
 
-            Most services need one line — `rule-engine-dsl` brings the compiler and the core with it:
+            Import `rule-engine-bom`, then name modules without a version. `rule-engine-dsl` brings
+            the compiler and the core with it, and the BOM also sets the Jackson 3 version the engine
+            was built and tested against, which is the one your own `JsonNode` code should use:
 
             ```gradle
-            implementation("com.codeheadsystems:rule-engine-dsl:${{ env.VERSION }}")
-            testImplementation("com.codeheadsystems:rule-engine-testkit:${{ env.VERSION }}")
+            implementation(platform("com.codeheadsystems:rule-engine-bom:${{ env.VERSION }}"))
+            implementation("com.codeheadsystems:rule-engine-dsl")
+            testImplementation("com.codeheadsystems:rule-engine-testkit")
             ```
 
             ```xml
-            <dependency>
-              <groupId>com.codeheadsystems</groupId>
-              <artifactId>rule-engine-dsl</artifactId>
-              <version>${{ env.VERSION }}</version>
-            </dependency>
+            <dependencyManagement>
+              <dependencies>
+                <dependency>
+                  <groupId>com.codeheadsystems</groupId>
+                  <artifactId>rule-engine-bom</artifactId>
+                  <version>${{ env.VERSION }}</version>
+                  <type>pom</type>
+                  <scope>import</scope>
+                </dependency>
+              </dependencies>
+            </dependencyManagement>
+
+            <dependencies>
+              <dependency>
+                <groupId>com.codeheadsystems</groupId>
+                <artifactId>rule-engine-dsl</artifactId>
+              </dependency>
+            </dependencies>
             ```
 
             ### Modules published
@@ -273,6 +289,7 @@ jobs:
             | `rule-engine-cel` | optional: the expression escape hatch (§6.4) |
             | `rule-engine-observability` | tracing, Flight Recorder, and the match explainer |
             | `rule-engine-testkit` | the naive oracle and the equivalence and shuffle harnesses, for testing your own rules |
+            | `rule-engine-bom` | the modules above and the Jackson 3 version they are built against, as one import |
 
             `rule-engine-example` is a worked application, not a library, and is deliberately not
             published — read it in the repository.

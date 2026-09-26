@@ -3,15 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>rule-engine — an in-process, forward-chaining rule engine for the JVM</title>
-  <meta name="description" content="An in-process, forward-chaining rule engine for the JVM. Rules in YAML or JSON, compiled once, sessions that are pure functions of the facts you insert — for decisions that need to be reproduced and justified, and that change more often than the code deploys.">
+  <title>rule-engine: an in-process, forward-chaining rule engine for the JVM</title>
+  <meta name="description" content="An in-process, forward-chaining rule engine for the JVM. Rules in YAML or JSON, compiled once, and sessions that are pure functions of the facts inserted, for decisions that need to be reproduced and justified and that change more often than the code deploys.">
   <meta property="og:title" content="rule-engine">
-  <meta property="og:description" content="An in-process, forward-chaining rule engine for the JVM — reproducible decisions from rules that change more often than the code deploys.">
+  <meta property="og:description" content="An in-process, forward-chaining rule engine for the JVM: reproducible decisions from rules that change more often than the code deploys.">
   <meta property="og:url" content="https://codeheadsystems.github.io/rule-engine/">
   <meta property="og:type" content="website">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="rule-engine">
-  <meta name="twitter:description" content="An in-process, forward-chaining rule engine for the JVM — reproducible decisions from rules that change more often than the code deploys.">
+  <meta name="twitter:description" content="An in-process, forward-chaining rule engine for the JVM: reproducible decisions from rules that change more often than the code deploys.">
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
   <style>
     :root {
@@ -274,9 +274,8 @@
       <h1>rule-engine</h1>
       <p class="tagline">
         An in-process, forward-chaining rule engine for the JVM. It decides things that depend on
-        <strong>more than one fact</strong> &mdash; for services where the rules change more often
-        than the code deploys, or where somebody has to justify a decision six months after it was
-        made.
+        more than one fact, for services where the rules change more often than the code deploys,
+        or where somebody has to justify a decision six months after it was made.
       </p>
       <div class="badges">
         <span class="badge">Java 25</span>
@@ -294,17 +293,16 @@
     </div>
   </div>
 
-  <!-- What is it -->
+  <!-- Overview -->
   <section>
     <div class="container">
-      <h2>What is rule-engine?</h2>
+      <h2>Overview</h2>
       <p>
-        Rules are written in <strong>YAML or JSON</strong>, validated against a published schema, and
-        compiled once at startup into an immutable, thread-safe <code>CompiledRuleSet</code>. Facts
-        are your own JSON. Firing a rule set is a <strong>pure function</strong> of the facts you put
-        in &mdash; the same facts in the same order produce the same firings, on any host, in any
-        year, because the engine owns no clock. That is what makes a decision reproducible long after
-        it was made.
+        Rules are written in YAML or JSON, validated against a published schema, and compiled once at
+        startup into an immutable, thread-safe <code>CompiledRuleSet</code>. Facts are the host
+        application's own JSON. Firing a rule set is a pure function of the facts put in: the same
+        facts in the same order produce the same firings, on any machine, in any year, because the
+        engine owns no clock. That is what makes a decision reproducible long after it was made.
       </p>
       <div class="comparison">
         <div class="comparison-card card-problem">
@@ -313,7 +311,7 @@
             <li>Every new rule is another branch nested inside the last one</li>
             <li>Correlating facts that arrive separately means threading state by hand</li>
             <li>A policy change means a code review, a build, and a deploy</li>
-            <li>Explaining <em>why</em> something didn't fire means re-reading the whole method</li>
+            <li>Explaining why something didn't fire means re-reading the whole method</li>
           </ul>
         </div>
         <div class="comparison-card card-solution">
@@ -322,7 +320,7 @@
             <li>Joins, absence (<code>notExists</code>), universals (<code>forAll</code>) and aggregates
               (<code>accumulate</code>) as first-class pattern kinds</li>
             <li>Compile once, share the rule set, one cheap session per unit of work</li>
-            <li>Rules swap under load &mdash; a typo in a rule file fails to compile, not in production</li>
+            <li>Rules swap under load, and a typo in a rule file fails at compile rather than in production</li>
             <li><code>MatchExplainer</code> names the exact constraint that emptied the match set</li>
           </ul>
         </div>
@@ -330,11 +328,11 @@
     </div>
   </section>
 
-  <!-- A rule, and running it -->
+  <!-- A rule and a session -->
   <section>
     <div class="container">
-      <h2>A rule, and running it</h2>
-      <p>This is the rule from <a href="https://github.com/codeheadsystems/rule-engine#a-rule-and-running-it">README</a>, where it is a compiled fixture &mdash; if this page and the engine disagree, trust README.</p>
+      <h2>A rule and a session</h2>
+      <p>This is the rule from <a href="https://github.com/codeheadsystems/rule-engine#a-rule-and-a-session">README</a>, where it is a compiled fixture; where this page and the engine disagree, README is correct.</p>
       <pre>apiVersion: rules.v1
 rules:
   - id: high-value-order-review
@@ -361,7 +359,7 @@ rules:
         payload:
           orderId: { $ref: o.id }
           reason: "high value + risk tier"</pre>
-      <p>Compiled once, at startup, and shared by everything. Then a session per unit of work &mdash; a request, a message, a batch:</p>
+      <p>The rule set is compiled once, at startup, and shared by everything. Each unit of work (a request, a message, a batch) gets its own session:</p>
       <pre><span style="color:var(--muted)">// RuleSource.of(Path) reads the file, so it declares IOException.</span>
 CompiledRuleSet rules = RuleFiles.compile(RuleSource.of(Path.of("orders.yaml")));
 
@@ -378,8 +376,8 @@ try (RuleSession session = rules.newSession()) {
     // result.why()      -> DRAINED</span>
 }</pre>
       <p>
-        Nothing performs I/O by default &mdash; emitted events come back as the return value of the
-        fire call, so a rule set is testable with no mocking at all.
+        Nothing performs I/O by default: emitted events come back as the return value of the fire
+        call, so a rule set is testable with no mocking at all.
       </p>
     </div>
   </section>
@@ -390,28 +388,28 @@ try (RuleSession session = rules.newSession()) {
       <h2>How it works</h2>
       <div class="features">
         <div class="feature">
-          <h4>Facts are JSON</h4>
-          <p>A type name plus a <code>JsonNode</code> payload. Field paths are dotted and map to RFC
-             6901 JSON Pointers. The engine persists nothing &mdash; fact identity is the handle it
+          <h4>Facts as JSON</h4>
+          <p>A fact is a type name plus a <code>JsonNode</code> payload. Field paths are dotted and map
+             to RFC 6901 JSON Pointers. The engine persists nothing, and fact identity is the handle it
              hands back, not anything in the payload.</p>
         </div>
         <div class="feature">
-          <h4>Two tiers, and the split is the whole design</h4>
-          <p>A <code>CompiledRuleSet</code> is immutable and shared by every thread. A
-             <code>RuleSession</code> is single-writer, cheap to allocate (248ns), and never shared
-             &mdash; one virtual thread per session.</p>
+          <h4>Two tiers</h4>
+          <p>The split between the tiers is the whole design. A <code>CompiledRuleSet</code> is
+             immutable and shared by every thread. A <code>RuleSession</code> is single-writer, cheap
+             to allocate (248ns), and never shared, with one virtual thread per session.</p>
         </div>
         <div class="feature">
-          <h4>Three matchers, held to agreement</h4>
+          <h4>Three matchers in agreement</h4>
           <p>A naive correctness oracle, an indexed network (the default), and a streaming Rete-style
              matcher for long-lived sessions. <code>MatcherEquivalence</code> asserts they produce
              identical firing sequences.</p>
         </div>
         <div class="feature">
-          <h4>Five actions and no more</h4>
-          <p><code>setField</code>, <code>insertFact</code>, <code>retractFact</code>, <code>emit</code>,
-             <code>callFunction</code> &mdash; a closed vocabulary that stays diffable and reviewable
-             by someone who is not a programmer.</p>
+          <h4>Five actions</h4>
+          <p>There are five actions and no more: <code>setField</code>, <code>insertFact</code>,
+             <code>retractFact</code>, <code>emit</code>, and <code>callFunction</code>. A closed
+             vocabulary stays diffable and reviewable by someone who is not a programmer.</p>
         </div>
       </div>
     </div>
@@ -423,24 +421,27 @@ try (RuleSession session = rules.newSession()) {
       <h2>Semantics that impact rule writing</h2>
       <div class="features">
         <div class="feature">
-          <h4>Absent and null are different values</h4>
-          <p><code>{ eq: null }</code> matches an explicit JSON null and never an absent field. Use
-             <code>hasField: false</code> for "the field isn't there".</p>
+          <h4>Absent versus null</h4>
+          <p>Absent and null are different values. <code>{ eq: null }</code> matches an explicit JSON
+             null and never an absent field; <code>hasField: false</code> is the test for "the field
+             isn't there".</p>
         </div>
         <div class="feature">
-          <h4><code>ne</code> is true for an absent field</h4>
-          <p>Because <code>ne</code> is defined as <code>!eq</code>. Pair it with
-             <code>hasField: true</code> when you mean "present and not equal".</p>
+          <h4><code>ne</code> on an absent field</h4>
+          <p><code>ne</code> is true for an absent field, because <code>ne</code> is defined as
+             <code>!eq</code>. Pairing it with <code>hasField: true</code> expresses "present and not
+             equal".</p>
         </div>
         <div class="feature">
-          <h4>Flatten collections at ingestion</h4>
+          <h4>Collections flattened at ingestion</h4>
           <p>JSON Pointer has no wildcard. An <code>Order</code> with an <code>items[]</code> array
              becomes one <code>Order</code> fact plus N <code>LineItem</code> facts, joined normally.</p>
         </div>
         <div class="feature">
-          <h4>Never evict a fact type a rule negates</h4>
-          <p>An evicted fact and an absent one are indistinguishable. A cap on a negated type stops
-             costing a firing and starts asserting a false conclusion.</p>
+          <h4>Eviction of a negated type</h4>
+          <p>A fact type a rule negates must never be evicted. An evicted fact and an absent one are
+             indistinguishable, so a cap on a negated type stops costing a firing and starts asserting
+             a false conclusion.</p>
         </div>
       </div>
     </div>
@@ -450,7 +451,7 @@ try (RuleSession session = rules.newSession()) {
   <section>
     <div class="container">
       <h2>Modules</h2>
-      <p>Seven modules ship to Maven Central under <code>com.codeheadsystems</code> and move together &mdash; a release tags one version and publishes all of them in a single deployment.</p>
+      <p>Eight modules ship to Maven Central under <code>com.codeheadsystems</code> and move together: a release tags one version and publishes all of them in a single deployment.</p>
       <div class="table-wrap">
         <table>
           <thead>
@@ -462,15 +463,15 @@ try (RuleSession session = rules.newSession()) {
           <tbody>
             <tr>
               <td><code>rule-engine-core</code></td>
-              <td>Fact model, working memory, all three matchers, agenda, refraction, RHS execution, sessions, concurrency helpers</td>
+              <td>Fact model, working memory, all three matchers, agenda, refraction, RHS execution, sessions, and concurrency helpers</td>
             </tr>
             <tr>
               <td><code>rule-engine-compiler</code></td>
-              <td><code>RuleDefinition</code> &rarr; <code>CompiledRuleSet</code>: validation, accessor and pattern compilation, network build, version hash</td>
+              <td><code>RuleDefinition</code> &rarr; <code>CompiledRuleSet</code>: validation, accessor and pattern compilation, network build, and version hash</td>
             </tr>
             <tr>
               <td><code>rule-engine-dsl</code></td>
-              <td>JSON and YAML rule files &rarr; <code>RuleDefinition</code>, plus the <code>rules.v1</code> schema. <strong>Start here</strong> &mdash; brings the compiler and core with it</td>
+              <td>JSON and YAML rule files &rarr; <code>RuleDefinition</code>, plus the <code>rules.v1</code> schema. The starting point; it brings the compiler and core with it</td>
             </tr>
             <tr>
               <td><code>rule-engine-cel</code></td>
@@ -486,7 +487,11 @@ try (RuleSession session = rules.newSession()) {
             </tr>
             <tr>
               <td><code>rule-engine-testkit</code></td>
-              <td>Fixtures, the firing-sequence oracle, shuffle-determinism and matcher-equivalence harnesses, JMH benchmarks. <strong>Not optional</strong> for testing your own rules</td>
+              <td>Fixtures, the firing-sequence oracle, shuffle-determinism and matcher-equivalence harnesses, and JMH benchmarks. Not optional for a consumer testing its own rules</td>
+            </tr>
+            <tr>
+              <td><code>rule-engine-bom</code></td>
+              <td>The modules above and the Jackson 3 version they are built against, as one import. No code</td>
             </tr>
           </tbody>
         </table>
@@ -517,12 +522,12 @@ try (RuleSession session = rules.newSession()) {
           <p>The host side: sessions, options, limits, concurrency, operations, diagnosing production.</p>
         </a>
         <a class="link-card" href="https://github.com/codeheadsystems/rule-engine/blob/main/docs/choosing-this-engine.md">
-          <h4>Choosing this engine</h4>
+          <h4>Choosing the rule engine</h4>
           <p>Where it fits, where it does not, the comparisons, and getting out.</p>
         </a>
         <a class="link-card" href="https://github.com/codeheadsystems/rule-engine/blob/main/docs/rule-engine-spec.md">
           <h4>The specification</h4>
-          <p>The full spec and the source of truth for the engine's behavior.</p>
+          <p>The full spec and the source of truth for the engine's behaviour.</p>
         </a>
         <a class="link-card" href="https://github.com/codeheadsystems/rule-engine/blob/main/docs/benchmarks.md">
           <h4>Benchmarks</h4>
@@ -544,7 +549,7 @@ try (RuleSession session = rules.newSession()) {
   <section id="quickstart">
     <div class="container">
       <h2>Quick start</h2>
-      <p>Requires Java 25 at runtime. Gradle resolves a JDK 25 toolchain via the foojay plugin if it is not installed.</p>
+      <p>The engine requires Java 25 at runtime. Gradle resolves a JDK 25 toolchain via the foojay plugin if none is installed.</p>
 
       <div class="quickstart-tabs">
         <button type="button" class="quickstart-tab active" onclick="showTab(this, 'install')">Install</button>
@@ -553,16 +558,20 @@ try (RuleSession session = rules.newSession()) {
       </div>
 
       <div id="tab-install" class="quickstart-content active">
-        <pre>implementation("com.codeheadsystems:rule-engine-dsl:1.0.0")
-testImplementation("com.codeheadsystems:rule-engine-testkit:1.0.0")</pre>
+        <pre>implementation(platform("com.codeheadsystems:rule-engine-bom:1.1.0"))
+implementation("com.codeheadsystems:rule-engine-dsl")
+testImplementation("com.codeheadsystems:rule-engine-testkit")</pre>
         <p>
-          On Maven Central under <code>com.codeheadsystems</code>. One line is usually the whole
-          dependency &mdash; <code>rule-engine-dsl</code> brings the compiler and the core with it.
-          The snippet above is bumped by hand and can lag; the
+          The modules are on Maven Central under <code>com.codeheadsystems</code>. A build imports
+          <code>rule-engine-bom</code> and names modules without a version;
+          <code>rule-engine-dsl</code> brings the compiler and the core with it, and the BOM sets
+          the Jackson 3 version the engine was built and tested against.
+          The snippet above is updated by hand and can lag; the
           <a href="https://central.sonatype.com/artifact/com.codeheadsystems/rule-engine-dsl">Maven Central listing</a>
           has the version that is actually there. Two requirements come with it: Java 25 at
-          runtime, and Jackson 3 (<code>tools.jackson.*</code>) on your classpath as a declared
-          <code>api</code> dependency &mdash; a second Jackson if you're already on Jackson 2.
+          runtime, and Jackson 3 (<code>tools.jackson.*</code>) on the consumer's classpath as a
+          declared <code>api</code> dependency, which is a second Jackson for a service already on
+          Jackson 2.
         </p>
       </div>
 
@@ -571,8 +580,8 @@ testImplementation("com.codeheadsystems:rule-engine-testkit:1.0.0")</pre>
 cd rule-engine
 ./gradlew :rule-engine-example:run</pre>
         <p>
-          The fastest way to see what a reference page cannot show you: what belongs in the ingestion
-          path rather than in a rule, what a long-lived session has to do to stay bounded, and what to
+          The worked example is the fastest way to see what a reference page cannot show: what belongs
+          in the ingestion path rather than in a rule, what a long-lived session has to do to stay bounded, and what to
           assert about a rule set in CI.
         </p>
       </div>

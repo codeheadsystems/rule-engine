@@ -137,6 +137,9 @@ class ApiSurfaceTest {
       "rule-engine-testkit", Set.of(),
       "rule-engine-cel", Set.of(),
       "rule-engine-schema", Set.of(),
+      // A bill of materials has no source tree, so it can reach nothing. Listed rather than exempted
+      // for the reason this table names every module: the day it grows code, it is already checked.
+      "rule-engine-bom", Set.of(),
       /*
        * The example reaches for nothing internal, and that is the point of having it in this table
        * rather than exempting it. It is written as a consumer would write it -- against the rule

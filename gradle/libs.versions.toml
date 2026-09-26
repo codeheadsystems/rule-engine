@@ -1,6 +1,6 @@
 [versions]
 assertj = "3.27.7"
-jackson = "3.2.2"
+jackson = "3.2.3"
 jmh = "1.37"
 re2j = "1.8"
 jmh-plugin = "0.7.3"
@@ -13,6 +13,10 @@ slf4j = "2.0.19"
 
 [libraries]
 assertj = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+# Only rule-engine-bom names this. The modules declare the two artifacts below and let jackson-bom
+# arrive transitively; the BOM re-exports it so a consumer module with no engine dependency can
+# still align on the Jackson this engine was built and tested against.
+jackson-bom = { module = "tools.jackson:jackson-bom", version.ref = "jackson" }
 jackson-core = { module = "tools.jackson.core:jackson-core", version.ref = "jackson" }
 jackson-databind = { module = "tools.jackson.core:jackson-databind", version.ref = "jackson" }
 jackson-dataformat-yaml = { module = "tools.jackson.dataformat:jackson-dataformat-yaml", version.ref = "jackson" }

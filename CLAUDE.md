@@ -11,21 +11,30 @@ governs it — the answer to "why is it written this way" is almost always there
 alternatives that were rejected. If the code and the spec disagree, one of them is a defect; decide
 which and say so, do not silently pick.
 
+**Every document in its scope is written to `docs/style.md`**, the documentation style guide: third person and
+present tense, bold only for a defined term, no em dashes, headings that are noun phrases, British
+spelling, and the terminology table. Read it before writing or editing anything under `docs/`, either
+README, `RELEASING.md`, `SECURITY.md`, a new `CHANGELOG.md` entry, or `site/index.html`. Its scope
+table names what is exempt (the spec, released changelog entries, this file). Nothing in the build
+enforces it, so a review is where it holds or does not.
+
 `README.md` is the **introduction**, not a build diary and not an adoption committee's briefing:
 what the engine is, what a rule looks like, how to run one, and where the other documents are. It was
 rewritten twice — once out of phase-by-phase status narration, and once out of a caveat-first
 ordering that disqualified the reader in five bullets before showing them the engine working. **Reasons
 not to adopt do not belong at the top.** A first-time reader gets the capability first; the two facts
 that end the conversation regardless (Java 25 at runtime, Jackson 3 on the classpath) sit beside the
-dependency snippet where they are actionable. README keeps one short two-way section, `Is this engine
-for you?`, placed *after* the reader has seen a rule run — it names poor fits as well as good ones and
-links onward; the full account of fit lives in `docs/choosing-this-engine.md`. The one caveat README keeps inline is the eviction hazard, because it
-traps rule *authors* rather than evaluators.
+dependency snippet where they are actionable. README does not argue fit: its documentation table
+routes an evaluator to `docs/choosing-this-engine.md`, where fit is answered in both directions. The
+one caveat README keeps inline is the eviction hazard, because it traps rule *authors* rather than
+evaluators.
 
 `docs/choosing-this-engine.md` is where "should I use this" is answered in both directions: the two
 hard requirements, the workload shapes it suits, the ones it does not, §9.1's not-built table, the
-comparisons against Drools and hand-written conditionals, project maturity, and getting out. It holds
-the not-built table **under that exact heading** because `CHANGELOG.md` links the anchor. Its
+comparisons against Drools and hand-written conditionals, project maturity, and getting out. The
+not-built table sits under `## Capabilities not built`, with an `<a id="what-it-deliberately-does-not-do">`
+line above it: the released 1.0.0 `CHANGELOG.md` entry links that old anchor and is not rewritten, so
+the shim must stay. Its
 comparisons are capability claims only — this project benchmarks nothing but itself, so no
 performance claim about another engine goes in it — and the Drools half is the spec's own §0 framing
 rather than anything invented later. It prints no complete rule files, which is what keeps it out of
@@ -93,6 +102,7 @@ they're addressed.
 | `rule-engine-cel` | The optional §6.4 expression escape hatch, backed by dev.cel |
 | `rule-engine-observability` | `TracingListener`, `JfrListener`, `MatchExplainer` |
 | `rule-engine-testkit` | `Rules` builder, `Engine`/`FiringSequence`, `MatcherEquivalence`, `ShuffleHarness`, JMH benchmarks — **main** source set, not test: consumers use these |
+| `rule-engine-bom` | A `java-platform` POM, no code: manages the seven library modules and imports `tools.jackson:jackson-bom` at the catalog's `jackson` version |
 | `rule-engine-example` | The worked application: `rules/orders.yaml`, a ten-event feed, and four demos (`PerOrderDemo`, `BatchDemo`, `StreamingDemo`, `DiagnosticsDemo`). Not a library — see below |
 
 Dependencies are declared in `gradle/libs.versions.toml`. `-core`'s runtime deps are exactly
@@ -114,8 +124,8 @@ Adding any module means adding it to `ApiSurfaceTest.INTERNAL_ACCESS`; that tabl
 every `include(...)` in `settings.gradle.kts`, because a module missing from it went unchecked while
 the suite stayed green.
 
-**The build publishes to Maven Central, and that changes what a mistake costs.** Seven modules ship
-under `com.codeheadsystems`; `rule-engine-example` does not, because an artifact is a promise to keep
+**The build publishes to Maven Central, and that changes what a mistake costs.** Eight modules ship
+under `com.codeheadsystems` (seven libraries and `rule-engine-bom`); `rule-engine-example` does not, because an artifact is a promise to keep
 something compiling and nobody should depend on the example. A module publishes iff it applies
 `buildlogic.publish-conventions`, and `PublishedModulesTest` asserts that set against the build files
 — the same shape as `ApiSurfaceTest`'s module table, for the same reason: a module missing from a

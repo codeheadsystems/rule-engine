@@ -1,5 +1,6 @@
 /*
- * Maven Central publication metadata, for the modules that are libraries.
+ * Maven Central publication metadata, for the modules that are libraries -- and for the BOM that
+ * aligns them.
  *
  * Applied per module rather than to `allprojects`, because publishing is a decision about an
  * artifact and not a property of being in this build. `rule-engine-example` does not apply it: it
@@ -8,8 +9,8 @@
  *
  * The upload itself is not here. The nmcp settings plugin (settings.gradle.kts) applies the
  * aggregation plugin to the root, so every module publishing under this convention is collected
- * into ONE Central Portal deployment with one validation result -- rather than seven deployments
- * that can each half-succeed and leave the namespace holding four of seven modules at a version.
+ * into ONE Central Portal deployment with one validation result -- rather than eight deployments
+ * that can each half-succeed and leave the namespace holding four of eight modules at a version.
  */
 plugins {
     `maven-publish`
@@ -19,13 +20,7 @@ plugins {
 publishing {
     publications {
         create<MavenPublication>("mavenJava") {
-            /*
-             * `java` rather than `javaPlatform` or a hand-built artifact list. The java-library
-             * conventions already call withJavadocJar() and withSourcesJar(), and Central REQUIRES
-             * both -- a deployment missing either is rejected at validation, after upload.
-             */
-            from(components["java"])
-
+            // The component is chosen below, by which plugin the module applied -- see there.
             groupId = project.group.toString()
             artifactId = project.name
             version = project.version.toString()
@@ -35,10 +30,17 @@ publishing {
                  * The module's own `description`, which every module in this build sets. Central
                  * requires name, description and url on every POM, so a module that forgets its
                  * description fails validation -- hence the fallback rather than a null.
+                 *
+                 * A provider, not the value. This block runs when the plugin is applied, which is
+                 * before the build file's `description = ...` line, so reading it eagerly found null
+                 * every time: 1.0.0 shipped all seven POMs with the fallback, and nothing failed,
+                 * because the fallback exists precisely so that nothing does.
                  */
                 name.set(project.name)
-                description.set(project.description
-                    ?: "An in-process forward-chaining production rule engine for the JVM")
+                description.set(provider {
+                    project.description
+                        ?: "An in-process forward-chaining production rule engine for the JVM"
+                })
                 url.set("https://github.com/codeheadsystems/rule-engine")
 
                 licenses {
@@ -66,6 +68,41 @@ publishing {
         }
     }
     // No `repositories` block: nmcp owns the upload to the Central Portal.
+}
+
+/*
+ * One publication, two shapes of module, and the plugin the module applied decides which.
+ *
+ * A library applies `java` (through the java-library conventions, which call withJavadocJar() and
+ * withSourcesJar()) and publishes the `java` component: a jar, its sources and javadoc jars, a POM
+ * and a .module. Central REQUIRES the two extra jars for jar packaging -- a deployment missing either
+ * is rejected at validation, after upload.
+ *
+ * rule-engine-bom applies `java-platform` and publishes `javaPlatform`: a POM with pom packaging and a
+ * .module, no jars at all, and Central requires none for pom packaging. Everything else in this file --
+ * the POM metadata, signing, verifyPublishConfig -- is about the publication rather than its contents,
+ * so it covers both without a second copy.
+ *
+ * withPlugin rather than hasPlugin, so the order a build file lists its plugins in does not matter.
+ * Gradle refuses to apply `java` and `java-platform` to one project, and refuses a second from() on
+ * one publication, so "both" cannot happen quietly. "Neither" could, and is checked below.
+ */
+val publication = publishing.publications.named<MavenPublication>("mavenJava")
+pluginManager.withPlugin("java") { publication.configure { from(components["java"]) } }
+pluginManager.withPlugin("java-platform") {
+    publication.configure { from(components["javaPlatform"]) }
+}
+
+afterEvaluate {
+    /*
+     * A publication with no component still publishes: a POM naming no dependencies and no artifact,
+     * signed and accepted by Central under a permanent version. A module applying this convention
+     * before deciding what it is would ship exactly that, so it fails the configuration instead.
+     */
+    check(pluginManager.hasPlugin("java") || pluginManager.hasPlugin("java-platform")) {
+        "${project.path} applies buildlogic.publish-conventions but neither `java` nor " +
+            "`java-platform`, so it has nothing to publish"
+    }
 }
 
 signing {

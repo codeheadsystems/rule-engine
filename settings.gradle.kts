@@ -13,7 +13,7 @@ plugins {
      * Publishing to Maven Central through the Central Portal. A SETTINGS plugin rather than a
      * project one, because the thing being published is the build as a whole: it applies the
      * aggregation plugin to the root and gives every publishing module one upload, one deployment
-     * and one validation result. Seven separate uploads would be seven deployments that can each
+     * and one validation result. Eight separate uploads would be eight deployments that can each
      * half-succeed.
      */
     id("com.gradleup.nmcp.settings") version "1.6.2"
@@ -37,6 +37,12 @@ include("rule-engine-schema")
 include("rule-engine-cel")
 include("rule-engine-observability")
 include("rule-engine-testkit")
+/*
+ * A bill of materials, not a library: no code, one POM. It exists so a consumer can take the engine's
+ * Jackson version from the engine rather than copying it, which matters because JsonNode is the fact
+ * type and crosses the API unconverted. Published with the rest, at the same version.
+ */
+include("rule-engine-bom")
 /*
  * Not a library. §8's table is the engine; this is the worked example of using it -- one
  * application, one rule file, one feed of events, and the three deployment shapes §5 describes.
@@ -85,14 +91,14 @@ gradle.beforeProject {
         val semver = Regex("^v(\\d+\\.\\d+\\.\\d+(-[a-zA-Z0-9.]+)?)$").matchEntire(tag)
         if (semver != null) {
             version = semver.groupValues[1]
-            // Once, not once per project: this block runs for all nine and nine identical lines at
+            // Once, not once per project: this block runs for all ten and ten identical lines at
             // the top of a release log is noise around the one number worth reading.
             if (this == rootProject) {
                 logger.lifecycle("Using version from Git tag: $version")
             }
         } else if (this == rootProject) {
             // Also once. This is the branch that signals a mistake, so it is the one that most needs
-            // to be readable rather than repeated nine times.
+            // to be readable rather than repeated ten times.
             logger.warn("Git tag '$tag' is not vX.Y.Z; keeping the version from gradle.properties")
         }
     }
