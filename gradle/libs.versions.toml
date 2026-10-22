@@ -1,6 +1,6 @@
 [versions]
 assertj = "3.27.7"
-jackson = "3.2.3"
+jackson = "3.2.4"
 jmh = "1.37"
 re2j = "1.8"
 jmh-plugin = "0.7.3"
